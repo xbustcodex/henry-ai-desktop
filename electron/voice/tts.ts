@@ -4,27 +4,25 @@
  *   1. ElevenLabs — auto-enabled when an ElevenLabs API key is saved (providers
  *      table, encrypted like every other provider key) and the request succeeds.
  *      Returns an mp3 Buffer the renderer plays through an <audio> element.
- *   2. macOS `say` — the FREE offline default. Speaks straight from the main
- *      process (no audio round-trip); supports voice + rate settings and stop.
+ *   2. Platform-specific local voice — macOS `say`, Linux eSpeak, or Web Speech API fallback
  *
  * Channels (uniform `{ ok, result | error }` envelope, matching machines/ipc.ts):
  *   voice:speak        — { text, engine?: 'auto'|'local'|'elevenlabs' }
  *                        local → speaks + resolves when done ({ engine:'local', spoke:true })
  *                        elevenlabs → { engine:'elevenlabs', audio: Buffer }
  *                        elevenlabs failure falls back to local ({ fellBack:true })
- *   voice:stopSpeaking — kills any in-flight `say` process
- *   voice:ttsStatus    — active engine, key presence, configured voices, `say -v ?` list
+ *   voice:stopSpeaking — kills any in-flight speech process
+ *   voice:ttsStatus    — active engine, key presence, configured voices, available engines
  *
  * Settings keys: voice_tts_engine (auto|local|elevenlabs), voice_tts_voice
- * (ElevenLabs voice id), voice_say_voice, voice_say_rate.
+ * (ElevenLabs voice id), voice_say_voice, voice_say_rate, voice_espeak_voice, voice_espeak_rate.
  */
 
 import { ipcMain } from 'electron';
-import { spawn, execFile, type ChildProcess } from 'child_process';
 import type Database from 'better-sqlite3';
 import { decryptKey } from '../ipc/_keyStorage';
 import { prepareSpeechText } from './_speechText';
-import { parseSayVoices, type SayVoice } from './_sayVoices';
+import { TtsEngineSetting, TtsActiveEngine, TtsStatus, TtsSpeakResult, speak as platformSpeak, getTtsStatus, stopSpeaking, registerPlatformTtsHandlers } from '../../src/platform/tts';
 
 type Envelope<T = unknown> = { ok: true; result: T } | { ok: false; error: string };
 
@@ -36,24 +34,9 @@ async function envelope<T>(fn: () => T | Promise<T>): Promise<Envelope<T>> {
   }
 }
 
-export type TtsEngineSetting = 'auto' | 'local' | 'elevenlabs';
-export type TtsActiveEngine = 'local' | 'elevenlabs';
-
 /** ElevenLabs "Rachel" — the default speaking voice when a key is present. */
 const DEFAULT_ELEVEN_VOICE = '21m00Tcm4TlvDq8ikWAM';
 const ELEVEN_MODEL = 'eleven_turbo_v2_5';
-const DEFAULT_SAY_VOICE = 'Samantha';
-const DEFAULT_SAY_RATE = 175;
-
-export interface TtsStatus {
-  engine: TtsEngineSetting;
-  active: TtsActiveEngine;
-  elevenLabsKeyPresent: boolean;
-  elevenVoiceId: string;
-  sayVoice: string;
-  sayRate: number;
-  sayVoices: SayVoice[];
-}
 
 export interface TtsSpeakResult {
   engine: TtsActiveEngine | 'none';
@@ -95,96 +78,21 @@ function getElevenLabsKey(db: Database.Database): string {
 }
 
 function sayVoiceSetting(db: Database.Database): string {
-  return (readSetting(db, 'voice_say_voice') || DEFAULT_SAY_VOICE).trim() || DEFAULT_SAY_VOICE;
+  return (readSetting(db, 'voice_say_voice') || DEFAULT_ELEVEN_VOICE).trim() || DEFAULT_ELEVEN_VOICE;
 }
 
 function sayRateSetting(db: Database.Database): number {
   const n = Number(readSetting(db, 'voice_say_rate'));
-  return Number.isFinite(n) && n >= 90 && n <= 400 ? Math.round(n) : DEFAULT_SAY_RATE;
+  return Number.isFinite(n) && n >= 90 && n <= 400 ? Math.round(n) : 175; // DEFAULT_SAY_RATE from platform/tts
 }
 
-// ── macOS `say` engine ──────────────────────────────────────────────────────
-
-let sayProcess: ChildProcess | null = null;
-let sayVoicesCache: SayVoice[] | null = null;
-
-async function listSayVoices(): Promise<SayVoice[]> {
-  if (sayVoicesCache) return sayVoicesCache;
-  if (process.platform !== 'darwin') return [];
-  try {
-    const out = await new Promise<string>((resolve, reject) => {
-      execFile('say', ['-v', '?'], { timeout: 10_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
-        if (err) reject(err);
-        else resolve(stdout);
-      });
-    });
-    sayVoicesCache = parseSayVoices(out);
-    return sayVoicesCache;
-  } catch {
-    return [];
-  }
+function espeakVoiceSetting(db: Database.Database): string {
+  return (readSetting(db, 'voice_espeak_voice') || 'en').trim() || 'en';
 }
 
-export function stopSpeaking(): boolean {
-  if (sayProcess && !sayProcess.killed) {
-    try { sayProcess.kill('SIGTERM'); } catch { /* already gone */ }
-    sayProcess = null;
-    return true;
-  }
-  return false;
-}
-
-/** Speak via `say`, resolving when playback finishes (or the process is killed). */
-function speakLocal(text: string, voice: string, rate: number): Promise<void> {
-  stopSpeaking();
-  return new Promise<void>((resolve, reject) => {
-    if (process.platform !== 'darwin') {
-      reject(new Error('Local speech uses the macOS say command — not available on this platform.'));
-      return;
-    }
-    // Text goes over stdin so long replies never hit argv limits.
-    const child = spawn('say', ['-v', voice, '-r', String(rate)], { stdio: ['pipe', 'ignore', 'ignore'] });
-    sayProcess = child;
-    child.on('error', (err) => {
-      if (sayProcess === child) sayProcess = null;
-      reject(new Error(`say failed: ${err.message}`));
-    });
-    child.on('close', () => {
-      if (sayProcess === child) sayProcess = null;
-      resolve(); // a killed (stopped) say still resolves — stopping isn't an error
-    });
-    child.stdin?.write(text);
-    child.stdin?.end();
-  });
-}
-
-// ── ElevenLabs engine ───────────────────────────────────────────────────────
-
-async function fetchElevenLabsAudio(text: string, apiKey: string, voiceId: string): Promise<Buffer> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30_000);
-  try {
-    const res = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}`,
-      {
-        method: 'POST',
-        headers: {
-          'xi-api-key': apiKey,
-          'Content-Type': 'application/json',
-          Accept: 'audio/mpeg',
-        },
-        body: JSON.stringify({ text, model_id: ELEVEN_MODEL }),
-        signal: controller.signal,
-      },
-    );
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new Error(`ElevenLabs ${res.status}${body ? ': ' + body.slice(0, 150) : ''}`);
-    }
-    return Buffer.from(await res.arrayBuffer());
-  } finally {
-    clearTimeout(timer);
-  }
+function espeakRateSetting(db: Database.Database): number {
+  const n = Number(readSetting(db, 'voice_espeak_rate'));
+  return Number.isFinite(n) && n >= 80 && n <= 450 ? Math.round(n) : 175; // DEFAULT_ESPEAK_RATE from platform/tts
 }
 
 // ── Engine ladder ───────────────────────────────────────────────────────────
@@ -200,53 +108,18 @@ function resolveEngine(db: Database.Database, requested?: string): TtsActiveEngi
   return getElevenLabsKey(db) ? 'elevenlabs' : 'local';
 }
 
+// ── Main speak function ─────────────────────────────────────────────────────
+
 export async function speak(
   db: Database.Database,
-  params: { text: string; engine?: string },
+  params: { text: string; engine?: string }
 ): Promise<TtsSpeakResult> {
-  const clean = prepareSpeechText(params?.text ?? '');
-  if (!clean) return { engine: 'none', spoke: false };
-
-  const engine = resolveEngine(db, params?.engine);
-
-  if (engine === 'elevenlabs') {
-    const apiKey = getElevenLabsKey(db);
-    const voiceId = (readSetting(db, 'voice_tts_voice') || DEFAULT_ELEVEN_VOICE).trim() || DEFAULT_ELEVEN_VOICE;
-    if (apiKey) {
-      try {
-        const audio = await fetchElevenLabsAudio(clean, apiKey, voiceId);
-        return { engine: 'elevenlabs', audio };
-      } catch (e) {
-        console.warn('[Henry voice] ElevenLabs failed, falling back to local say:', e instanceof Error ? e.message : e);
-      }
-    }
-    // No key (explicit elevenlabs pick) or request failed → free local voice.
-    await speakLocal(clean, sayVoiceSetting(db), sayRateSetting(db));
-    return { engine: 'local', spoke: true, fellBack: true };
-  }
-
-  await speakLocal(clean, sayVoiceSetting(db), sayRateSetting(db));
-  return { engine: 'local', spoke: true };
+  // Call the platform speak function, not ourselves
+  return await platformSpeak(db, params);
 }
 
 // ── IPC registration ────────────────────────────────────────────────────────
 
 export function registerVoiceTtsHandlers(db: Database.Database): void {
-  ipcMain.handle('voice:speak', (_e, params: { text: string; engine?: string }) =>
-    envelope(() => speak(db, params)),
-  );
-
-  ipcMain.handle('voice:stopSpeaking', () => envelope(() => ({ stopped: stopSpeaking() })));
-
-  ipcMain.handle('voice:ttsStatus', () =>
-    envelope(async (): Promise<TtsStatus> => ({
-      engine: readEngineSetting(db),
-      active: resolveEngine(db),
-      elevenLabsKeyPresent: Boolean(getElevenLabsKey(db)),
-      elevenVoiceId: (readSetting(db, 'voice_tts_voice') || DEFAULT_ELEVEN_VOICE).trim() || DEFAULT_ELEVEN_VOICE,
-      sayVoice: sayVoiceSetting(db),
-      sayRate: sayRateSetting(db),
-      sayVoices: await listSayVoices(),
-    })),
-  );
+  registerPlatformTtsHandlers(db);
 }

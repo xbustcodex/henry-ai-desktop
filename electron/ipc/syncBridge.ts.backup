@@ -31,7 +31,7 @@ function getCtx(sessionId: string): {role:string;content:string}[] {
  */
 
 import http from 'http';
-import { IS_MAC, IS_WIN, IS_LINUX, tryExec, desktopPath, downloadPath, revealFile, setVolumeCmd, getVolumeCmd, muteCmd, unmuteCmd, setBrightnessCmd, getBrightnessCmd, sleepCmd, lockScreenCmd, restartCmd, shutdownCmd, getBatteryInfo, getDiskInfo, listPrintersCmd, getDefaultPrinterCmd, printFileCmd, screenshotCmd, listAppsCmd, quitAppCmd, getOsVersion, getChipInfo, getHostname, getStartupItemsCmd, getCloudflaredPath } from './platformCommands';
+import { IS_MAC, IS_WIN, IS_LINUX, tryExec, desktopPath, downloadPath, revealFile, setVolumeCmd, getVolumeCmd, muteCmd, unmuteCmd, setBrightnessCmd, getBrightnessCmd, sleepCmd, lockScreenCmd, restartCmd, shutdownCmd, getBatteryInfo, getDiskInfo, listPrintersCmd, getDefaultPrinterCmd, printFileCmd, screenshotCmd, listAppsCmd, quitAppCmd, getOsVersion, getChipInfo, getHostname, getStartupItemsCmd, getCloudflaredPath, openUrl } from './platformCommands';
 import crypto from 'crypto';
 import os from 'os';
 import fs from 'fs';
@@ -808,9 +808,11 @@ async function handleRequest(
     if (path === '/computer/screenshot') {
       try {
         const tmpFile = os.tmpdir() + '/henry_sc_' + Date.now() + '.png';
+        const { screenshotCmd } = await import('./platformCommands');
+        const cmd = screenshotCmd(tmpFile);
         const { exec } = await import('child_process');
         await new Promise<void>((resolve, reject) => {
-          exec(`screencapture -x "${tmpFile}"`, (err) => err ? reject(err) : resolve());
+          exec(cmd, (err) => err ? reject(err) : resolve());
         });
         const buf = fs.readFileSync(tmpFile);
         fs.unlinkSync(tmpFile);
@@ -2334,13 +2336,12 @@ self.addEventListener('fetch', (event) => {
     if (/^(?:restore(?: from)?|recover)(?: my)?(?: data| backup| henry)?$|^restore henry$/.test(lowerText)) {
       try {
         const { execSync: _rbx } = await import('child_process') as typeof import('child_process');
-        const henryDir = path.join(app.getPath('userData'), 'henry-workspace');
-        const _rbDir = path.join(henryDir, 'backups') + '/';
+        const _rbDir = require('os').homedir() + '/Library/Application Support/henry-ai-desktop/backups/';
         const _rbRaw = _rbx('ls -t "' + _rbDir + '" 2>/dev/null | grep -v prerestore | head -5', {encoding:'utf8',timeout:3000,shell:'/bin/bash'}).trim();
         const _rbFiles = _rbRaw.split('\n').filter((f: string)=>f.endsWith('.db')&&f.length>0);
         if (!_rbFiles.length) { sendReply('No backup files found. Say **\'back up my data\'** to create one first.'); return; }
         const _rbLatest = _rbDir + _rbFiles[0];
-        const _rbCurrent = path.join(henryDir, 'henry.db');
+        const _rbCurrent = require('os').homedir() + '/Library/Application Support/henry-ai-desktop/henry-workspace/henry.db';
         const _rbSafeDate = new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
         _rbx('cp "' + _rbCurrent + '" "' + _rbDir + 'henry_prerestore_' + _rbSafeDate + '.db"', {timeout:5000,shell:'/bin/bash'});
         _rbx('cp "' + _rbLatest + '" "' + _rbCurrent + '"', {timeout:5000,shell:'/bin/bash'});
@@ -3360,7 +3361,7 @@ self.addEventListener('fetch', (event) => {
         const _vault = '/Volumes/TheVault/Ollama';
         const _vaultOk = (() => { try { require('fs').readdirSync(_vault); return true; } catch { return false; } })();
         const _launchEnv = _vaultOk ? 'OLLAMA_MODELS=\''+_vault+'\' ' : '';
-        _olEx(_launchEnv + 'open -a Ollama', { timeout: 4000, shell: '/bin/bash' });
+        _olEx(_launchEnv + launchApplication('Ollama'), { timeout: 4000 });
         sendReply(_vaultOk
           ? 'Ollama started \u2014 using models from TheVault.\n  Path: ' + _vault + '\n  URL: http://127.0.0.1:11434\n\nGive it ~15 seconds to load, then say "ollama status" to confirm.'
           : 'Ollama started (TheVault not mounted \u2014 using default model path). Give it ~15 seconds.');
@@ -3519,12 +3520,10 @@ self.addEventListener('fetch', (event) => {
       const _appKey = Object.keys(_knownApps).find(k => _appReq.includes(k));
       if (_appKey) {
         try {
-          const { execSync: _eal } = await import('child_process') as typeof import('child_process');
-          const _launchCmd = process.platform === 'darwin' ? 'open -a "' + _knownApps[_appKey] + '"' :
-            process.platform === 'win32' ? 'start "" "' + _knownApps[_appKey] + '"' :
-            'xdg-open "' + _knownApps[_appKey] + '" 2>/dev/null || ' + _knownApps[_appKey].toLowerCase().replace(/ /g,'-');
-          _eal(_launchCmd, { timeout: 3000 });
-          sendReply('🚀 Opened **' + _knownApps[_appKey] + '**');
+          try {
+            await launchApplication(_knownApps[_appKey]);
+            sendReply('🚀 Opened **' + _knownApps[_appKey] + '**');
+          } catch { sendReply('Could not open ' + _knownApps[_appKey] + '. Is it installed?'); }
         } catch { sendReply('Could not open ' + _knownApps[_appKey] + '. Is it installed?'); }
         return;
       }
@@ -6009,12 +6008,11 @@ self.addEventListener('fetch', (event) => {
     if (/^(?:restore(?: from)?|recover)(?: my)?(?: data| backup)?(?:(?: from)? (.+))?$|^restore henry$/.test(lowerText)) {
       try {
         const { execSync: _rbx } = await import('child_process') as typeof import('child_process');
-        const henryDir = path.join(app.getPath('userData'), 'henry-workspace');
-const _rbDir = path.join(henryDir, 'backups') + '/';
+        const _rbDir = require('os').homedir() + '/Library/Application Support/henry-ai-desktop/backups/';
         const _rbFiles = _rbx('ls -t "' + _rbDir + '" 2>/dev/null | grep henry_.*\.db | head -5', {encoding:'utf8',timeout:3000,shell:'/bin/bash'}).trim().split('\n').filter(Boolean);
         if (!_rbFiles.length) { sendReply('No backup files found. Say **"back up my data"** first.'); return; }
         const _rbLatest = _rbDir + _rbFiles[0];
-        const _rbCurrent = path.join(henryDir, 'henry.db');
+        const _rbCurrent = require('os').homedir() + '/Library/Application Support/henry-ai-desktop/henry-workspace/henry.db';
         // Safety: backup current before restoring
         const _rbSafeDate = new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
         const _rbSafePath = _rbDir + 'henry_prerestore_' + _rbSafeDate + '.db';
@@ -6033,7 +6031,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
     if (/^(?:when was|show|last)(?: my| the)? (?:last )?backup|backup (?:status|info|history)|my backups?$/.test(lowerText)) {
       try {
         const { execSync: _bkx } = await import('child_process') as typeof import('child_process');
-        const henryDir = path.join(app.getPath('userData'), 'henry-workspace'); const _bkDir = path.join(henryDir, 'backups') + '/';
+        const _bkDir = require('os').homedir() + '/Library/Application Support/henry-ai-desktop/backups/';
         const _bkFiles = _bkx('ls -lt "' + _bkDir + '" 2>/dev/null | grep henry_.*\.db | head -5', {encoding:'utf8',timeout:3000,shell:'/bin/bash'}).trim();
         if (!_bkFiles) { sendReply('No backup files found. Say **"back up my data"** to create one.'); return; }
         const _bkLines = _bkFiles.split('\n').map((l: string) => {
@@ -7315,35 +7313,14 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
     // Platform detection — from platformCommands.ts
     const _isMac = IS_MAC; const _isWin = IS_WIN; const _isLinux = IS_LINUX;
 
-    // These helpers return the right command per OS — groundwork for Windows support
-    // Currently only Mac is fully implemented; Win/Linux stubs are ready to fill
-    const _sysVolCmd = (vol: number) => _isMac
-      ? 'osascript -e "set volume output volume ' + vol + '"'
-      : _isWin ? 'nircmd setsysvolume ' + Math.round(vol*655.35)  // nircmd 0-65535
-      : 'amixer sset Master ' + vol + '%';
-    const _sysVolGet = () => _isMac
-      ? 'osascript -e "output volume of (get volume settings)"'
-      : _isWin ? 'powershell -c "(Get-AudioDevice -Playback).Volume"'
-      : 'amixer sget Master | grep -oP "\\d+(?=%)" | head -1';
-    const _sysSleep = () => _isMac
-      ? 'osascript -e "tell application \\"System Events\\" to sleep"'
-      : _isWin ? 'rundll32.exe powrprof.dll,SetSuspendState 0,1,0'
-      : 'systemctl suspend';
-    const _sysLock = () => _isMac
-      ? 'osascript -e "tell application \\"System Events\\" to keystroke \\"q\\" using {command down, control down}"'
-      : _isWin ? 'rundll32.exe user32.dll,LockWorkStation'
-      : 'loginctl lock-session';
-    const _sysShutdown = () => _isMac
-      ? 'osascript -e "tell application \\"System Events\\" to shut down"'
-      : _isWin ? 'shutdown /s /t 5'
-      : 'shutdown -h +0';
-    const _sysRestart = () => _isMac
-      ? 'osascript -e "tell application \\"System Events\\" to restart"'
-      : _isWin ? 'shutdown /r /t 5'
-      : 'shutdown -r +0';
-    const _printerList = () => _isMac || _isLinux
-      ? 'lpstat -p 2>/dev/null'
-      : 'powershell -c "Get-Printer | Select-Object Name,PrinterStatus"';
+    // Use cross-platform commands from platformCommands.ts
+    const _sysVolCmd = (vol: number) => setVolumeCmd(vol);
+    const _sysVolGet = () => getVolumeCmd();
+    const _sysSleep = () => sleepCmd();
+    const _sysLock = () => lockScreenCmd();
+    const _sysShutdown = () => shutdownCmd();
+    const _sysRestart = () => restartCmd();
+    const _printerList = () => listPrintersCmd();
 
     // ── SYSTEM CONTROLS (Mac automation) ─────────────────────────────────────
     // ══════════════════════════════════════════════════════════════════════════

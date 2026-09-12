@@ -42,6 +42,25 @@ export function openUrl(url: string): string {
   return `xdg-open "${url}"`;
 }
 
+/** Open an application by name */
+export function openAppCmd(appName: string): string {
+  const escapedApp = appName.replace(/"/g, '\\"');
+  if (IS_MAC) {
+    // For Finder specifically, just open it without -a
+    if (escapedApp.toLowerCase() === 'finder') {
+      return 'open';
+    }
+    return `open -a "${escapedApp}"`;
+  }
+  if (IS_WIN) {
+    // For Windows, use start command
+    return `start "" "${escapedApp}"`;
+  }
+  // Linux and others
+  // Try common desktop file locations first, then fallback to executable in PATH
+  return `xdg-open "${escapedApp}" 2>/dev/null || which "${escapedApp}" && "${escapedApp}" &`;
+}
+
 // ── Volume ────────────────────────────────────────────────────────────────────
 /** Get current volume (0–100) as a string */
 export function getVolumeCmd(): string {
@@ -176,13 +195,20 @@ export function printFileCmd(filePath: string, printerName?: string): string {
 }
 
 // ── Screenshot ────────────────────────────────────────────────────────────────
-export function screenshotCmd(outPath: string): string {
-  if (IS_MAC)   return `screencapture -x "${outPath}"`;
+export function screenshotCmd(outPath: string, format: 'png' | 'jpg' | 'jpeg' = 'png'): string {
+  // Ensure the outPath has the correct extension
+  const ext = format === 'png' ? 'png' : 'jpg';
+  const pathWithExt = outPath.endsWith(`.${ext}`) ? outPath : `${outPath}.${ext}`;
+
+  if (IS_MAC) {
+    return `screencapture -x -t ${ext} "${pathWithExt}"`;
+  }
   if (IS_WIN) {
-    const esc = outPath.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const esc = pathWithExt.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     return `powershell -NoProfile -c "Add-Type -AssemblyName System.Windows.Forms,System.Drawing; $s=[System.Windows.Forms.Screen]::PrimaryScreen; $b=New-Object System.Drawing.Bitmap($s.Bounds.Width,$s.Bounds.Height); $g=[System.Drawing.Graphics]::FromImage($b); $g.CopyFromScreen(0,0,0,0,$b.Size); $b.Save('${esc}')"`;
   }
-  return `import -window root "${outPath}" 2>/dev/null || scrot "${outPath}" 2>/dev/null`;
+  // Linux: use scrot or import, both respect file extension for format
+  return `import -window root "${pathWithExt}" 2>/dev/null || scrot "${pathWithExt}" 2>/dev/null`;
 }
 
 // ── Running apps ──────────────────────────────────────────────────────────────
@@ -218,6 +244,53 @@ export function getChipInfo(): string {
 
 export function getHostname(): string {
   return os.hostname().replace(/\.local$/, '');
+}
+
+/** Get primary non-internal IPv4 address */
+export function getIPAddressCmd(): string {
+  if (IS_MAC) {
+    // Try common interface names in order of preference
+    return `ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || ipconfig getifaddr en2 2>/dev/null || ipconfig getifaddr en3 2>/dev/null || ipconfig getifaddr en4 2>/dev/null`;
+  }
+  if (IS_WIN) {
+    // Get IPv4 address, excluding virtual adapters
+    return `for /f "tokens=2 delims=:" %i in ('ipconfig ^| findstr /r /c:"IPv4" ^| findstr /v /c:"169.254" ^| findstr /v /c:"127.0.0.1" ^| findstr /v /c:"Teredo" ^| findstr /v /c:"Bluetooth" ^| findstr /v /c:"vEthernet"') do echo %i`;
+  }
+  // Linux and others
+  return `hostname -I 2>/dev/null | awk '{print $1}'`;
+}
+
+/** Show a notification with title and optional body */
+export function showNotificationCmd(title: string, body?: string): string {
+  const escapedTitle = title.replace(/"/g, '\\"');
+  const escapedBody = body?.replace(/"/g, '\\"') ?? '';
+
+  if (IS_MAC) {
+    return `osascript -e 'display notification "${escapedBody}" with title "${escapedTitle}"'`;
+  }
+  if (IS_WIN) {
+    // Use PowerShell with BurntToast if available, fallback to simple message box
+    const psTitle = escapedTitle.replace(/"/g, '`"');
+    const psBody = escapedBody.replace(/"/g, '`"');
+    return `powershell -Command "if (Get-Module -ListAvailable -Name BurntToast) { Import-Module BurntToast; New-BurntToastNotification -Text '${psTitle}', '${psBody}' -Silent } else { [reflection.assembly]::loadwithpartialname('System.Windows.Forms') | out-null; [system.windows.forms.messagebox]::show('${psBody}', '${psTitle}') }"`;
+  }
+  // Linux and others
+  return `notify-send "${escapedTitle}" "${escapedBody}" 2>/dev/null || true`;
+}
+
+/** Resize image while maintaining aspect ratio (similar to sips -Z) */
+export function resizeImageCmd(inputPath: string, outputPath: string, maxDimension: number): string {
+  if (IS_MAC) {
+    return `sips -Z ${maxDimension} "${inputPath}" --out "${outputPath}" 2>/dev/null || true`;
+  }
+  if (IS_WIN) {
+    // PowerShell image resizing using System.Drawing
+    const escInput = inputPath.replace(/"/g, '`"');
+    const escOutput = outputPath.replace(/"/g, '`"');
+    return `powershell -NoProfile -Command "Add-Type -AssemblyName System.Drawing; $img = [System.Drawing.Image]::FromFile('${escInput}'); $ratio = Math.Min(${maxDimension} / $img.Width, ${maxDimension} / $img.Height); $newWidth = [int]($img.Width * $ratio); $newHeight = [int]($img.Height * $ratio); $thumb = New-Object System.Drawing.Bitmap $newWidth, $newHeight; $g = [System.Drawing.Graphics]::FromImage($thumb); $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic; $g.DrawImage($img, 0, 0, $newWidth, $newHeight); $thumb.Save('${escOutput}'); $img.Dispose(); $thumb.Dispose(); $g.Dispose()"`;
+  }
+  // Linux and others - use ImageMagick convert or mogrify
+  return `convert "${inputPath}" -resize ${maxDimension}x${maxDimension}\\> "${outputPath}" 2>/dev/null || mogrify -path "${outputPath}" -resize ${maxDimension}x${maxDimension}\\> "${inputPath}" 2>/dev/null || true`;
 }
 
 // ── Startup items ─────────────────────────────────────────────────────────────

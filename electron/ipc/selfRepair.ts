@@ -5,7 +5,7 @@
  * Every check has an auto-fix. Every fix is logged. User sees the result.
  *
  * Philosophy: Henry should never ask the user to run a command.
- * If something is broken, Henry fixes it. If he can't, he says exactly why
+ * If something is broken, he fixes it. If he can't, he says exactly why
  * and what to do — one sentence, no jargon.
  */
 
@@ -13,6 +13,8 @@ import { execSync, exec } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { app, shell } from 'electron';
+import type Database from 'better-sqlite3';
 
 const BREW = '/opt/homebrew/bin/brew';
 const HOME = os.homedir();
@@ -23,8 +25,8 @@ export interface HealthCheck {
   name: string;
   category: 'required' | 'recommended' | 'optional';
   description: string;
-  check: () => Promise<CheckResult>;
-  fix?: () => Promise<FixResult>;
+  check: (db: Database.Database) => Promise<CheckResult>;
+  fix?: (db: Database.Database) => Promise<FixResult>;
 }
 
 export interface CheckResult {
@@ -72,387 +74,415 @@ async function brewInstall(pkg: string): Promise<FixResult> {
   });
 }
 
+// Get Henry workspace directory
+function getHenryDir(): string {
+  const userDataPath = app.getPath('userData');
+  return path.join(userDataPath, 'henry-workspace');
+}
+
 // ── All health checks ──────────────────────────────────────────────────────
-export const HEALTH_CHECKS: HealthCheck[] = [
+export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
+  const henryDir = getHenryDir();
+  const henryDbPath = path.join(henryDir, 'henry.db');
 
-  // ── Core runtime ──────────────────────────────────────────────────────────
-  {
-    id: 'brew',
-    name: 'Homebrew',
-    category: 'required',
-    description: 'Package manager — used to install everything else',
-    check: async () => {
-      const v = toolVersion(BREW);
-      return v ? { ok: true, version: v } : { ok: false, detail: 'Homebrew not found' };
-    },
-    // brew can't auto-install itself — give user a one-liner
-  },
+  return [
 
-  {
-    id: 'node',
-    name: 'Node.js',
-    category: 'required',
-    description: 'JavaScript runtime for Henry\'s backend',
-    check: async () => {
-      const v = toolVersion('node');
-      return v ? { ok: true, version: v } : { ok: false, detail: 'Node.js not installed' };
+    // ── Core runtime ──────────────────────────────────────────────────────────
+    {
+      id: 'brew',
+      name: 'Homebrew',
+      category: 'required',
+      description: 'Package manager — used to install everything else',
+      check: async () => {
+        const v = toolVersion(BREW);
+        return v ? { ok: true, version: v } : { ok: false, detail: 'Homebrew not found' };
+      },
+      // brew can't auto-install itself — give user a one-liner
     },
-    fix: async () => brewInstall('node'),
-  },
 
-  {
-    id: 'cloudflared',
-    name: 'Cloudflare Tunnel',
-    category: 'required',
-    description: 'Secure tunnel so mobile works from anywhere',
-    check: async () => {
-      const v = toolVersion('cloudflared');
-      return v ? { ok: true, version: v } : { ok: false, detail: 'cloudflared not installed — mobile only works on home WiFi' };
+    {
+      id: 'node',
+      name: 'Node.js',
+      category: 'required',
+      description: 'JavaScript runtime for Henry\'s backend',
+      check: async () => {
+        const v = toolVersion('node');
+        return v ? { ok: true, volume: v } : { ok: false, detail: 'Node.js not installed' };
+      },
+      fix: async () => brewInstall('node'),
     },
-    fix: async () => brewInstall('cloudflared'),
-  },
 
-  {
-    id: 'git',
-    name: 'Git',
-    category: 'required',
-    description: 'Version control — used for Henry updates',
-    check: async () => {
-      const v = toolVersion('git');
-      return v ? { ok: true, version: v } : { ok: false, detail: 'Git not installed' };
+    {
+      id: 'cloudflared',
+      name: 'Cloudflare Tunnel',
+      category: 'required',
+      description: 'Secure tunnel so mobile works from anywhere',
+      check: async () => {
+        const v = toolVersion('cloudflared');
+        return v ? { ok: true, volume: v } : { ok: false, detail: 'cloudflared not installed — mobile only works on home WiFi' };
+      },
+      fix: async () => brewInstall('cloudflared'),
     },
-    fix: async () => brewInstall('git'),
-  },
 
-  // ── Media tools ───────────────────────────────────────────────────────────
-  {
-    id: 'ffmpeg',
-    name: 'FFmpeg',
-    category: 'recommended',
-    description: 'Audio/video processing — required for voice features and media generation',
-    check: async () => {
-      const v = toolVersion('ffmpeg', '-version');
-      return v ? { ok: true, version: v.split('\n')[0] } : { ok: false, detail: 'ffmpeg not installed — voice processing unavailable' };
+    {
+      id: 'git',
+      name: 'Git',
+      category: 'required',
+      description: 'Version control — used for Henry updates',
+      check: async () => {
+        const v = toolVersion('git');
+        return v ? { ok: true, volume: v } : { ok: false, detail: 'Git not installed' };
+      },
+      fix: async () => brewInstall('git'),
     },
-    fix: async () => brewInstall('ffmpeg'),
-  },
 
-  // ── Voice (free local speech) ─────────────────────────────────────────────
-  {
-    id: 'whisper_cpp',
-    name: 'Whisper (local speech-to-text)',
-    category: 'recommended',
-    description: 'whisper.cpp — free, offline voice input for Henry',
-    check: async () => {
-      try {
-        const { detectWhisperBinary } = require('../voice/stt') as typeof import('../voice/stt');
-        const bin = detectWhisperBinary(true);
-        return bin
-          ? { ok: true, detail: bin }
-          : { ok: false, detail: 'whisper-cli not installed — voice input runs one-time setup on first use' };
-      } catch (e) {
-        return { ok: false, detail: String(e) };
-      }
+    // ── Media tools ───────────────────────────────────────────────────────────
+    {
+      id: 'ffmpeg',
+      name: 'FFmpeg',
+      category: 'recommended',
+      description: 'Audio/video processing — required for voice features and media generation',
+      check: async () => {
+        const v = toolVersion('ffmpeg', '-version');
+        return v ? { ok: true, volume: v.split('\n')[0] } : { ok: false, detail: 'ffmpeg not installed — voice processing unavailable' };
+      },
+      fix: async () => brewInstall('ffmpeg'),
     },
-    fix: async () => {
-      if (!toolVersion(BREW)) {
-        return { success: false, message: 'Homebrew not found — cannot auto-install whisper-cpp' };
-      }
-      return brewInstall('whisper-cpp');
-    },
-  },
 
-  {
-    id: 'whisper_model',
-    name: 'Whisper model (base.en)',
-    category: 'optional',
-    description: 'The ~148MB speech model whisper.cpp uses to transcribe your voice',
-    check: async () => {
-      try {
-        const { detectWhisperBinary, sttModelPresent, sttModelPath } =
-          require('../voice/stt') as typeof import('../voice/stt');
-        if (sttModelPresent()) return { ok: true, detail: sttModelPath() };
-        if (!detectWhisperBinary()) {
-          // No binary yet — the model alone is useless; report once via whisper_cpp.
-          return { ok: true, detail: 'Waiting on whisper-cli install — model downloads during voice setup' };
+    // ── Voice (free local speech) ─────────────────────────────────────────────
+    {
+      id: 'whisper_cpp',
+      name: 'Whisper (local speech-to-text)',
+      category: 'recommended',
+      description: 'whisper.cpp — free, offline voice input for Henry',
+      check: async () => {
+        try {
+          const { detectWhisperBinary } = require('../voice/stt') as typeof import('../voice/stt');
+          const bin = detectWhisperBinary(true);
+          return bin
+            ? { ok: true, detail: bin }
+            : { ok: false, detail: 'whisper-cli not installed — voice input runs one-time setup on first use' };
+        } catch (e) {
+          return { ok: false, detail: String(e) };
         }
-        return { ok: false, detail: 'Speech model not downloaded (~148MB, one-time)' };
-      } catch (e) {
-        return { ok: false, detail: String(e) };
-      }
+      },
+      fix: async () => {
+        if (!toolVersion(BREW)) {
+          return { success: false, message: 'Homebrew not found — cannot auto-install whisper-cpp' };
+        }
+        return brewInstall('whisper-cpp');
+      },
     },
-    fix: async () => {
-      try {
-        const { downloadSttModel } = require('../voice/stt') as typeof import('../voice/stt');
-        await downloadSttModel();
-        return { success: true, message: 'Downloaded ggml-base.en speech model' };
-      } catch (e) {
-        return { success: false, message: `Model download failed: ${e instanceof Error ? e.message : String(e)}` };
-      }
-    },
-  },
 
-  {
-    id: 'microphone',
-    name: 'Microphone Permission',
-    category: 'recommended',
-    description: 'Required so Henry can hear you — voice input in chat',
-    check: async () => {
-      try {
-        const { systemPreferences } = require('electron');
-        const status = systemPreferences.getMediaAccessStatus('microphone');
-        // 'not-determined' is fine — macOS prompts automatically on first use.
-        if (status === 'granted' || status === 'not-determined') return { ok: true, detail: status };
+    {
+      id: 'whisper_model',
+      name: 'Whisper model (base.en)',
+      category: 'optional',
+      description: 'The ~148MB speech model whisper.cpp uses to transcribe your voice',
+      check: async () => {
+        try {
+          const { detectWhisperBinary, sttModelPresent, sttModelPath } =
+            require('../voice/stt') as typeof import('../voice/stt');
+          if (sttModelPresent()) return { ok: true, detail: sttModelPath() };
+          if (!detectWhisperBinary()) {
+            // No binary yet — the model alone is useless; report once via whisper_cpp.
+            return { ok: true, detail: 'Waiting on whisper-cli install — model downloads during voice setup' };
+          }
+          return { ok: false, detail: 'Speech model not downloaded (~148MB, one-time)' };
+        } catch (e) {
+          return { ok: false, detail: String(e) };
+        }
+      },
+      fix: async () => {
+        try {
+          const { downloadSttModel } = require('../voice/stt') as typeof import('../voice/stt');
+          await downloadSttModel();
+          return { success: true, message: 'Downloaded ggml-base.en speech model' };
+        } catch (e) {
+          return { success: false, message: `Model download failed: ${e instanceof Error ? e.message : String(e)}` };
+        }
+      },
+    },
+
+    {
+      id: 'microphone',
+      name: 'Microphone Permission',
+      category: 'recommended',
+      description: 'Required so Henry can hear you — voice input in chat',
+      check: async () => {
+        try {
+          const { systemPreferences } = require('electron');
+          const status = systemPreferences.getMediaAccessStatus('microphone');
+          // 'not-determined' is fine — macOS prompts automatically on first use.
+          if (status === 'granted' || status === 'not-determined') return { ok: true, detail: status };
+          return {
+            ok: false,
+            detail: 'Microphone not granted — System Settings → Privacy → Microphone → Henry AI',
+          };
+        } catch {
+          return { ok: true };
+        }
+      },
+      fix: async () => {
+        // Report-only (like Screen Recording): open the right pane, user flips the toggle.
+        exec('open "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"');
+        return { success: false, message: 'Opening Microphone settings — enable Henry AI, then try the mic again' };
+      },
+    },
+
+    {
+      id: 'yt_dlp',
+      name: 'yt-dlp',
+      category: 'optional',
+      description: 'Video downloader — for media capture features',
+      check: async () => {
+        const v = toolVersion('yt-dlp');
+        return v ? { ok: true, volume: v } : { ok: false, detail: 'yt-dlp not installed' };
+      },
+      fix: async () => brewInstall('yt-dlp'),
+    },
+
+    // ── Python ────────────────────────────────────────────────────────────────
+    {
+      id: 'python3',
+      name: 'Python 3',
+      category: 'recommended',
+      description: 'Used for AI scripts, data processing, and Henry utilities',
+      check: async () => {
+        const v = toolVersion('python3');
+        return v ? { ok: true, volume: v } : { ok: false, detail: 'Python 3 not installed' };
+      },
+      fix: async () => brewInstall('python3'),
+    },
+
+    // ── Coder engine ──────────────────────────────────────────────────────────
+    {
+      id: 'claude_cli',
+      name: 'Claude Code CLI',
+      category: 'recommended',
+      description: "Henry's default coder engine — codes on your Claude subscription (big context, no per-token cost)",
+      check: async () => {
+        const candidates = [
+          'claude',
+          `${HOME}/.claude/local/claude`,
+          '/opt/homebrew/bin/claude',
+          '/usr/local/bin/claude',
+          `${HOME}/.local/bin/claude`,
+        ];
+        for (const c of candidates) {
+          const v = toolVersion(`"${c}"`);
+          if (v) return { ok: true, volume: v, detail: c === 'claude' ? undefined : c };
+        }
         return {
           ok: false,
-          detail: 'Microphone not granted — System Settings → Privacy → Microphone → Henry AI',
+          detail:
+            'Claude Code CLI not found — install with: npm install -g @anthropic-ai/claude-code (docs: docs.anthropic.com/en/docs/claude-code). Henry falls back to the free local coder.',
         };
-      } catch {
-        return { ok: true };
-      }
+      },
+      // No auto-fix: a global npm install shouldn't run silently on every launch.
     },
-    fix: async () => {
-      // Report-only (like Screen Recording): open the right pane, user flips the toggle.
-      exec('open "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"');
-      return { success: false, message: 'Opening Microphone settings — enable Henry AI, then try the mic again' };
-    },
-  },
 
-  {
-    id: 'yt_dlp',
-    name: 'yt-dlp',
-    category: 'optional',
-    description: 'Video downloader — for media capture features',
-    check: async () => {
-      const v = toolVersion('yt-dlp');
-      return v ? { ok: true, version: v } : { ok: false, detail: 'yt-dlp not installed' };
-    },
-    fix: async () => brewInstall('yt-dlp'),
-  },
-
-  // ── Python ────────────────────────────────────────────────────────────────
-  {
-    id: 'python3',
-    name: 'Python 3',
-    category: 'recommended',
-    description: 'Used for AI scripts, data processing, and Henry utilities',
-    check: async () => {
-      const v = toolVersion('python3');
-      return v ? { ok: true, version: v } : { ok: false, detail: 'Python 3 not installed' };
-    },
-    fix: async () => brewInstall('python3'),
-  },
-
-  // ── Coder engine ──────────────────────────────────────────────────────────
-  {
-    id: 'claude_cli',
-    name: 'Claude Code CLI',
-    category: 'recommended',
-    description: "Henry's default coder engine — codes on your Claude subscription (big context, no per-token cost)",
-    check: async () => {
-      const candidates = [
-        'claude',
-        `${HOME}/.claude/local/claude`,
-        '/opt/homebrew/bin/claude',
-        '/usr/local/bin/claude',
-        `${HOME}/.local/bin/claude`,
-      ];
-      for (const c of candidates) {
-        const v = toolVersion(`"${c}"`);
-        if (v) return { ok: true, version: v, detail: c === 'claude' ? undefined : c };
-      }
-      return {
-        ok: false,
-        detail:
-          'Claude Code CLI not found — install with: npm install -g @anthropic-ai/claude-code (docs: docs.anthropic.com/en/docs/claude-code). Henry falls back to the free local coder.',
-      };
-    },
-    // No auto-fix: a global npm install shouldn't run silently on every launch.
-  },
-
-  {
-    id: 'qwen_coder',
-    name: 'Local coder model (qwen2.5-coder)',
-    category: 'optional',
-    description: 'Free offline coder fallback via Ollama — used when the Claude Code CLI is unavailable',
-    check: async () => {
-      if (!toolExists('ollama')) {
-        return { ok: true, detail: 'Ollama not installed — local coder fallback skipped (optional)' };
-      }
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 2500);
-        const res = await fetch('http://localhost:11434/api/tags', { signal: controller.signal });
-        clearTimeout(timer);
-        const data = (await res.json()) as { models?: Array<{ name?: string }> };
-        const names = (data.models ?? []).map((m) => m.name ?? '');
-        const hit =
-          names.find((n) => n.startsWith('qwen2.5-coder')) ??
-          names.find((n) => /^qwen[\w.]*-coder/i.test(n));
-        return hit
-          ? { ok: true, detail: hit }
-          : { ok: false, detail: 'Coder model not pulled — run: ollama pull qwen2.5-coder:7b' };
-      } catch {
-        // Ollama installed but not running — can't verify; don't nag or auto-pull.
-        return { ok: true, detail: "Ollama isn't running — start it to verify the local coder model" };
-      }
-    },
-    fix: async () => {
-      return new Promise((resolve) => {
-        exec('ollama pull qwen2.5-coder:7b', { env: ENV, timeout: 600_000 }, (err) => {
-          if (err) resolve({ success: false, message: 'Auto-pull failed — run: ollama pull qwen2.5-coder:7b' });
-          else resolve({ success: true, message: 'Pulled qwen2.5-coder:7b for the free local coder' });
+    {
+      id: 'qwen_coder',
+      name: 'Local coder model (qwen2.5-coder)',
+      category: 'optional',
+      description: 'Free offline coder fallback via Ollama — used when the Claude Code CLI is unavailable',
+      check: async () => {
+        if (!toolExists('ollama')) {
+          return { ok: true, detail: 'Ollama not installed — local coder fallback skipped (optional)' };
+        }
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 2500);
+          const res = await fetch('http://localhost:11434/api/tags', { signal: controller.signal });
+          clearTimeout(timer);
+          const data = (await res.json()) as { models?: Array<{ name?: string }> };
+          const names = (data.models ?? []).map((m) => m.name ?? '');
+          const hit =
+            names.find((n) => n.startsWith('qwen2.5-coder')) ??
+            names.find((n) => /^qwen[\w.]*-coder/i.test(n));
+          return hit
+            ? { ok: true, detail: hit }
+            : { ok: false, detail: 'Coder model not pulled — run: ollama pull qwen2.5-coder:7b' };
+        } catch {
+          // Ollama installed but not running — can't verify; don't nag or auto-pull.
+          return { ok: true, detail: "Ollama isn't running — start it to verify the local coder model" };
+        }
+      },
+      fix: async () => {
+        return new Promise((resolve) => {
+          exec('ollama pull qwen2.5-coder:7b', { env: ENV, timeout: 600_000 }, (err) => {
+            if (err) resolve({ success: false, message: 'Auto-pull failed — run: ollama pull qwen2.5-coder:7b' });
+            else resolve({ success: true, message: 'Pulled qwen2.5-coder:7b for the free local coder' });
+          });
         });
-      });
+      },
     },
-  },
 
-  // ── Database ──────────────────────────────────────────────────────────────
-  {
-    id: 'sqlite3',
-    name: 'SQLite',
-    category: 'required',
-    description: 'Henry\'s local database — stores all conversations, memory, tasks',
-    check: async () => {
-      const v = toolVersion('sqlite3');
-      // Also check DB file health
-      const dbPath = path.join(os.homedir(), 'Library/Application Support/henry-ai-desktop/henry-workspace/henry.db');
-      const dbExists = fs.existsSync(dbPath);
-      return v && dbExists
-        ? { ok: true, version: v, detail: `DB: ${(fs.statSync(dbPath).size / 1024).toFixed(0)}KB` }
-        : { ok: false, detail: !dbExists ? 'Database file missing — will recreate on restart' : 'sqlite3 not installed' };
+    // ── Database ──────────────────────────────────────────────────────────────
+    {
+      id: 'sqlite3',
+      name: 'SQLite',
+      category: 'required',
+      description: 'Henry\'s local database — stores all conversations, memory, tasks',
+      check: async () => {
+        const v = toolVersion('sqlite3');
+        // Also check DB file health
+        const dbExists = fs.existsSync(henryDbPath);
+        return v && dbExists
+          ? { ok: true, volume: v, detail: `DB: ${(fs.statSync(henryDbPath).size / 1024).toFixed(0)}KB` }
+          : { ok: false, detail: !dbExists ? 'Database file missing — will recreate on restart' : 'sqlite3 not installed' };
+      },
+      fix: async () => brewInstall('sqlite3'),
     },
-    fix: async () => brewInstall('sqlite3'),
-  },
 
-  // ── Henry settings check ──────────────────────────────────────────────────
-  {
-    id: 'groq_key',
-    name: 'Groq API Key',
-    category: 'required',
-    description: 'Free AI model access — Henry\'s brain',
-    check: async () => {
-      try {
-        const dbPath = path.join(HOME, 'Library/Application Support/henry-ai-desktop/henry-workspace/henry.db');
-        const { execSync: es } = await import('child_process');
-        const result = es(`sqlite3 "${dbPath}" "SELECT api_key FROM providers WHERE id='groq' AND enabled=1;"`, { encoding: 'utf8', env: ENV, timeout: 3000 }).trim();
-        if (result && result.length > 10) return { ok: true, detail: `Key set (${result.length} chars)` };
-        return { ok: false, detail: 'No Groq API key — add one in Settings → AI Providers' };
-      } catch { return { ok: false, detail: 'Could not check API key' }; }
+    // ── Henry settings check ──────────────────────────────────────────────────
+    {
+      id: 'groq_key',
+      name: 'Groq API Key',
+      category: 'required',
+      description: 'Free AI model access — Henry\'s brain',
+      check: async (_db) => {
+        try {
+          const result = _db.prepare("SELECT api_key FROM providers WHERE id='groq' AND enabled=1;").get();
+          if (result && result.api_key && result.api_key.length > 10) return { ok: true, detail: `Key set (${result.api_key.length} chars)` };
+          return { ok: false, detail: 'No Groq API key — add one in Settings → AI Providers' };
+        } catch { return { ok: false, detail: 'Could not check API key' }; }
+      },
+      // No auto-fix for API keys — user must provide
     },
-    // No auto-fix for API keys — user must provide
-  },
 
-  {
-    id: 'tunnel_config',
-    name: 'Auto-Tunnel Setting',
-    category: 'recommended',
-    description: 'Cloudflare tunnel starts automatically so mobile works anywhere',
-    check: async () => {
-      try {
-        const dbPath = path.join(HOME, 'Library/Application Support/henry-ai-desktop/henry-workspace/henry.db');
-        const result = execSync(`sqlite3 "${dbPath}" "SELECT value FROM settings WHERE key='auto_tunnel_enabled';"`, { encoding: 'utf8', env: ENV, timeout: 3000 }).trim();
-        return result === 'true'
-          ? { ok: true, detail: 'Auto-tunnel enabled' }
-          : { ok: false, detail: 'Auto-tunnel disabled — mobile only works on home WiFi' };
-      } catch { return { ok: false, detail: 'Could not check tunnel setting' }; }
+    {
+      id: 'tunnel_config',
+      name: 'Auto-Tunnel Setting',
+      category: 'recommended',
+      description: 'Cloudflare tunnel starts automatically so mobile works anywhere',
+      check: async (_db) => {
+        try {
+          const result = _db.prepare("SELECT value FROM settings WHERE key='auto_tunnel_enabled';").get();
+          return result?.value === 'true'
+            ? { ok: true, detail: 'Auto-tunnel enabled' }
+            : { ok: false, detail: 'Auto-tunnel disabled — mobile only works on home WiFi' };
+        } catch { return { ok: false, detail: 'Could not check tunnel setting' }; }
+      },
+      fix: async (_db) => {
+        try {
+          _db.prepare("INSERT OR REPLACE INTO settings(key,value) VALUES('auto_tunnel_enabled','true');").run();
+          return { success: true, message: 'Auto-tunnel enabled' };
+        } catch (e) { return { success: false, message: String(e) }; }
+      },
     },
-    fix: async () => {
-      try {
-        const dbPath = path.join(HOME, 'Library/Application Support/henry-ai-desktop/henry-workspace/henry.db');
-        execSync(`sqlite3 "${dbPath}" "INSERT OR REPLACE INTO settings(key,value) VALUES('auto_tunnel_enabled','true');"`, { env: ENV, timeout: 3000 });
-        return { success: true, message: 'Auto-tunnel enabled' };
-      } catch (e) { return { success: false, message: String(e) }; }
-    },
-  },
 
-  {
-    id: 'screen_recording',
-    name: 'Screen Recording Permission',
-    category: 'recommended',
-    description: 'Required for live screen view on mobile',
-    check: async () => {
-      try {
-        execSync('screencapture -x /tmp/henry_health_check.png', { env: ENV, timeout: 5000 });
-        const exists = fs.existsSync('/tmp/henry_health_check.png');
-        try { fs.unlinkSync('/tmp/henry_health_check.png'); } catch { }
-        return exists ? { ok: true } : { ok: false, detail: 'Screen Recording not granted — go to System Settings → Privacy → Screen Recording → Henry AI' };
-      } catch { return { ok: false, detail: 'Screen Recording not granted — System Settings → Privacy → Screen Recording' }; }
-    },
-    fix: async () => {
-      exec('open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"');
-      return { success: false, message: 'Opening Screen Recording settings — enable Henry AI, then restart Henry' };
-    },
-  },
+    {
+      id: 'screen_recording',
+      name: 'Screen Recording Permission',
+      category: 'recommended',
+      description: 'Required for live screen view on mobile',
+      check: async () => {
+        try {
+          // Try Electron's API first (works on macOS and Windows)
+          const { systemPreferences } = require('electron');
+          const status = systemPreferences.getMediaAccessStatus('screen');
+          if (status === 'granted') return { ok: true };
 
-  {
-    id: 'accessibility',
-    name: 'Accessibility Permission',
-    category: 'recommended',
-    description: 'Required for iPad remote control — lets Henry move the mouse and type',
-    check: async () => {
-      try {
-        const { systemPreferences } = require('electron');
-        const ok = systemPreferences.isTrustedAccessibilityClient(false);
-        return ok
-          ? { ok: true }
-          : { ok: false, detail: 'Accessibility not granted — System Settings → Privacy → Accessibility' };
-      } catch {
-        return { ok: true };
-      }
+          // Fallback: try an actual screen capture
+          const tmp = `${os.tmpdir()}/henry_health_check.png`;
+          let cmd: string;
+          if (process.platform === 'darwin') {
+            cmd = `screencapture -x -t png "${tmp}"`;
+          } else if (process.platform === 'win32') {
+            // PowerShell screenshot
+            cmd = `powershell -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen | ForEach-Object { $bmp = New-Object System.Drawing.Bitmap($_.Bounds.Width, $_.Bounds.Height); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($_.Bounds.Location, [System.Drawing.Point]::Empty, $_.Bounds.Size); $bmp.Save('${tmp}') }"`;
+          } else {
+            // Linux: use scrot or import
+            cmd = `scrot "${tmp}" 2>/dev/null || import -window root "${tmp}" 2>/dev/null`;
+          }
+          const { execSync } = require('child_process');
+          execSync(cmd, { timeout: 3000, stdio: 'ignore' });
+          const stat = fs.statSync(tmp);
+          try { fs.unlinkSync(tmp); } catch { /* */ }
+          // A real screen capture is hundreds of KB; a denied/empty one is < 5KB
+          return { ok: stat.size > 5000 };
+        } catch {
+          return { ok: false, detail: 'Screen Recording check failed' };
+        }
+      },
+      fix: async () => {
+        await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+        return { success: false, message: 'Opening Screen Recording settings — enable Henry AI, then restart Henry' };
+      },
     },
-    fix: async (): Promise<FixResult> => {
-      try {
-        const { systemPreferences, shell } = require('electron');
-        systemPreferences.isTrustedAccessibilityClient(true);
-        await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
-        return { success: false, message: 'Opening Accessibility settings — enable Henry AI, then restart' };
-      } catch (e) {
-        return { success: false, message: 'Could not open Accessibility settings: ' + String(e) };
-      }
-    },
-  },
 
-  {
-    id: 'disk_space',
-    name: 'Disk Space',
-    category: 'recommended',
-    description: 'Henry needs space for conversations, media, and AI models',
-    check: async () => {
-      try {
-        const out = execSync('df -h / | tail -1', { encoding: 'utf8', env: ENV, timeout: 3000 });
-        const parts = out.trim().split(/\s+/);
-        const available = parts[3] || '?';
-        const usedPct = parseInt(parts[4] || '0');
-        const ok = usedPct < 90;
-        return { ok, detail: `${available} free (${parts[4]} used)`, version: available };
-      } catch { return { ok: true, detail: 'Could not check disk' }; }
+    {
+      id: 'accessibility',
+      name: 'Accessibility Permission',
+      category: 'recommended',
+      description: 'Required for iPad remote control — lets Henry move the mouse and type',
+      check: async () => {
+        try {
+          const { systemPreferences } = require('electron');
+          const ok = systemPreferences.isTrustedAccessibilityClient(false);
+          return ok
+            ? { ok: true }
+            : { ok: false, detail: 'Accessibility not granted — System Settings → Privacy → Accessibility' };
+        } catch {
+          return { ok: true };
+        }
+      },
+      fix: async (): Promise<FixResult> => {
+        try {
+          const { systemPreferences, shell } = require('electron');
+          systemPreferences.isTrustedAccessibilityClient(true);
+          await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
+          return { success: false, message: 'Opening Accessibility settings — enable Henry AI, then restart' };
+        } catch (e) {
+          return { success: false, message: 'Could not open Accessibility settings: ' + String(e) };
+        }
+      },
     },
-  },
-];
+
+    {
+      id: 'disk_space',
+      name: 'Disk Space',
+      category: 'recommended',
+      description: 'Henry needs space for conversations, media, and AI models',
+      check: async () => {
+        try {
+          const out = execSync('df -h / | tail -1', { encoding: 'utf8', env: ENV, timeout: 3000 });
+          const parts = out.trim().split(/\s+/);
+          const available = parts[3] || '?';
+          const usedPct = parseInt(parts[4] || '0');
+          const ok = usedPct < 90;
+          return { ok, detail: `${available} free (${parts[4]} used)`, volume: available };
+        } catch { return { ok: true, detail: 'Could not check disk' }; }
+      },
+    },
+  ];
+}
 
 // ── Run full diagnostic ────────────────────────────────────────────────────
-export async function runDiagnostic(autoFix = true): Promise<DiagnosticReport> {
+export async function runDiagnostic(autoFix = true, db: Database.Database): Promise<DiagnosticReport> {
   const report: DiagnosticReport = {
     timestamp: new Date().toISOString(),
     checks: [],
     summary: { ok: 0, fixed: 0, failed: 0, warnings: 0 },
   };
 
-  for (const check of HEALTH_CHECKS) {
-    const result = await check.check().catch(e => ({ ok: false, detail: String(e) }));
+  const checks = HEALTH_CHECKS(db);
+  for (const check of checks) {
+    const result = await check.check(db).catch(e => ({ ok: false, detail: String(e) }));
     const entry: DiagnosticReport['checks'][0] = {
       id: check.id,
       name: check.name,
       category: check.category,
       status: result.ok ? 'ok' : (check.category === 'required' ? 'error' : 'warning'),
       detail: result.detail,
-      version: (result as CheckResult).version,
+      volume: (result as CheckResult).version,
     };
 
     if (!result.ok && autoFix && check.fix) {
       try {
-        const fixResult = await check.fix();
+        const fixResult = await check.fix(db);
         if (fixResult.success) {
           entry.status = 'fixed';
           entry.fixMessage = fixResult.message;
@@ -484,13 +514,13 @@ export async function runDiagnostic(autoFix = true): Promise<DiagnosticReport> {
 }
 
 // ── Save report to DB ──────────────────────────────────────────────────────
-export function saveReport(db: import('better-sqlite3').Database, report: DiagnosticReport): void {
+export function saveReport(db: Database.Database, report: DiagnosticReport): void {
   try {
     db.prepare("INSERT OR REPLACE INTO settings(key,value) VALUES('last_diagnostic',?)").run(JSON.stringify(report));
   } catch { /* ignore */ }
 }
 
-export function loadLastReport(db: import('better-sqlite3').Database): DiagnosticReport | null {
+export function loadLastReport(db: Database.Database): DiagnosticReport | null {
   try {
     const row = db.prepare("SELECT value FROM settings WHERE key='last_diagnostic'").get() as { value: string } | undefined;
     return row ? JSON.parse(row.value) : null;

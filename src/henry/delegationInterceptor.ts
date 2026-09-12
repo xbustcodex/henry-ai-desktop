@@ -4,9 +4,11 @@
  * via real computer IPCs instead of hoping the AI outputs the right pattern.
  */
 
+import { launchApplication, openUrl, launchAppByName } from '../platform/launcher';
+
 export interface DelegationTarget {
   appName: string;       // e.g. "Google Chrome"
-  openCommand: string;   // e.g. "open https://chatgpt.com"
+  url: string;           // e.g. "https://chatgpt.com" (empty for app-only)
   task: string;          // what to type/do in the app
   isAI: boolean;         // true if target is an AI chatbot (type into input)
 }
@@ -94,7 +96,7 @@ export function parseDelegation(message: string): DelegationTarget | null {
 
   return {
     appName: target.app,
-    openCommand: target.url ? `open ${target.url}` : `open -a "${target.app}"`,
+    url: target.url,
     task,
     isAI,
   };
@@ -107,48 +109,229 @@ export async function executeDelegation(delegation: DelegationTarget): Promise<s
   const results: string[] = [];
 
   try {
-    // 1. Open the app / URL
-    const openResult = await api.computerRunShell({
-      command: delegation.openCommand,
-      timeout: 5000,
-    }) as { output?: string; error?: string };
-    results.push(`✓ Opened ${delegation.appName}`);
+    // 1. Open the app / URL using platform abstraction
+    if (delegation.url) {
+      // It's a URL to open
+      await openUrl(delegation.url);
+      results.push(`✓ Opened ${delegation.appName}`);
+    } else {
+      // It's an application to open
+      await launchApplication(delegation.appName);
+      results.push(`✓ Opened ${delegation.appName}`);
+    }
 
     // 2. Wait for it to load
     await new Promise(r => setTimeout(r, 2500));
 
-    // 3. Activate it
-    await api.computerOsascript(
-      `tell application "${delegation.appName}" to activate`
-    );
+    // 3. Activate it using platform-specific methods
+    await activateApplication(delegation.appName);
     await new Promise(r => setTimeout(r, 800));
 
-    // 4. For AI chatbots: click the input area first (Cmd+L or just click center)
+    // 4. For AI chatbots: click the input area first (Cmd+L or equivalent)
     if (delegation.isAI) {
-      // Try clicking the input area via osascript key shortcut (most web chatbots use standard input)
-      await api.computerOsascript(
-        `tell application "System Events" to keystroke "l" using command down`
-      );
+      await focusAiInput(delegation.appName);
       await new Promise(r => setTimeout(r, 300));
     }
 
     // 5. Type the task
     const escaped = delegation.task.replace(/"/g, '\\"');
-    await api.computerOsascript(
-      `tell application "System Events" to keystroke "${escaped}"`
-    );
+    await typeText(escaped);
     results.push(`✓ Typed: "${delegation.task}"`);
 
     await new Promise(r => setTimeout(r, 200));
 
     // 6. Press Enter to submit
-    await api.computerOsascript(
-      `tell application "System Events" to key code 36`
-    );
+    await pressEnter();
     results.push(`✓ Submitted`);
 
     return results.join('\n');
   } catch (e) {
     return `✗ ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+// Platform-specific helper functions
+async function activateApplication(appName: string): Promise<void> {
+  const { platform } = await import('os');
+  const platformString = platform();
+
+  if (platformString === 'darwin') {
+    // macOS: use osascript
+    const { execFile } = await import('child_process');
+    await new Promise<void>((resolve, reject) => {
+      execFile('osascript', [
+        '-e',
+        `tell application "${appName}" to activate`
+      ], (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  } else if (platformString === 'linux') {
+    // Linux: use wmctrl or xdotool to activate window
+    try {
+      const { execFile } = await import('child_process');
+      // Try wmctrl first
+      await new Promise<void>((resolve, reject) => {
+        execFile('wmctrl', ['-a', appName], (err) => {
+          if (err) {
+            // Try xdotool as fallback
+            execFile('xdotool', ['search', '--name', appName, 'windowactivate'], (err2) => {
+              if (err2) reject(new Error(`Failed to activate ${appName}: wmctrl failed, xdotool failed`));
+              else resolve();
+            });
+          } else {
+            resolve();
+          }
+        });
+      });
+    } catch (err) {
+      // If both fail, continue anyway - activation is best effort
+      console.warn(`Failed to activate ${appName}:`, err);
+    }
+  } else if (platformString === 'win32') {
+    // Windows: use PowerShell to activate application
+    const { execFile } = await import('child_process');
+    await new Promise<void>((resolve, reject) => {
+      execFile('powershell', [
+        '-Command',
+        `(Get-Process -ProcessName "${appName}" | Where-Object {$_.MainWindowTitle}).ForEach({Set-ForegroundWindow $_.MainWindowHandle})`
+      ], (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  }
+}
+
+async function focusAiInput(appName: string): Promise<void> {
+  const { platform } = await import('os');
+  const platformString = platform();
+
+  if (platformString === 'darwin') {
+    // macOS: Cmd+L to focus address bar (works for most web chatbots)
+    const { execFile } = await import('child_process');
+    await new Promise<void>((resolve, reject) => {
+      execFile('osascript', [
+        '-e',
+        `tell application "System Events" to keystroke "l" using command down`
+      ], (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  } else if (platformString === 'linux') {
+    // Linux: Ctrl+L to focus address bar (works for most web browsers)
+    try {
+      const { execFile } = await import('child_process');
+      await new Promise<void>((resolve, reject) => {
+        execFile('xdotool', ['key', 'ctrl+l'], (err) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      });
+    } catch (err) {
+      console.warn(`Failed to focus input for ${appName}:`, err);
+    }
+  } else if (platformString === 'win32') {
+    // Windows: Ctrl+L to focus address bar
+    const { execFile } = await import('child_process');
+    await new Promise<void>((resolve, reject) => {
+      execFile('powershell', [
+        '-Command',
+        '$wshell = New-Object -ComObject wscript.shell; $wshell.AppActivate(\'' + appName + '\'); Start-Sleep -Milliseconds 200; $wshell.SendKeys(\'^\' + \'l\')'
+      ], (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  }
+}
+
+async function typeText(text: string): Promise<void> {
+  const { platform } = await import('os');
+  const platformString = platform();
+
+  if (platformString === 'darwin') {
+    // macOS: use osascript
+    const { execFile } = await import('child_process');
+    await new Promise<void>((resolve, reject) => {
+      execFile('osascript', [
+        '-e',
+        `tell application "System Events" to keystroke "${text}"`
+      ], (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  } else if (platformString === 'linux') {
+    // Linux: use xdotool to type text
+    try {
+      const { execFile } = await import('child_process');
+      await new Promise<void>((resolve, reject) => {
+        execFile('xdotool', ['type', '--', text], (err) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      });
+    } catch (err) {
+      console.warn(`Failed to type text:`, err);
+    }
+  } else if (platformString === 'win32') {
+    // Windows: use PowerShell to send text
+    const { execFile } = await import('child_process');
+    await new Promise<void>((resolve, reject) => {
+      execFile('powershell', [
+        '-Command',
+        `$wshell = New-Object -ComObject wscript.shell; $wshell.SendKeys('${text.replace(/'/g, "''")}')`
+      ], (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  }
+}
+
+async function pressEnter(): Promise<void> {
+  const { platform } = await import('os');
+  const platformString = platform();
+
+  if (platformString === 'darwin') {
+    // macOS: use osascript
+    const { execFile } = await import('child_process');
+    await new Promise<void>((resolve, reject) => {
+      execFile('osascript', [
+        '-e',
+        'tell application "System Events" to key code 36'
+      ], (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  } else if (platformString === 'linux') {
+    // Linux: use xdotool to press Enter
+    try {
+      const { execFile } = await import('child_process');
+      await new Promise<void>((resolve, reject) => {
+        execFile('xdotool', ['key', 'Return'], (err) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      });
+    } catch (err) {
+      console.warn(`Failed to press Enter:`, err);
+    }
+  } else if (platformString === 'win32') {
+    // Windows: use PowerShell to press Enter
+    const { execFile } = await import('child_process');
+    await new Promise<void>((resolve, reject) => {
+      execFile('powershell', [
+        '-Command',
+        '$wshell = New-Object -ComObject wscript.shell; $wshell.SendKeys(\'~{ENTER}\')'
+      ], (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
   }
 }

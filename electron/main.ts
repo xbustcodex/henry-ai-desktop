@@ -393,46 +393,6 @@ app.whenReady().then(() => {
 
   registerSettingsHandlers(db, getMainWindow);
 
-  // ── Reminder notification poller ─────────────────────────────────────────────
-  // Checks every 60 seconds for reminders that are due and haven't been notified.
-  // Fires a native macOS notification + marks as notified in SQLite.
-  const checkReminders = async () => {
-    try {
-      const now = new Date().toISOString();
-      const due = db.prepare(
-        "SELECT * FROM reminders WHERE due_at <= ? AND done=0 AND notified_at IS NULL"
-      ).all(now) as { id: string; title: string; notes?: string; due_at: string }[];
-
-      for (const rem of due) {
-        // Fire macOS notification
-        if (Notification.isSupported()) {
-          const n = new Notification({
-            title: '⏰ ' + rem.title,
-            body: rem.notes || new Date(rem.due_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-            silent: false,
-          });
-          n.show();
-          n.on('click', () => {
-            const win = getMainWindow();
-            if (win) { win.show(); win.focus(); }
-            win?.webContents.executeJavaScript(
-              'try { window.__useStore?.getState?.()?.setCurrentView?.("reminders"); } catch {}'
-            ).catch(() => {});
-          });
-        }
-        // Mark as notified
-        db.prepare("UPDATE reminders SET notified_at=? WHERE id=?").run(now, rem.id);
-        // Also send to renderer
-        getMainWindow()?.webContents.send('reminder:fired', rem);
-      }
-    } catch (e) {
-      console.error('[Henry] Reminder check error:', e);
-    }
-  };
-  // Check immediately and every 60s
-  checkReminders();
-  const reminderInterval = setInterval(checkReminders, 60_000);
-  app.on('will-quit', () => clearInterval(reminderInterval));
   registerGoogleAuthHandlers(getMainWindow);
 
   // After any provider save, re-sync SQLite providers → localStorage so the renderer picks it up
@@ -521,6 +481,45 @@ app.whenReady().then(() => {
   } catch (e) { console.warn('[Henry] Could not seed habits:', e); }
 
 
+
+  // ── Reminder notification poller ─────────────────────────────────────────────
+  // Checks every 60 seconds for reminders that are due and haven't been notified.
+  // Fires a native macOS notification + marks as notified in SQLite.
+  const checkReminders = async () => {
+    try {
+      const now = new Date().toISOString();
+      const due = db.prepare(
+        "SELECT * FROM reminders WHERE due_at <= ? AND done=0 AND notified_at IS NULL"
+      ).all(now) as { id: string; title: string; notes?: string; due_at: string }[];
+
+      for (const rem of due) {
+        // Fire macOS notification
+        if (Notification.isSupported()) {
+          const n = new Notification({
+            title: '⏰ ' + rem.title,
+            body: rem.notes || new Date(rem.due_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+            silent: false,
+          });
+          n.show();
+          n.on('click', () => {
+            const win = getMainWindow();
+            if (win) { win.show(); win.focus(); }
+            win?.webContents.executeJavaScript(
+              'try { window.__useStore?.getState?.()?.setCurrentView?.("reminders"); } catch {}'
+            ).catch(() => {});
+          });
+        }
+        // Mark as notified
+        db.prepare("UPDATE reminders SET notified_at=? WHERE id=?").run(now, rem.id);
+        // Also send to renderer
+        getMainWindow()?.webContents.send('reminder:fired', rem);
+      }
+    } catch (e) {
+      console.error('[Henry] Reminder check error:', e);
+    }
+  };
+  // Check every 60 seconds
+  setInterval(checkReminders, 60_000);
 
   // Self-diagnostic — runs on every launch, auto-fixes problems
   setTimeout(async () => {
@@ -626,7 +625,7 @@ app.whenReady().then(() => {
       <span class="icon">⚡</span>
       <div class="info">
         <div class="title">Henry captured</div>
-        <div class="preview">${preview.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
+        <div class="preview">${preview.replace(/</g,'<').replace(/>/g,'>')}</div>
       </div>
       <span class="badge">${charCount} chars</span>
     </div>
@@ -765,7 +764,7 @@ app.whenReady().then(() => {
   if (!spaceOk) {
     // ⌥Space is taken (Spotlight?) — fall back to ⌥C
     globalShortcut.register('Alt+C', () => { void henrySmartCapture(); });
-    log.info('[Henry] ⌥Space unavailable — using ⌥C for capture');
+    log.info('[Henry] Alt+Space unavailable — using Alt+C for capture');
   }
 
   // ⌥H — Open / focus Henry (simple, one key + one modifier)
