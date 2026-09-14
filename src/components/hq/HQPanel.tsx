@@ -1,10 +1,11 @@
 /**
- * Henry HQ — Full-screen Mac control hub.
+ * Henry HQ — Full-screen computer control hub.
  * System stats · AI chat · App launcher · Process manager · Automations
  * Desktop background mode · Do ANYTHING from one place.
  */
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useStore } from '../../store';
+import { isMacOS, isLinux, isWindows } from '../../utils/platform';
 
 const getApi = () => (window as any).henryAPI as any;
 
@@ -22,6 +23,18 @@ interface SystemStats {
 }
 
 interface ScheduledTask { id: string; label: string; command: string; intervalMs: number; }
+
+interface DiscoveredApp {
+  id: string;
+  name: string;
+  displayName: string;
+  executable: string;
+  icon?: string;
+  categories?: string[];
+  isTerminal?: boolean;
+  isFileManager?: boolean;
+  isBrowser?: boolean;
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -60,29 +73,13 @@ function Ring({ pct, label, value, color = '#7c3aed' }: { pct: number; label: st
   );
 }
 
-// ── Quick launcher ─────────────────────────────────────────────────────────────
-const QUICK_APPS = [
-  { name: 'Finder',   icon: '📁', cmd: 'open -a Finder' },
-  { name: 'Terminal', icon: '⌨️', cmd: 'open -a Terminal' },
-  { name: 'Chrome',   icon: '🌐', cmd: 'open -a "Google Chrome"' },
-  { name: 'Mail',     icon: '📧', cmd: 'open -a Mail' },
-  { name: 'Calendar', icon: '📅', cmd: 'open -a Calendar' },
-  { name: 'Notes',    icon: '📝', cmd: 'open -a Notes' },
-  { name: 'Music',    icon: '🎵', cmd: 'open -a Music' },
-  { name: 'Photos',   icon: '🖼️', cmd: 'open -a Photos' },
-  { name: 'System',   icon: '⚙️', cmd: 'open -a "System Preferences"' },
-  { name: 'VS Code',  icon: '💻', cmd: 'open -a "Visual Studio Code"' },
-  { name: 'Slack',    icon: '💬', cmd: 'open -a Slack' },
-  { name: 'Xcode',    icon: '🔨', cmd: 'open -a Xcode' },
-];
-
 export default function HQPanel() {
   const { setCurrentView } = useStore();
   const [stats, setStats] = useState<SystemStats | null>(null);
   const [time, setTime] = useState(new Date());
   const [chatInput, setChatInput] = useState('');
   const [chatLog, setChatLog] = useState<{role: string; text: string}[]>([
-    { role: 'henry', text: 'HQ online. I can control your Mac, run commands, open apps, check anything, and automate your workflow. What do you need?' }
+    { role: 'henry', text: 'HQ online. I can control your computer, run commands, open apps, check anything, and automate your workflow. What do you need?' }
   ]);
   const [chatBusy, setChatBusy] = useState(false);
   const [shellInput, setShellInput] = useState('');
@@ -93,12 +90,24 @@ export default function HQPanel() {
   const [newTask, setNewTask] = useState({ label: '', command: '', interval: '60' });
   const [showScheduler, setShowScheduler] = useState(false);
   const [selectedTab, setSelectedTab] = useState<'chat'|'shell'|'apps'|'processes'|'automate'>('chat');
+  const [discoveredApps, setDiscoveredApps] = useState<DiscoveredApp[]>([]);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // Live clock
   useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(t);
+  }, []);
+
+  // Load discovered apps
+  useEffect(() => {
+    const loadApps = async () => {
+      try {
+        const r = await getApi()?.invoke('computer:listApps').catch(() => null);
+        if (r?.apps) setDiscoveredApps(r.apps);
+      } catch {}
+    };
+    loadApps();
   }, []);
 
   // System stats polling
@@ -124,6 +133,26 @@ export default function HQPanel() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatLog]);
 
+  // Get platform-appropriate launch command for an app
+  function getLaunchCommand(app: DiscoveredApp): string {
+    if (isMacOS()) {
+      return `open -a "${app.displayName}"`;
+    } else if (isWindows()) {
+      // Windows: try to use the executable directly or start
+      if (app.executable.endsWith('.exe')) {
+        return `start "" "${app.executable}"`;
+      }
+      return `start "" "${app.name}"`;
+    } else {
+      // Linux: use the executable from desktop file
+      return app.executable;
+    }
+  }
+
+  async function launchApp(cmd: string) {
+    await getApi()?.computerRunShell({ command: cmd, timeout: 5000 }).catch(() => {});
+  }
+
   async function sendChat() {
     const msg = chatInput.trim();
     if (!msg || chatBusy) return;
@@ -133,7 +162,8 @@ export default function HQPanel() {
 
     // Build a rich context message
     const systemContext = stats ? `System: CPU ${stats.cpu.percent}%, RAM ${stats.memory.percent}%, ${stats.runningApps.slice(0,5).join(', ')} running. ` : '';
-    const systemPrompt = `You are Henry HQ — Topher's Mac control hub. ${systemContext}You can: run shell commands, open apps, control system settings, automate tasks, answer questions, process anything. Be direct and execute when asked. If running a command, show what you ran and its output.`;
+    const platformName = isMacOS() ? 'Mac' : isLinux() ? 'Linux' : isWindows() ? 'Windows' : 'computer';
+    const systemPrompt = `You are Henry HQ — Topher's ${platformName} control hub. ${systemContext}You can: run shell commands, open apps, control system settings, automate tasks, answer questions, process anything. Be direct and execute when asked. If running a command, show what you ran and its output.`;
 
     // Get providers from store
     const providers = useStore.getState().providers;
@@ -195,10 +225,6 @@ export default function HQPanel() {
     } catch (e) {
       setShellLog(l => [...l.slice(0,-1), { cmd, out: String(e), err: true }]);
     }
-  }
-
-  async function launchApp(cmd: string) {
-    await getApi()?.computerRunShell({ command: cmd, timeout: 5000 }).catch(() => {});
   }
 
   async function toggleDesktopMode() {
@@ -288,11 +314,11 @@ export default function HQPanel() {
         <div className="w-48 border-r border-white/5 p-3 flex-shrink-0 overflow-y-auto">
           <p className="text-[9px] uppercase tracking-widest text-white/20 mb-2 px-1">Quick Launch</p>
           <div className="grid grid-cols-2 gap-1.5">
-            {QUICK_APPS.map(app => (
-              <button key={app.name} onClick={() => void launchApp(app.cmd)}
+            {discoveredApps.slice(0, 10).map(app => (
+              <button key={app.id} onClick={() => void launchApp(getLaunchCommand(app))}
                 className="flex flex-col items-center gap-1 p-2 rounded-xl bg-white/3 hover:bg-white/8 border border-white/5 hover:border-purple-500/30 transition-all group">
-                <span className="text-xl">{app.icon}</span>
-                <span className="text-[9px] text-white/40 group-hover:text-white/70 transition-all">{app.name}</span>
+                <span className="text-xl">{app.icon || (app.isTerminal ? '⌨️' : app.isFileManager ? '📁' : app.isBrowser ? '🌐' : '📦')}</span>
+                <span className="text-[9px] text-white/40 group-hover:text-white/70 transition-all">{app.displayName}</span>
               </button>
             ))}
           </div>
@@ -303,7 +329,11 @@ export default function HQPanel() {
               <input id="app-input" placeholder="App name…" className={inpCls + ' text-xs'} onKeyDown={e => {
                 if (e.key === 'Enter') {
                   const v = (e.target as HTMLInputElement).value.trim();
-                  if (v) { launchApp(`open -a "${v}"`); (e.target as HTMLInputElement).value = ''; }
+                  if (v) { 
+                    const cmd = isMacOS() ? `open -a "${v}"` : isLinux() ? v : isWindows() ? `start "" "${v}"` : v;
+                    launchApp(cmd); 
+                    (e.target as HTMLInputElement).value = ''; 
+                  }
                 }
               }} />
             </div>
@@ -360,7 +390,13 @@ export default function HQPanel() {
                   </button>
                 </div>
                 <div className="flex gap-2 mt-2 flex-wrap">
-                  {['What apps are running?','Show disk space','Open Finder + Terminal','Mute the Mac','Take a screenshot','Run a backup of my Desktop'].map(q => (
+                  {(() => {
+                    const base = ['What apps are running?', 'Show disk space', 'Take a screenshot'];
+                    if (isMacOS()) return [...base, 'Open Finder + Terminal', 'Mute the Mac', 'Run a backup of my Desktop'];
+                    if (isLinux()) return [...base, 'Open Files + Terminal', 'Mute audio', 'Run a backup of my home folder'];
+                    if (isWindows()) return [...base, 'Open Explorer + Terminal', 'Mute audio', 'Run a backup of my Documents'];
+                    return base;
+                  })().map(q => (
                     <button key={q} onClick={() => { setChatInput(q); }}
                       className="text-[10px] px-2 py-1 rounded-lg bg-white/5 border border-white/8 text-white/40 hover:text-white/70 hover:border-purple-500/30 transition-all">
                       {q}
@@ -393,7 +429,12 @@ export default function HQPanel() {
                 <button onClick={() => void runShell()} className="px-4 py-2 bg-white/5 border border-white/10 rounded-xl text-sm text-white/60 hover:text-white hover:border-white/20 transition-all flex-shrink-0">Run</button>
               </div>
               <div className="px-4 pb-3 flex gap-2 flex-wrap">
-                {['ls ~/Desktop','df -h','top -l 1 | head -20','open .','sudo lsof -i :3000','ps aux | grep node','networksetup -listallnetworkservices'].map(cmd => (
+                {(() => {
+                  if (isMacOS()) return ['ls ~/Desktop','df -h','top -l 1 | head -20','open .','sudo lsof -i :3000','ps aux | grep node','networksetup -listallnetworkservices'];
+                  if (isLinux()) return ['ls ~/Desktop','df -h','htop | head -20','xdg-open .','sudo ss -tlnp | head -20','ps aux | grep node','nmcli device show'];
+                  if (isWindows()) return ['dir %USERPROFILE%\\Desktop','wmic logicaldisk get size,freespace','tasklist | head -20','explorer .','netstat -an | findstr :3000','tasklist | findstr node','ipconfig /all'];
+                  return [];
+                })().map(cmd => (
                   <button key={cmd} onClick={() => setShellInput(cmd)}
                     className="text-[10px] px-2 py-1 rounded-lg bg-white/3 border border-white/5 text-white/30 hover:text-white/60 hover:border-white/15 transition-all font-mono">
                     {cmd}
@@ -414,7 +455,7 @@ export default function HQPanel() {
                 {(stats?.runningApps || []).map(app => (
                   <div key={app} className="flex items-center justify-between p-2.5 rounded-xl bg-white/3 border border-white/5 hover:border-white/10 group">
                     <span className="text-sm text-white/70">{app}</span>
-                    <button onClick={() => getApi()?.computerRunShell?.({ command: `osascript -e 'quit application "${app}"'`, timeout: 3000 })}
+                    <button onClick={() => getApi()?.computerRunShell?.({ command: isMacOS() ? `osascript -e 'quit application "${app}"'` : isLinux() ? `pkill -f "${app}"` : `taskkill /f /im "${app}.exe"`, timeout: 3000 })}
                       className="text-[10px] text-red-400/40 group-hover:text-red-400/80 transition-all">✕</button>
                   </div>
                 ))}
@@ -422,11 +463,11 @@ export default function HQPanel() {
               <div className="mt-4 pt-3 border-t border-white/5">
                 <p className="text-xs text-white/30 mb-3">Launch any app</p>
                 <div className="grid grid-cols-4 gap-2">
-                  {QUICK_APPS.map(app => (
-                    <button key={app.name} onClick={() => void launchApp(app.cmd)}
+                  {discoveredApps.slice(0, 16).map(app => (
+                    <button key={app.id} onClick={() => void launchApp(getLaunchCommand(app))}
                       className="flex items-center gap-2 p-2.5 rounded-xl bg-white/3 border border-white/5 hover:bg-purple-500/10 hover:border-purple-500/30 transition-all">
-                      <span>{app.icon}</span>
-                      <span className="text-xs text-white/60">{app.name}</span>
+                      <span className="text-xl">{app.icon || (app.isTerminal ? '⌨️' : app.isFileManager ? '📁' : app.isBrowser ? '🌐' : '📦')}</span>
+                      <span className="text-xs text-white/60">{app.displayName}</span>
                     </button>
                   ))}
                 </div>
@@ -482,18 +523,45 @@ export default function HQPanel() {
               <div className="bg-white/3 border border-white/5 rounded-2xl p-4">
                 <p className="text-sm font-semibold text-white/70 mb-3">One-click Automations</p>
                 <div className="grid grid-cols-2 gap-2">
-                  {[
-                    { label: '🔇 Mute Mac', cmd: "osascript -e 'set volume output muted true'" },
-                    { label: '🔊 Unmute', cmd: "osascript -e 'set volume output muted false'" },
-                    { label: '🛑 Sleep now', cmd: "pmset sleepnow" },
-                    { label: '📸 Screenshot', cmd: "screencapture -i ~/Desktop/HenryCapture_$(date +%Y%m%d_%H%M%S).png" },
-                    { label: '🧹 Empty Trash', cmd: "osascript -e 'tell application \"Finder\" to empty trash'" },
-                    { label: '📋 Clear Clipboard', cmd: "pbcopy < /dev/null" },
-                    { label: '🔄 Restart Dock', cmd: "killall Dock" },
-                    { label: '📡 Show IP', cmd: "curl -s ifconfig.me" },
-                    { label: '🔒 Lock Screen', cmd: "/System/Library/CoreServices/Menu\\ Extras/User.menu/Contents/Resources/CGSession -suspend" },
-                    { label: '🌐 Network info', cmd: "networksetup -getinfo Wi-Fi" },
-                  ].map(a => (
+                  {(() => {
+                    if (isMacOS()) return [
+                      { label: '🔇 Mute Mac', cmd: "osascript -e 'set volume output muted true'" },
+                      { label: '🔊 Unmute', cmd: "osascript -e 'set volume output muted false'" },
+                      { label: '🛑 Sleep now', cmd: "pmset sleepnow" },
+                      { label: '📸 Screenshot', cmd: "screencapture -i ~/Desktop/HenryCapture_$(date +%Y%m%d_%H%M%S).png" },
+                      { label: '🧹 Empty Trash', cmd: "osascript -e 'tell application \"Finder\" to empty trash'" },
+                      { label: '📋 Clear Clipboard', cmd: "pbcopy < /dev/null" },
+                      { label: '🔄 Restart Dock', cmd: "killall Dock" },
+                      { label: '📡 Show IP', cmd: "curl -s ifconfig.me" },
+                      { label: '🔒 Lock Screen', cmd: "/System/Library/CoreServices/Menu\\ Extras/User.menu/Contents/Resources/CGSession -suspend" },
+                      { label: '🌐 Network info', cmd: "networksetup -getinfo Wi-Fi" },
+                    ];
+                    if (isLinux()) return [
+                      { label: '🔇 Mute audio', cmd: "amixer -D pulse sset Master mute" },
+                      { label: '🔊 Unmute', cmd: "amixer -D pulse sset Master unmute" },
+                      { label: '🛑 Sleep now', cmd: "systemctl suspend" },
+                      { label: '📸 Screenshot', cmd: "scrot ~/Desktop/HenryCapture_$(date +%Y%m%d_%H%M%S).png" },
+                      { label: '🧹 Empty Trash', cmd: "gio trash --empty" },
+                      { label: '📋 Clear Clipboard', cmd: "xclip -i /dev/null" },
+                      { label: '🔄 Restart Shell', cmd: "killall -SIGUSR1 gnome-shell || true" },
+                      { label: '📡 Show IP', cmd: "curl -s ifconfig.me" },
+                      { label: '🔒 Lock Screen', cmd: "loginctl lock-session" },
+                      { label: '🌐 Network info', cmd: "nmcli device show" },
+                    ];
+                    if (isWindows()) return [
+                      { label: '🔇 Mute audio', cmd: "powershell -Command \"(New-Object -ComObject WScript.Shell).SendKeys([char]173)\"" },
+                      { label: '🔊 Unmute', cmd: "powershell -Command \"(New-Object -ComObject WScript.Shell).SendKeys([char]173)\"" },
+                      { label: '🛑 Sleep now', cmd: "rundll32.exe powrprof.dll,SetSuspendState 0,1,0" },
+                      { label: '📸 Screenshot', cmd: "powershell -Command \"Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen | ForEach-Object { \$bmp = New-Object System.Drawing.Bitmap(\$_.Bounds.Width, \$_.Bounds.Height); \$g = [System.Drawing.Graphics]::FromImage(\$bmp); \$g.CopyFromScreen(\$_.Bounds.Location, [System.Drawing.Point]::Empty, \$_.Bounds.Size); \$bmp.Save('~/Desktop/HenryCapture_$(date +%Y%m%d_%H%M%S).png') }\"" },
+                      { label: '🧹 Empty Recycle Bin', cmd: "powershell -Command \"& { \$shell = New-Object -ComObject Shell.Application; \$shell.Namespace(0xA).Items() | ForEach-Object { \$_.InvokeVerb('Delete') } }\"" },
+                      { label: '📋 Clear Clipboard', cmd: "powershell -Command \"Set-Clipboard -Value ''\"" },
+                      { label: '🔄 Restart Explorer', cmd: "taskkill /f /im explorer.exe && start explorer.exe" },
+                      { label: '📡 Show IP', cmd: "curl -s ifconfig.me" },
+                      { label: '🔒 Lock Screen', cmd: "rundll32.exe user32.dll,LockWorkStation" },
+                      { label: '🌐 Network info', cmd: "ipconfig /all" },
+                    ];
+                    return [];
+                  })().map(a => (
                     <button key={a.label} onClick={async () => {
                       const r = await getApi()?.computerRunShell({ command: a.cmd, timeout: 10000 }).catch(() => null);
                       if (r?.stdout?.trim()) setChatLog(l => [...l, { role: 'system', text: a.label + ': ' + r.stdout.trim() }]);

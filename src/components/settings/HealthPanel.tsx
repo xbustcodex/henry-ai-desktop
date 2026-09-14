@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { isMacOS, isLinux, isWindows } from '../../utils/platform';
 
 interface CheckEntry {
   id: string;
@@ -20,6 +21,23 @@ interface RegisteredHotkey {
   accelerator: string;
   label: string;
   description: string;
+}
+
+interface CapabilityStatus {
+  status: 'ready' | 'degraded' | 'dependency-missing' | 'unsupported-session' | 'unavailable';
+  backend?: string;
+  details?: string;
+  regionCapture?: boolean;
+  windowCapture?: boolean;
+}
+
+interface CapabilitiesReport {
+  platform: string;
+  session?: { type: string; isWayland: boolean; isWSL: boolean };
+  clipboard: CapabilityStatus;
+  selectedText: CapabilityStatus;
+  screenCapture: CapabilityStatus;
+  inputAutomation: CapabilityStatus;
 }
 
 const getApi = () => (window as any).henryAPI as any;
@@ -44,11 +62,63 @@ const CAT_LABEL: Record<string, string> = {
   optional: 'Optional',
 };
 
+const CAP_STATUS_ICON: Record<string, string> = {
+  ready: '✓',
+  degraded: '⚠',
+  'dependency-missing': '✗',
+  'unsupported-session': '⚠',
+  unavailable: '✗',
+};
+const CAP_STATUS_COLOR: Record<string, string> = {
+  ready: 'text-green-400',
+  degraded: 'text-yellow-400',
+  'dependency-missing': 'text-red-400',
+  'unsupported-session': 'text-yellow-400',
+  unavailable: 'text-red-400',
+};
+
+const CAP_LABEL: Record<string, string> = {
+  clipboard: 'Clipboard',
+  selectedText: 'Selected Text Capture',
+  screenCapture: 'Screen Capture',
+  inputAutomation: 'Input Automation',
+};
+
+function renderCapability(cap: CapabilityStatus, label: string) {
+  const icon = CAP_STATUS_ICON[cap.status] || '?';
+  const color = CAP_STATUS_COLOR[cap.status] || 'text-gray-400';
+  return (
+    <div key={label} className="flex items-center gap-3 p-2 rounded-lg bg-henry-bg/50 border border-henry-border/10">
+      <span className={`text-sm font-bold flex-shrink-0 ${color}`}>{icon}</span>
+      <span className="text-sm font-medium text-henry-text w-48">{label}</span>
+      <span className={`text-xs ${color} font-mono px-2 py-0.5 rounded bg-henry-bg/30`}>{cap.status}</span>
+      {cap.backend && (
+        <span className="text-xs text-henry-text-muted font-mono flex-1 truncate">{cap.backend}</span>
+      )}
+      {cap.details && (
+        <span className="text-[10px] text-henry-text-muted/70 flex-1 truncate">{cap.details}</span>
+      )}
+      {cap.regionCapture !== undefined && (
+        <span className={`text-[9px] px-1.5 py-0.5 rounded ${cap.regionCapture ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+          Region: {cap.regionCapture ? '✓' : '✗'}
+        </span>
+      )}
+      {cap.windowCapture !== undefined && (
+        <span className={`text-[9px] px-1.5 py-0.5 rounded ${cap.windowCapture ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+          Window: {cap.windowCapture ? '✓' : '✗'}
+        </span>
+      )}
+    </div>
+  );
+}
+
 export default function HealthPanel() {
   const [report, setReport] = useState<DiagnosticReport | null>(null);
   const [running, setRunning] = useState(false);
   const [lastRun, setLastRun] = useState<string | null>(null);
   const [hotkeys, setHotkeys] = useState<RegisteredHotkey[]>([]);
+  const [capabilities, setCapabilities] = useState<CapabilitiesReport | null>(null);
+  const [capsLoading, setCapsLoading] = useState(false);
 
   useEffect(() => {
     // Load last report on mount
@@ -65,6 +135,16 @@ export default function HealthPanel() {
         const hk = await getApi()?.getRegisteredHotkeys?.();
         if (hk) setHotkeys(hk);
       } catch { /* ignore */ }
+    })();
+
+    // Load capabilities
+    void (async () => {
+      setCapsLoading(true);
+      try {
+        const caps = await getApi()?.computerCheckCapabilities?.();
+        if (caps) setCapabilities(caps);
+      } catch { /* ignore */ }
+      finally { setCapsLoading(false); }
     })();
 
     // Listen for background diagnostic completion
@@ -154,6 +234,27 @@ export default function HealthPanel() {
                     <span className="text-[10px] text-henry-text-muted font-mono ml-auto">{hk.accelerator}</span>
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* Desktop Capabilities — cross-platform capability status */}
+          {(capabilities || capsLoading) && (
+            <div className="bg-henry-surface rounded-xl border border-henry-border/20 p-4">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-henry-text-muted">Desktop Capabilities</p>
+                {capsLoading && <span className="text-[10px] text-henry-accent animate-pulse">Checking…</span>}
+                {capabilities?.session && (
+                  <span className="text-[9px] text-henry-text-muted font-mono">
+                    {capabilities.session.type} {capabilities.session.isWayland ? '(Wayland)' : ''} {capabilities.session.isWSL ? '(WSL)' : ''}
+                  </span>
+                )}
+              </div>
+              <div className="space-y-2">
+                {renderCapability(capabilities!.clipboard, 'Clipboard')}
+                {renderCapability(capabilities!.selectedText, 'Selected Text')}
+                {renderCapability(capabilities!.screenCapture, 'Screen Capture')}
+                {renderCapability(capabilities!.inputAutomation, 'Input Automation')}
               </div>
             </div>
           )}

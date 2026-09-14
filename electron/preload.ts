@@ -313,6 +313,8 @@ contextBridge.exposeInMainWorld('henryAPI', {
   computerSystemStats: () => ipcRenderer.invoke('computer:systemStats'),
   computerClipboardRead: () => ipcRenderer.invoke('computer:clipboard:read'),
   computerClipboardWrite: (text: string) => ipcRenderer.invoke('computer:clipboard:write', text),
+  computerCaptureSelectedText: () => ipcRenderer.invoke('computer:captureSelectedText'),
+  computerCheckCapabilities: () => ipcRenderer.invoke('computer:checkCapabilities'),
   computerSetVolume: (level: number) => ipcRenderer.invoke('computer:setVolume', level),
   computerGetVolume: () => ipcRenderer.invoke('computer:getVolume'),
   computerNotify: (opts: { title: string; body?: string }) => ipcRenderer.invoke('computer:notify', opts),
@@ -529,7 +531,13 @@ contextBridge.exposeInMainWorld('henryAPI', {
   computerListProcesses: () => ipcRenderer.invoke('computer:listProcesses'),
   computerTypeText: (text: string) => ipcRenderer.invoke('computer:typeText', text),
   computerClick: (params: Record<string, unknown>) => ipcRenderer.invoke('computer:click', params),
+  computerActivateApplication: (appName: string) => ipcRenderer.invoke('computer:activateApplication', appName),
+  computerFocusAiInput: (appName: string) => ipcRenderer.invoke('computer:focusAiInput', appName),
+  computerPressKey: (key: string) => ipcRenderer.invoke('computer:pressKey', key),
   computerSystemInfo: () => ipcRenderer.invoke('computer:systemInfo'),
+  getDefaultFileManager: () => ipcRenderer.invoke('computer:getDefaultFileManager'),
+  getDefaultTerminal: () => ipcRenderer.invoke('computer:getDefaultTerminal'),
+  getDefaultBrowser: () => ipcRenderer.invoke('computer:getDefaultBrowser'),
 
   // ── 3D Printer ────────────────────────────────────────────
   printerCheckDeps: () => ipcRenderer.invoke('printer:checkDeps'),

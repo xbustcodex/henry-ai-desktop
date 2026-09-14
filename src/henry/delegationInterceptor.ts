@@ -4,7 +4,8 @@
  * via real computer IPCs instead of hoping the AI outputs the right pattern.
  */
 
-import { launchApplication, openUrl, launchAppByName } from '../platform/launcher';
+import { launchApplication, openUrl, launchAppByName, findAppByName } from '../platform/launcher';
+import { isMacOS, isLinux, isWindows } from '../utils/platform';
 
 export interface DelegationTarget {
   appName: string;       // e.g. "Google Chrome"
@@ -13,8 +14,8 @@ export interface DelegationTarget {
   isAI: boolean;         // true if target is an AI chatbot (type into input)
 }
 
-// Maps user-friendly names to real app names + URLs
-const DELEGATION_MAP: Record<string, { app: string; url: string }> = {
+// Maps user-friendly names to real app names + URLs — macOS
+const DELEGATION_MAP_MAC: Record<string, { app: string; url: string }> = {
   'chatgpt':   { app: 'Google Chrome', url: 'https://chatgpt.com' },
   'chat gpt':  { app: 'Google Chrome', url: 'https://chatgpt.com' },
   'gpt':       { app: 'Google Chrome', url: 'https://chatgpt.com' },
@@ -39,6 +40,66 @@ const DELEGATION_MAP: Record<string, { app: string; url: string }> = {
   'zoom':      { app: 'Zoom',          url: '' },
 };
 
+// Maps user-friendly names to real app names + URLs — Linux
+const DELEGATION_MAP_LINUX: Record<string, { app: string; url: string }> = {
+  'chatgpt':   { app: 'firefox', url: 'https://chatgpt.com' },
+  'chat gpt':  { app: 'firefox', url: 'https://chatgpt.com' },
+  'gpt':       { app: 'firefox', url: 'https://chatgpt.com' },
+  'claude':    { app: 'firefox', url: 'https://claude.ai' },
+  'gemini':    { app: 'firefox', url: 'https://gemini.google.com' },
+  'perplexity':{ app: 'firefox', url: 'https://perplexity.ai' },
+  'copilot':   { app: 'firefox', url: 'https://copilot.microsoft.com' },
+  'slack':     { app: 'slack',         url: '' },
+  'notion':    { app: 'notion',        url: '' },
+  'discord':   { app: 'discord',       url: '' },
+  'messages':  { app: '',              url: '' },
+  'mail':      { app: 'thunderbird',  url: '' },
+  'gmail':     { app: 'firefox',      url: 'https://mail.google.com' },
+  'chrome':    { app: 'google-chrome', url: '' },
+  'firefox':   { app: 'firefox',      url: '' },
+  'terminal':  { app: 'gnome-terminal', url: '' },
+  'cursor':    { app: 'cursor',       url: '' },
+  'vscode':    { app: 'code',         url: '' },
+  'vs code':   { app: 'code',         url: '' },
+  'spotify':   { app: 'spotify',      url: '' },
+  'zoom':      { app: 'zoom',         url: '' },
+};
+
+// Maps user-friendly names to real app names + URLs — Windows
+const DELEGATION_MAP_WIN32: Record<string, { app: string; url: string }> = {
+  'chatgpt':   { app: 'chrome', url: 'https://chatgpt.com' },
+  'chat gpt':  { app: 'chrome', url: 'https://chatgpt.com' },
+  'gpt':       { app: 'chrome', url: 'https://chatgpt.com' },
+  'claude':    { app: 'chrome', url: 'https://claude.ai' },
+  'gemini':    { app: 'chrome', url: 'https://gemini.google.com' },
+  'perplexity':{ app: 'chrome', url: 'https://perplexity.ai' },
+  'copilot':   { app: 'chrome', url: 'https://copilot.microsoft.com' },
+  'slack':     { app: 'slack',         url: '' },
+  'notion':    { app: 'notion',        url: '' },
+  'discord':   { app: 'discord',       url: '' },
+  'messages':  { app: '',              url: '' },
+  'mail':      { app: 'outlook',       url: '' },
+  'gmail':     { app: 'chrome',        url: 'https://mail.google.com' },
+  'chrome':    { app: 'chrome',        url: '' },
+  'firefox':   { app: 'firefox',       url: '' },
+  'edge':      { app: 'msedge',        url: '' },
+  'terminal':  { app: 'wt',            url: '' },
+  'cmd':       { app: 'cmd',           url: '' },
+  'powershell':{ app: 'powershell',    url: '' },
+  'cursor':    { app: 'cursor',        url: '' },
+  'vscode':    { app: 'code',          url: '' },
+  'vs code':   { app: 'code',          url: '' },
+  'spotify':   { app: 'spotify',       url: '' },
+  'zoom':      { app: 'zoom',          url: '' },
+};
+
+function getDelegationMap(): Record<string, { app: string; url: string }> {
+  if (isMacOS()) return DELEGATION_MAP_MAC;
+  if (isLinux()) return DELEGATION_MAP_LINUX;
+  if (isWindows()) return DELEGATION_MAP_WIN32;
+  return DELEGATION_MAP_MAC;
+}
+
 // Patterns: "tell ChatGPT to write a poem" / "ask Claude to continue"
 const DELEGATION_RE = /^(?:tell|ask|have|get|make|instruct)\s+([\w\s]+?)\s+(?:to|and)\s+(.+)$/i;
 
@@ -50,11 +111,13 @@ const TYPE_IN_RE = /^(?:type|write|send|say|put)\s+(.+?)\s+in(?:\s+the)?\s+([\w\
 
 export function parseDelegation(message: string): DelegationTarget | null {
   // Never fire on questions — if it starts with a question word, bail immediately
-  const QUESTION_RE = /^(what|which|how|who|where|when|is|are|do|does|did|can|could|would|will|should|why|tell me about|show me)/i;
+  const QUESTION_RE = /^(what|which|how|who|where|when|is|are|do|does|did|can|could|would|will|should|why|tell me about|show me)\b/i;
   if (QUESTION_RE.test(message.trim())) return null;
 
+  const map = getDelegationMap();
+
   // Must contain a known app name to be a delegation — prevents false positives
-  const hasKnownApp = Object.keys(DELEGATION_MAP).some(key =>
+  const hasKnownApp = Object.keys(map).some(key =>
     message.toLowerCase().includes(key)
   );
   if (!hasKnownApp) return null;
@@ -80,10 +143,10 @@ export function parseDelegation(message: string): DelegationTarget | null {
   }
 
   // Find the best matching app
-  let target = DELEGATION_MAP[targetName];
+  let target = map[targetName];
   if (!target) {
     // Partial match
-    for (const [key, val] of Object.entries(DELEGATION_MAP)) {
+    for (const [key, val] of Object.entries(map)) {
       if (targetName.includes(key) || key.includes(targetName)) {
         target = val;
         break;
@@ -123,211 +186,28 @@ export async function executeDelegation(delegation: DelegationTarget): Promise<s
     // 2. Wait for it to load
     await new Promise(r => setTimeout(r, 2500));
 
-    // 3. Activate it using platform-specific methods
-    await activateApplication(delegation.appName);
+    // 3. Activate it using platform-specific methods (via main process)
+    await api.computerActivateApplication(delegation.appName);
     await new Promise(r => setTimeout(r, 800));
 
     // 4. For AI chatbots: click the input area first (Cmd+L or equivalent)
     if (delegation.isAI) {
-      await focusAiInput(delegation.appName);
+      await api.computerFocusAiInput(delegation.appName);
       await new Promise(r => setTimeout(r, 300));
     }
 
-    // 5. Type the task
-    const escaped = delegation.task.replace(/"/g, '\\"');
-    await typeText(escaped);
+    // 5. Type the task (via main process)
+    await api.computerTypeText(delegation.task);
     results.push(`✓ Typed: "${delegation.task}"`);
 
     await new Promise(r => setTimeout(r, 200));
 
-    // 6. Press Enter to submit
-    await pressEnter();
+    // 6. Press Enter to submit (via main process)
+    await api.computerPressKey('enter');
     results.push(`✓ Submitted`);
 
     return results.join('\n');
   } catch (e) {
     return `✗ ${e instanceof Error ? e.message : String(e)}`;
-  }
-}
-
-// Get the platform string once — renderer uses preload-exposed platform, main uses Node os.
-let platformString: string;
-// Renderer: use the value exposed by the preload contextBridge
-platformString = window.henryAPI.platform();
-
-// Platform-specific helper functions
-async function activateApplication(appName: string): Promise<void> {
-  if (platformString === 'darwin') {
-    // macOS: use osascript
-    const { execFile } = await import('child_process');
-    await new Promise<void>((resolve, reject) => {
-      execFile('osascript', [
-        '-e',
-        `tell application "${appName}" to activate`
-      ], (err) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
-  } else if (platformString === 'linux') {
-    // Linux: use wmctrl or xdotool to activate window
-    try {
-      const { execFile } = await import('child_process');
-      // Try wmctrl first
-      await new Promise<void>((resolve, reject) => {
-        execFile('wmctrl', ['-a', appName], (err) => {
-          if (err) {
-            // Try xdotool as fallback
-            execFile('xdotool', ['search', '--name', appName, 'windowactivate'], (err2) => {
-              if (err2) reject(new Error(`Failed to activate ${appName}: wmctrl failed, xdotool failed`));
-              else resolve();
-            });
-          } else {
-            resolve();
-          }
-        });
-      });
-    } catch (err) {
-      // If both fail, continue anyway - activation is best effort
-      console.warn(`Failed to activate ${appName}:`, err);
-    }
-  } else if (platformString === 'win32') {
-    // Windows: use PowerShell to activate application
-    const { execFile } = await import('child_process');
-    await new Promise<void>((resolve, reject) => {
-      execFile('powershell', [
-        '-Command',
-        `(Get-Process -ProcessName "${appName}" | Where-Object {$_.MainWindowTitle}).ForEach({Set-ForegroundWindow $_.MainWindowHandle})`
-      ], (err) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
-  }
-}
-
-async function focusAiInput(appName: string): Promise<void> {
-  // Use the pre-initialized platformString from the top of the file
-  if (platformString === 'darwin') {
-    // macOS: Cmd+L to focus address bar (works for most web chatbots)
-    const { execFile } = await import('child_process');
-    await new Promise<void>((resolve, reject) => {
-      execFile('osascript', [
-        '-e',
-        `tell application "System Events" to keystroke "l" using command down`
-      ], (err) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
-  } else if (platformString === 'linux') {
-    // Linux: Ctrl+L to focus address bar (works for most web browsers)
-    try {
-      const { execFile } = await import('child_process');
-      await new Promise<void>((resolve, reject) => {
-        execFile('xdotool', ['key', 'ctrl+l'], (err) => {
-          if (err) reject(err);
-          else resolve();
-        });
-      });
-    } catch (err) {
-      console.warn(`Failed to focus input for ${appName}:`, err);
-    }
-  } else if (platformString === 'win32') {
-    // Windows: Ctrl+L to focus address bar
-    const { execFile } = await import('child_process');
-    await new Promise<void>((resolve, reject) => {
-      execFile('powershell', [
-        '-Command',
-        '$wshell = New-Object -ComObject wscript.shell; $wshell.AppActivate(\'' + appName + '\'); Start-Sleep -Milliseconds 200; $wshell.SendKeys(\'^\' + \'l\')'
-      ], (err) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
-  }
-}
-
-async function typeText(text: string): Promise<void> {
-  // Use the pre-initialized platformString from the top of the file
-  if (platformString === 'darwin') {
-    // macOS: use osascript
-    const { execFile } = await import('child_process');
-    await new Promise<void>((resolve, reject) => {
-      execFile('osascript', [
-        '-e',
-        `tell application "System Events" to keystroke "${text}"`
-      ], (err) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
-  } else if (platformString === 'linux') {
-    // Linux: use xdotool to type text
-    try {
-      const { execFile } = await import('child_process');
-      await new Promise<void>((resolve, reject) => {
-        execFile('xdotool', ['type', '--', text], (err) => {
-          if (err) reject(err);
-          else resolve();
-        });
-      });
-    } catch (err) {
-      console.warn(`Failed to type text:`, err);
-    }
-  } else if (platformString === 'win32') {
-    // Windows: use PowerShell to send text
-    const { execFile } = await import('child_process');
-    await new Promise<void>((resolve, reject) => {
-      execFile('powershell', [
-        '-Command',
-        `$wshell = New-Object -ComObject wscript.shell; $wshell.SendKeys('${text.replace(/'/g, "''")}')`
-      ], (err) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
-  }
-}
-
-async function pressEnter(): Promise<void> {
-  // Use the pre-initialized platformString from the top of the file
-  if (platformString === 'darwin') {
-    // macOS: use osascript
-    const { execFile } = await import('child_process');
-    await new Promise<void>((resolve, reject) => {
-      execFile('osascript', [
-        '-e',
-        'tell application "System Events" to key code 36'
-      ], (err) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
-  } else if (platformString === 'linux') {
-    // Linux: use xdotool to press Enter
-    try {
-      const { execFile } = await import('child_process');
-      await new Promise<void>((resolve, reject) => {
-        execFile('xdotool', ['key', 'Return'], (err) => {
-          if (err) reject(err);
-          else resolve();
-        });
-      });
-    } catch (err) {
-      console.warn(`Failed to press Enter:`, err);
-    }
-  } else if (platformString === 'win32') {
-    // Windows: use PowerShell to press Enter
-    const { execFile } = await import('child_process');
-    await new Promise<void>((resolve, reject) => {
-      execFile('powershell', [
-        '-Command',
-        '$wshell = New-Object -ComObject wscript.shell; $wshell.SendKeys(\'~{ENTER}\')'
-      ], (err) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
   }
 }

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useStore } from '../../store';
 import { type ComputerStep } from '../../henry/computerAgent';
+import { isMacOS, isLinux, isWindows } from '../../utils/platform';
 
 // Direct sync server execution — bypasses Groq tool-use API (which fails on llama)
 async function execOnMac(command: string): Promise<{success: boolean; output: string; error: string}> {
@@ -13,6 +14,116 @@ async function execOnMac(command: string): Promise<{success: boolean; output: st
     return await r.json() as {success: boolean; output: string; error: string};
   } catch (e) {
     return { success: false, output: '', error: String(e) };
+  }
+}
+
+// Platform-aware shell command builders
+function openAppCommand(appName: string): string {
+  if (isMacOS()) {
+    return `open -a "${appName}"`;
+  } else if (isLinux()) {
+    // On Linux, try to use the executable name directly
+    // The sync server's computer:openApp will handle desktop file lookup
+    return appName;
+  } else {
+    return `start "" "${appName}"`;
+  }
+}
+
+function openFileManagerCommand(path: string): string {
+  if (isMacOS()) {
+    return `open "${path}"`;
+  } else if (isLinux()) {
+    return `xdg-open "${path}"`;
+  } else {
+    return `explorer "${path}"`;
+  }
+}
+
+function openUrlCommand(url: string): string {
+  if (isMacOS()) {
+    return `open "${url}"`;
+  } else if (isLinux()) {
+    return `xdg-open "${url}"`;
+  } else {
+    return `start "" "${url}"`;
+  }
+}
+
+function screenshotCommand(): string {
+  if (isMacOS()) {
+    const ts = Date.now();
+    return `screencapture -x ~/Desktop/screenshot_${ts}.png && echo "Saved to Desktop/screenshot_${ts}.png"`;
+  } else if (isLinux()) {
+    const ts = Date.now();
+    return `scrot ~/Desktop/screenshot_${ts}.png 2>/dev/null || import -window root ~/Desktop/screenshot_${ts}.png 2>/dev/null && echo "Saved to Desktop/screenshot_${ts}.png"`;
+  } else {
+    // Windows PowerShell screenshot
+    return `powershell -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen | ForEach-Object { \$bmp = New-Object System.Drawing.Bitmap(\$_.Bounds.Width, \$_.Bounds.Height); \$g = [System.Drawing.Graphics]::FromImage(\$bmp); \$g.CopyFromScreen(\$_.Bounds.Location, [System.Drawing.Point]::Empty, \$_.Bounds.Size); \$bmp.Save('~/Desktop/screenshot_${Date.now()}.png') }"`;
+  }
+}
+
+function listRunningAppsCommand(): string {
+  if (isMacOS()) {
+    return 'osascript -e \'tell application "System Events" to get name of every application process whose background only is false\'';
+  } else if (isLinux()) {
+    return 'wmctrl -l | awk \'{print $NF}\' | sort -u';
+  } else {
+    return 'powershell -Command "Get-Process | Where-Object {$_.MainWindowTitle} | Select-Object -ExpandProperty ProcessName | Sort-Object -Unique"';
+  }
+}
+
+function diskSpaceCommand(): string {
+  return `df -h / | tail -1 | awk '{print "Total: "$2" | Used: "$3" | Free: "$4" | "$5" used"}'`;
+}
+
+function volumeCommand(vol: number): string {
+  if (isMacOS()) {
+    return `osascript -e "set volume output volume ${Math.min(100,Math.max(0,vol))}"`;
+  } else if (isLinux()) {
+    return `amixer -D pulse sset Master ${Math.min(100,Math.max(0,vol))}%`;
+  } else {
+    return `powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys([char]175)"`; // Volume up, not perfect but works
+  }
+}
+
+function muteCommand(mute: boolean): string {
+  if (isMacOS()) {
+    return `osascript -e "set volume output muted ${mute}"`;
+  } else if (isLinux()) {
+    return `amixer -D pulse sset Master ${mute ? 'mute' : 'unmute'}`;
+  } else {
+    return `powershell -Command "(New-Object -ComObject WScript.Shell).SendKeys([char]173)"`; // Mute toggle
+  }
+}
+
+function emptyTrashCommand(): string {
+  if (isMacOS()) {
+    return `osascript -e 'tell app "Finder" to empty trash'`;
+  } else if (isLinux()) {
+    return `gio trash --empty`;
+  } else {
+    return `powershell -Command "& { $shell = New-Object -ComObject Shell.Application; $shell.Namespace(0xA).Items() | ForEach-Object { $_.InvokeVerb('Delete') } }"`;
+  }
+}
+
+function sleepCommand(): string {
+  if (isMacOS()) {
+    return `pmset sleepnow`;
+  } else if (isLinux()) {
+    return `systemctl suspend`;
+  } else {
+    return `rundll32.exe powrprof.dll,SetSuspendState 0,1,0`;
+  }
+}
+
+function lockScreenCommand(): string {
+  if (isMacOS()) {
+    return `/System/Library/CoreServices/Menu\\ Extras/User.menu/Contents/Resources/CGSession -suspend`;
+  } else if (isLinux()) {
+    return `loginctl lock-session || gnome-screensaver-command -l || dm-tool lock`;
+  } else {
+    return `rundll32.exe user32.dll,LockWorkStation`;
   }
 }
 
@@ -31,7 +142,7 @@ function parseCommand(text: string): { shell: string; description: string }[] {
     const fullPath = `${where}/${name}`;
     return [
       { shell: `mkdir -p "${fullPath}"`, description: `Creating folder: ${name}` },
-      { shell: `open "${fullPath}"`, description: `Opening in Finder` },
+      { shell: openFileManagerCommand(fullPath), description: `Opening in file manager` },
     ];
   }
 
@@ -39,10 +150,14 @@ function parseCommand(text: string): { shell: string; description: string }[] {
   const openMatch = text.match(/^(?:open|launch|start|run)\s+(?:the\s+)?(?:app\s+)?(.+?)(?:\s+app)?$/i);
   if (openMatch && !t.includes('/') && !t.includes('file') && !t.includes('folder') && !t.includes('url') && !t.includes('http')) {
     const app = openMatch[1].trim();
-    // Common aliases
-    const aliases: Record<string,string> = { 'vs code':'Visual Studio Code', 'vscode':'Visual Studio Code', 'mail':'Mail', 'notes':'Notes', 'messages':'Messages', 'finder':'Finder', 'calendar':'Calendar', 'photos':'Photos', 'music':'Music', 'system settings':'System Settings', 'system prefs':'System Preferences', 'terminal':'Terminal' };
+    // Common aliases - platform aware
+    const macAliases: Record<string,string> = { 'vs code':'Visual Studio Code', 'vscode':'Visual Studio Code', 'mail':'Mail', 'notes':'Notes', 'messages':'Messages', 'finder':'Finder', 'calendar':'Calendar', 'photos':'Photos', 'music':'Music', 'system settings':'System Settings', 'system prefs':'System Preferences', 'terminal':'Terminal' };
+    const linuxAliases: Record<string,string> = { 'vs code':'code', 'vscode':'code', 'mail':'thunderbird', 'notes':'gnome-notes', 'messages':'', 'finder':'nautilus', 'calendar':'gnome-calendar', 'photos':'gnome-photos', 'music':'rhythmbox', 'system settings':'gnome-control-center', 'system prefs':'gnome-control-center', 'terminal':'gnome-terminal' };
+    const winAliases: Record<string,string> = { 'vs code':'code', 'vscode':'code', 'mail':'outlook', 'notes':'notepad', 'messages':'', 'finder':'explorer', 'calendar':'outlookcal:', 'photos':'microsoft.photos:', 'music':'spotify', 'system settings':'ms-settings:', 'system prefs':'ms-settings:', 'terminal':'wt' };
+
+    const aliases = isMacOS() ? macAliases : isLinux() ? linuxAliases : winAliases;
     const appName = aliases[app.toLowerCase()] || app;
-    return [{ shell: `open -a "${appName}"`, description: `Opening ${appName}` }];
+    return [{ shell: openAppCommand(appName), description: `Opening ${appName}` }];
   }
 
   // Open URL
@@ -50,23 +165,22 @@ function parseCommand(text: string): { shell: string; description: string }[] {
     || text.match(/^(https?:\/\/\S+)$/i);
   if (urlMatch) {
     const url = urlMatch[1].startsWith('http') ? urlMatch[1] : 'https://' + urlMatch[1];
-    return [{ shell: `open "${url}"`, description: `Opening ${url}` }];
+    return [{ shell: openUrlCommand(url), description: `Opening ${url}` }];
   }
 
   // Screenshot
   if (t.match(/screenshot|screen shot|capture.*screen|take.*picture.*screen/)) {
-    const ts = Date.now();
-    return [{ shell: `screencapture -x ~/Desktop/screenshot_${ts}.png && echo "Saved to Desktop/screenshot_${ts}.png"`, description: 'Taking screenshot' }];
+    return [{ shell: screenshotCommand(), description: 'Taking screenshot' }];
   }
 
   // What's running
   if (t.match(/(?:what|which|list|show).*(?:running|apps|applications|open|processes)/)) {
-    return [{ shell: "osascript -e 'tell application \"System Events\" to get name of every application process whose background only is false'", description: 'Listing running apps' }];
+    return [{ shell: listRunningAppsCommand(), description: 'Listing running apps' }];
   }
 
   // Disk space
   if (t.match(/disk|storage|space|free.*space|how much.*space/)) {
-    return [{ shell: `df -h / | tail -1 | awk '{print "Total: "$2" | Used: "$3" | Free: "$4" | "$5" used"}'`, description: 'Checking disk space' }];
+    return [{ shell: diskSpaceCommand(), description: 'Checking disk space' }];
   }
 
   // List files
@@ -77,27 +191,27 @@ function parseCommand(text: string): { shell: string; description: string }[] {
 
   // Sleep / lock
   if (t.match(/sleep|lock.*screen|screen.*lock/)) {
-    return [{ shell: `pmset sleepnow`, description: 'Sleeping Mac' }];
+    return [{ shell: sleepCommand(), description: 'Sleeping computer' }];
   }
 
   // Volume
   const volMatch = t.match(/(?:set|turn|change).*volume.*?([0-9]+)|volume.*?([0-9]+)/);
   if (volMatch) {
     const vol = parseInt(volMatch[1] || volMatch[2]);
-    return [{ shell: `osascript -e "set volume output volume ${Math.min(100,Math.max(0,vol))}"`, description: `Setting volume to ${vol}%` }];
+    return [{ shell: volumeCommand(vol), description: `Setting volume to ${vol}%` }];
   }
 
   // Mute / unmute
   if (t.match(/mute|silence|quiet/)) {
-    return [{ shell: `osascript -e "set volume output muted true"`, description: 'Muting audio' }];
+    return [{ shell: muteCommand(true), description: 'Muting audio' }];
   }
   if (t.match(/unmute|sound on|enable.*sound/)) {
-    return [{ shell: `osascript -e "set volume output muted false"`, description: 'Unmuting audio' }];
+    return [{ shell: muteCommand(false), description: 'Unmuting audio' }];
   }
 
   // Empty trash
   if (t.match(/empty.*trash|clear.*trash/)) {
-    return [{ shell: `osascript -e 'tell app "Finder" to empty trash'`, description: 'Emptying Trash' }];
+    return [{ shell: emptyTrashCommand(), description: 'Emptying trash' }];
   }
 
   // Restart / shutdown — be safe, confirm first

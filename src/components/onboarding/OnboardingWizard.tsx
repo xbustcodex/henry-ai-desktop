@@ -643,24 +643,24 @@ export default function OnboardingWizard({ onComplete }: Props) {
             <div className="bg-white/5 border border-white/10 rounded-2xl p-4 space-y-4">
               <p className="text-[10px] uppercase tracking-widest text-white/40">Install on iPhone or iPad</p>
               <ol className="space-y-4">
-                {step3(1, 'Make sure your phone is on the same Wi-Fi as this Mac.',
+                {step3(1, 'Make sure your phone is on the same Wi-Fi as this computer.',
                   <>Both need to be on the same network.</>)}
-                {step3(2, 'Open Safari on your phone.',
-                  <>Must be Safari — Chrome and Firefox can't install PWA apps on iOS.</>)}
+                {step3(2, 'Open Safari on your phone (iOS) or Chrome on Android.',
+                  <>On iOS, must be Safari — Chrome and Firefox can't install PWA apps.</>)}
                 {lanUrl
-                  ? step3(3, 'Type this URL in Safari:',
+                  ? step3(3, 'Type this URL in Safari (iOS) or Chrome (Android):',
                       <div className="mt-1.5 space-y-1.5">
                         <div className="flex items-center gap-2 bg-henry-bg border border-henry-accent/30 rounded-lg px-3 py-2">
                           <code className="text-henry-accent text-sm flex-1 break-all">{lanUrl}</code>
                           <button onClick={() => void copyToClipboard(lanUrl)}
                             className="text-[10px] text-henry-accent hover:underline flex-shrink-0 font-bold">
-                            {copiedUrl ? '✓ Copied' : 'Copy'}
+                          {copiedUrl ? '✓ Copied' : 'Copy'}
                           </button>
                         </div>
                         <p className="text-white/40 text-[10px]">Or scan the QR code below — same URL.</p>
                       </div>)
                   : step3(3, 'Wait — generating your URL…', <span className="text-white/40">This takes a second.</span>)}
-                {step3(4, 'Tap the Share button (□↑) at the bottom of Safari.',
+                {step3(4, 'Tap the Share button (□↑) at the bottom of the browser.',
                   <>It looks like a box with an arrow pointing up.</>)}
                 {step3(5, 'Scroll down and tap "Add to Home Screen".',
                   <>Then tap Add in the top-right corner. Henry AI appears on your home screen.</>)}
@@ -672,7 +672,7 @@ export default function OnboardingWizard({ onComplete }: Props) {
             {/* QR code */}
             {pairCode && (
               <div className="bg-white rounded-2xl p-4 flex flex-col items-center gap-2">
-                <p className="text-black/60 text-xs font-medium">Scan with iPhone or iPad camera</p>
+                <p className="text-black/60 text-xs font-medium">Scan with phone camera</p>
                 <img
                   src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=8&data=${encodeURIComponent(pairCode)}`}
                   alt="QR code" width={200} height={200} className="rounded-lg" />
@@ -904,7 +904,7 @@ export default function OnboardingWizard({ onComplete }: Props) {
                   [isMacOS() ? '⌥⎵' : 'Alt+C', 'Select text → press ' + (isMacOS() ? '⌥Space' : 'Alt+C'), 'Capture anything — emails, articles, notes'],
                   ['📔', 'Open the Journal panel', 'Write your first entry. Try the AI reflection button'],
                   ['🧠', '"Remember I prefer concise answers"', 'Teach Henry something about you'],
-                  ['📱', 'Open the companion on your phone', 'Tap Tasks, add something, see it on your ' + (isMacOS() ? 'Mac' : 'computer')],
+                  ['📱', 'Open the companion on your phone', 'Tap Tasks, add something, see it on your computer'],
                   ['⚙️', 'Settings → AI Providers', 'Add Cerebras for a rate-limit fallback (free)'],
                 ] as [string, string, string][]).map(([icon, action, note]) => (
                   <div key={action} className="flex items-start gap-3">
@@ -926,7 +926,7 @@ export default function OnboardingWizard({ onComplete }: Props) {
                 {isMacOS() && !scr && <p className="text-white/60 text-xs">• Screen Recording — Settings → Privacy → Screen & System Audio Recording</p>}
                 {!isMacOS() && <p className="text-white/60 text-xs">• Computer Control — install xdotool/wmctrl (keyboard/mouse) and xclip (clipboard)</p>}
                 {!hasAi && <p className="text-white/60 text-xs">• Groq key — console.groq.com/keys → Henry Settings → AI Providers</p>}
-                {linkedDevices.length === 0 && <p className="text-white/60 text-xs">• Phone app — open the companion URL from Settings → Companion in Safari</p>}
+                {linkedDevices.length === 0 && <p className="text-white/60 text-xs">• Phone app — open the companion URL from Settings → Companion in your browser</p>}
               </div>
             )}
 

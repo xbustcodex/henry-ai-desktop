@@ -1339,10 +1339,22 @@ const henryAPI: Window['henryAPI'] = {
     success: false,
     output: `Shell commands require the Henry desktop app. Would have run: ${params.command}`,
   }),
-  computerListApps: async () => ({
-    apps: ['Safari', 'Chrome', 'Terminal', 'Xcode', 'VS Code', 'Finder', 'Mail', 'Calendar', 'Notes', 'Preview'],
-    platform: 'web-preview',
-  }),
+  computerListApps: async () => {
+    const platform = navigator.platform || 'web';
+    const isMac = platform.includes('Mac');
+    const isLinux = platform.includes('Linux');
+    
+    let apps: string[];
+    if (isMac) {
+      apps = ['Safari', 'Chrome', 'Terminal', 'Xcode', 'VS Code', 'Finder', 'Mail', 'Calendar', 'Notes', 'Preview'];
+    } else if (isLinux) {
+      apps = ['Firefox', 'Chrome', 'Terminal', 'VS Code', 'Files', 'Thunderbird', 'LibreOffice', 'GIMP', 'VLC'];
+    } else {
+      apps = ['Edge', 'Chrome', 'Terminal', 'VS Code', 'Explorer', 'Outlook', 'Notepad', 'Calculator'];
+    }
+    
+    return { apps, platform: 'web-preview' };
+  },
   computerListProcesses: async () => ({
     processes: ['This is a preview — real process list requires the desktop app.'],
   }),

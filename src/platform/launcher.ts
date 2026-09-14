@@ -4,6 +4,7 @@
  */
 
 import { app } from 'electron';
+import { discoverInstalledApps, findAppByName, InstalledApp } from './installedApps';
 
 /**
  * Get the platform string.
@@ -28,6 +29,14 @@ if (typeof window !== 'undefined') {
 export async function launchApplication(appName: string): Promise<{ success: boolean; output: string; error?: string }> {
   const { spawn } = await import('child_process');
 
+  // First try to find the app in our discovered apps
+  let foundApp: InstalledApp | null = null;
+  try {
+    foundApp = await findAppByName(appName);
+  } catch {
+    // Ignore errors, fall back to platform defaults
+  }
+
   return new Promise((resolve) => {
     let command: string;
     let args: string[] = [];
@@ -41,27 +50,25 @@ export async function launchApplication(appName: string): Promise<{ success: boo
       command = 'cmd';
       args = ['/c', 'start', '', appName];
     } else {
-      // Linux and other Unix-like: try xdg-open, gtk-launch, or direct execution
-      // First check if it's a desktop file or executable path
-      if (appName.includes('/') || appName.startsWith('./') || appName.startsWith('../')) {
+      // Linux and other Unix-like
+      if (foundApp) {
+        // Use the discovered app's executable
+        const execParts = foundApp.executable.split(' ');
+        command = execParts[0];
+        args = execParts.slice(1);
+      } else if (appName.includes('/') || appName.startsWith('./') || appName.startsWith('../')) {
         // Treat as path
         command = appName;
       } else {
-        // Try to find via desktop file or use xdg-open
+        // Try xdg-open
         command = 'xdg-open';
         args = [appName];
       }
     }
 
     // Handle special case for Linux direct execution
-    if (platformString !== 'darwin' && platformString !== 'win32' && !args.length) {
-      // If we're treating appName as a direct command
-      if (command === appName) {
-        args = [];
-      } else {
-        // xdg-open case
-        args = [appName];
-      }
+    if (platformString !== 'darwin' && platformString !== 'win32' && !args.length && command !== appName) {
+      args = [appName];
     }
 
     const child = spawn(command, args);
@@ -218,3 +225,7 @@ export async function launchAppByName(appName: string): Promise<{ success: boole
     }
   }
 }
+
+// Re-export installed apps discovery functions
+export { discoverInstalledApps, findAppByName, getDefaultFileManager, getDefaultTerminal, getDefaultBrowser } from './installedApps';
+export type { InstalledApp } from './installedApps';

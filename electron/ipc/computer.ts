@@ -9,13 +9,14 @@
  *   - Screen Recording: System Settings → Privacy & Security → Screen Recording → Henry AI
  */
 
-import { ipcMain, BrowserWindow, app } from 'electron';
+import { ipcMain, BrowserWindow, app, systemPreferences } from 'electron';
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { classifyCommand } from './_commandSafety';
 import { launchApplication, openUrl } from '../../src/platform/launcher';
+import { discoverInstalledApps, InstalledApp } from '../../src/platform/installedApps';
 
 type WindowGetter = () => BrowserWindow | null;
 
@@ -143,22 +144,69 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
     }
   });
 
-  // ── Get running apps ──────────────────────────────────────────────────
+  // ── Get installed apps ──────────────────────────────────────────────────
   ipcMain.handle('computer:listApps', async () => {
     try {
-      let cmd: string;
-      if (platform === 'darwin') {
-        cmd = `ls /Applications/*.app | sed 's|/Applications/||' | sed 's|.app||' | head -60`;
-      } else if (platform === 'win32') {
-        cmd = `powershell -Command "Get-StartApps | Select-Object -First 60 Name | ConvertTo-Json"`;
-      } else {
-        cmd = `ls /usr/share/applications/*.desktop | sed 's|/usr/share/applications/||' | sed 's|.desktop||' | head -60`;
-      }
-      const result = await runCmd(cmd, 5000);
-      const apps = result.stdout.trim().split('\n').filter(Boolean).map(a => a.trim());
-      return { apps, platform };    } catch (e: unknown) {
+      const apps = await discoverInstalledApps();
+      return { apps: apps.map(a => ({ 
+        id: a.id,
+        name: a.name,
+        displayName: a.displayName,
+        executable: a.executable,
+        icon: a.icon,
+        categories: a.categories,
+        isTerminal: a.isTerminal,
+        isFileManager: a.isFileManager,
+        isBrowser: a.isBrowser,
+      })), platform: process.platform };
+    } catch (e: unknown) {
       console.error('[computer:listApps]', e instanceof Error ? e.message : String(e));
       throw e;
+    }
+  });
+
+  // ── Get default file manager ─────────────────────────────────────────────
+  ipcMain.handle('computer:getDefaultFileManager', async () => {
+    try {
+      const apps = await discoverInstalledApps();
+      const fileManager = apps.find(a => a.isFileManager);
+      if (fileManager) {
+        return { success: true, name: fileManager.displayName, executable: fileManager.executable, icon: fileManager.icon };
+      }
+      return { success: false, error: 'No file manager found' };
+    } catch (e: unknown) {
+      console.error('[computer:getDefaultFileManager]', e instanceof Error ? e.message : String(e));
+      return { success: false, error: String(e) };
+    }
+  });
+
+  // ── Get default terminal ──────────────────────────────────────────────────
+  ipcMain.handle('computer:getDefaultTerminal', async () => {
+    try {
+      const apps = await discoverInstalledApps();
+      const terminal = apps.find(a => a.isTerminal);
+      if (terminal) {
+        return { success: true, name: terminal.displayName, executable: terminal.executable, icon: terminal.icon };
+      }
+      return { success: false, error: 'No terminal found' };
+    } catch (e: unknown) {
+      console.error('[computer:getDefaultTerminal]', e instanceof Error ? e.message : String(e));
+      return { success: false, error: String(e) };
+    }
+  });
+
+  // ── Get default browser ───────────────────────────────────────────────────
+  ipcMain.handle('computer:getDefaultBrowser', async () => {
+    try {
+      const apps = await discoverInstalledApps();
+      const browser = apps.find(a => a.isBrowser);
+      if (browser) {
+        return { success: true, name: browser.displayName, executable: browser.executable, icon: browser.icon };
+      }
+      return { success: false, error: 'No browser found' };
+    } catch (e: unknown) {
+      console.error('[computer:getDefaultBrowser]', e instanceof Error ? e.message : String(e));
+      return { success: false, error: String(e) };
     }
   });
 
@@ -212,6 +260,200 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
       };    } catch (e: unknown) {
       console.error('[computer:checkPermissions]', e instanceof Error ? e.message : String(e));
       throw e;
+    }
+  });
+
+  // ── Unified Capability Check (cross-platform) ────────────────────────────
+  ipcMain.handle('computer:checkCapabilities', async () => {
+    try {
+      const { execFile } = await import('child_process');
+      const { clipboard } = await import('electron');
+      const os = await import('os');
+
+      const sessionType = process.env.XDG_SESSION_TYPE || process.env.XDG_CURRENT_DESKTOP || 'unknown';
+      const isWayland = sessionType === 'wayland';
+      const isWSL = (process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP) ? true : false;
+
+      // Clipboard capability (Electron clipboard works everywhere)
+      let clipboardStatus = { status: 'ready' as const, backend: 'electron', details: 'Electron clipboard API' };
+
+      // Selected text capture capability
+      let selectedTextStatus: { status: 'ready' | 'degraded' | 'dependency-missing' | 'unsupported-session' | 'unavailable'; backend?: string; details?: string } = { status: 'unavailable', details: 'Not implemented' };
+
+      // Screen capture capability
+      let screenCaptureStatus: { status: 'ready' | 'degraded' | 'dependency-missing' | 'unsupported-session' | 'unavailable'; backend?: string; details?: string; regionCapture?: boolean; windowCapture?: boolean } = { status: 'unavailable', details: 'Not implemented' };
+
+      // Input automation capability
+      let inputAutomationStatus: { status: 'ready' | 'degraded' | 'dependency-missing' | 'unsupported-session' | 'unavailable'; backend?: string; details?: string } = { status: 'unavailable', details: 'Not implemented' };
+
+      if (platform === 'darwin') {
+        // macOS
+        // Selected text: osascript (needs Accessibility)
+        const hasAccess = systemPreferences.isTrustedAccessibilityClient(false);
+        selectedTextStatus = hasAccess
+          ? { status: 'ready', backend: 'osascript', details: 'Simulates ⌘C via AppleScript' }
+          : { status: 'dependency-missing', backend: 'osascript', details: 'Requires Accessibility permission' };
+
+        // Screen capture: screencapture (needs Screen Recording)
+        const tmp = path.join(os.tmpdir(), 'henry_cap_check.png');
+        const srResult = await runCmd(`screencapture -x "${tmp}" 2>&1 && rm -f "${tmp}"`, 5000);
+        const hasScreenRec = srResult.exitCode === 0;
+        screenCaptureStatus = hasScreenRec
+          ? { status: 'ready', backend: 'screencapture', details: 'macOS native screencapture', regionCapture: true, windowCapture: true }
+          : { status: 'dependency-missing', backend: 'screencapture', details: 'Requires Screen Recording permission', regionCapture: false, windowCapture: false };
+
+        // Input automation: osascript (needs Accessibility)
+        inputAutomationStatus = hasAccess
+          ? { status: 'ready', backend: 'osascript', details: 'AppleScript via System Events' }
+          : { status: 'dependency-missing', backend: 'osascript', details: 'Requires Accessibility permission' };
+
+      } else if (platform === 'linux') {
+        // Linux: check available backends
+        const checkBin = async (bins: string[]): Promise<string | null> => {
+          for (const b of bins) {
+            try {
+              await new Promise<void>((resolve, reject) => {
+                execFile('which', [b], { timeout: 2000 }, (err) => { if (err) reject(err); else resolve(); });
+              });
+              return b;
+            } catch { /* continue */ }
+          }
+          return null;
+        };
+
+        // Clipboard: check external tools (for reference, Electron clipboard works)
+        const xclip = await checkBin(['xclip']);
+        const xsel = await checkBin(['xsel']);
+        const wlCopy = await checkBin(['wl-copy']);
+        const wlPaste = await checkBin(['wl-paste']);
+        clipboardStatus = {
+          status: 'ready',
+          backend: 'electron',
+          details: `Electron clipboard API${xclip ? ' + xclip' : ''}${xsel ? ' + xsel' : ''}${wlCopy ? ' + wl-clipboard' : ''}`
+        };
+
+        // Selected text capture
+        if (!isWayland) {
+          // X11: xclip/xsel for PRIMARY, xdotool for Ctrl+C fallback
+          const xdotool = await checkBin(['xdotool']);
+          const hasPrimary = !!(xclip || xsel);
+          if (hasPrimary || xdotool) {
+            selectedTextStatus = {
+              status: hasPrimary ? 'ready' : 'degraded',
+              backend: hasPrimary ? (xclip ? 'xclip' : 'xsel') : 'xdotool',
+              details: hasPrimary
+                ? `X11 PRIMARY selection via ${xclip ? 'xclip' : 'xsel'}${xdotool ? ' + Ctrl+C fallback' : ''}`
+                : 'Ctrl+C simulation via xdotool (no PRIMARY selection support)'
+            };
+          } else {
+            selectedTextStatus = { status: 'dependency-missing', details: 'Install xclip/xsel for PRIMARY selection, xdotool for Ctrl+C fallback' };
+          }
+        } else {
+          // Wayland: wl-paste --primary (if supported), ydotool for Ctrl+C fallback
+          const ydotool = await checkBin(['ydotool']);
+          const wlPastePrimary = wlPaste; // wl-paste --primary support varies
+          if (wlPastePrimary || ydotool) {
+            selectedTextStatus = {
+              status: wlPastePrimary ? 'ready' : 'degraded',
+              backend: wlPastePrimary ? 'wl-paste' : 'ydotool',
+              details: wlPastePrimary
+                ? 'Wayland PRIMARY selection via wl-paste'
+                : 'Ctrl+C simulation via ydotool (requires ydotoold running)'
+            };
+          } else {
+            selectedTextStatus = { status: 'dependency-missing', details: 'Install wl-clipboard (wl-paste --primary) or ydotool for Wayland' };
+          }
+        }
+
+        // Screen capture
+        const scrot = await checkBin(['scrot']);
+        const importBin = await checkBin(['import']);
+        const gnomeScreenshot = await checkBin(['gnome-screenshot']);
+        const xfceScreenshot = await checkBin(['xfce4-screenshooter']);
+        const grim = await checkBin(['grim']);
+
+        let bestBackend = '';
+        let regionCapture = false;
+        let windowCapture = false;
+
+        if (scrot) { bestBackend = 'scrot'; regionCapture = true; windowCapture = false; }
+        else if (importBin) { bestBackend = 'import (ImageMagick)'; regionCapture = true; windowCapture = true; }
+        else if (gnomeScreenshot) { bestBackend = 'gnome-screenshot'; regionCapture = true; windowCapture = true; }
+        else if (xfceScreenshot) { bestBackend = 'xfce4-screenshooter'; regionCapture = true; windowCapture = true; }
+        else if (grim) { bestBackend = 'grim'; regionCapture = true; windowCapture = false; }
+
+        if (bestBackend) {
+          screenCaptureStatus = {
+            status: 'ready',
+            backend: bestBackend,
+            details: `Linux screenshot via ${bestBackend}`,
+            regionCapture,
+            windowCapture
+          };
+        } else {
+          screenCaptureStatus = {
+            status: 'dependency-missing',
+            details: `No screenshot backend available (${sessionType}). Install scrot, ImageMagick (import), gnome-screenshot, or grim`
+          };
+        }
+
+        // Input automation
+        const xdotool2 = await checkBin(['xdotool']);
+        const wmctrl = await checkBin(['wmctrl']);
+        const ydotool2 = await checkBin(['ydotool']);
+
+        if (isWayland) {
+          if (ydotool2) {
+            inputAutomationStatus = { status: 'ready', backend: 'ydotool', details: 'Wayland synthetic input via ydotool (requires ydotoold)' };
+          } else if (xdotool2) {
+            inputAutomationStatus = { status: 'degraded', backend: 'xdotool (XWayland)', details: 'xdotool via XWayland (may not work on all Wayland compositors)' };
+          } else {
+            inputAutomationStatus = { status: 'dependency-missing', details: 'Install ydotool for Wayland native input, or xdotool for XWayland fallback' };
+          }
+        } else {
+          if (xdotool2 || wmctrl) {
+            inputAutomationStatus = {
+              status: 'ready',
+              backend: [xdotool2, wmctrl].filter(Boolean).join(' + '),
+              details: `X11 input via ${xdotool2 ? 'xdotool' : ''}${xdotool2 && wmctrl ? ' + ' : ''}${wmctrl ? 'wmctrl' : ''}`
+            };
+          } else {
+            inputAutomationStatus = { status: 'dependency-missing', details: 'Install xdotool or wmctrl for X11 input automation' };
+          }
+        }
+
+      } else if (platform === 'win32') {
+        // Windows
+        // Clipboard: Electron works, also PowerShell
+        clipboardStatus = { status: 'ready', backend: 'electron', details: 'Electron clipboard API + PowerShell Get-Clipboard/Set-Clipboard' };
+
+        // Selected text: Ctrl+C simulation via PowerShell SendKeys
+        selectedTextStatus = { status: 'ready', backend: 'powershell', details: 'Ctrl+C simulation via PowerShell SendKeys' };
+
+        // Screen capture: PowerShell System.Drawing
+        screenCaptureStatus = { status: 'ready', backend: 'powershell', details: 'PowerShell System.Drawing bitmap capture', regionCapture: false, windowCapture: false };
+
+        // Input automation: PowerShell SendKeys
+        inputAutomationStatus = { status: 'ready', backend: 'powershell', details: 'PowerShell SendKeys / WScript.Shell' };
+      }
+
+      return {
+        platform,
+        session: platform === 'linux' ? { type: sessionType, isWayland, isWSL } : undefined,
+        clipboard: clipboardStatus,
+        selectedText: selectedTextStatus,
+        screenCapture: screenCaptureStatus,
+        inputAutomation: inputAutomationStatus,
+      };
+    } catch (e: unknown) {
+      console.error('[computer:checkCapabilities]', e instanceof Error ? e.message : String(e));
+      return {
+        platform: process.platform,
+        clipboard: { status: 'unavailable', details: String(e) },
+        selectedText: { status: 'unavailable', details: String(e) },
+        screenCapture: { status: 'unavailable', details: String(e) },
+        inputAutomation: { status: 'unavailable', details: String(e) },
+      };
     }
   });
 
@@ -304,6 +546,189 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
     return { ok: true };
   });
 
+  // ── Selected text capture (cross-platform) ───────────────────────────────
+  ipcMain.handle('computer:captureSelectedText', async () => {
+    try {
+      const { clipboard } = await import('electron');
+      let captured = '';
+      let source = 'clipboard';
+
+      if (platform === 'darwin') {
+        // macOS: Use osascript to simulate ⌘C, requires Accessibility
+        const originalText = clipboard.readText();
+        const originalHTML = clipboard.readHTML();
+
+        const hasAccess = systemPreferences.isTrustedAccessibilityClient(false);
+        if (!hasAccess) {
+          return { success: false, error: 'Accessibility permission required', captured: '', source: 'none' };
+        }
+
+        const { execFile } = await import('child_process');
+        await new Promise<void>((resolve) => {
+          execFile('osascript', ['-e', 'tell application "System Events" to keystroke "c" using command down'], { timeout: 1000 }, (err) => {
+            if (err) console.warn('[captureSelectedText] osascript failed:', err.message);
+            resolve();
+          });
+        });
+
+        await new Promise(r => setTimeout(r, 150));
+
+        const newText = clipboard.readText();
+        if (newText && newText !== originalText && newText.length > 1) {
+          captured = newText;
+          source = 'selection';
+          // Restore original clipboard
+          if (originalText) clipboard.writeText(originalText);
+          else clipboard.clear();
+        } else if (originalText && originalText.length > 1) {
+          captured = originalText;
+          source = 'clipboard';
+        }
+
+      } else if (platform === 'linux') {
+        // Linux: Try PRIMARY selection first (X11), then CLIPBOARD, fallback to Ctrl+C simulation
+        const sessionType = process.env.XDG_SESSION_TYPE || '';
+        const isWayland = sessionType === 'wayland';
+
+        // Try xclip/xsel for PRIMARY selection (X11)
+        if (!isWayland) {
+          // Try xclip first
+          try {
+            const { execFile } = await import('child_process');
+            const result = await new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+              execFile('xclip', ['-o', '-selection', 'primary'], { timeout: 2000 }, (err, stdout, stderr) => {
+                resolve({ stdout: stdout?.toString() || '', stderr: stderr?.toString() || '', exitCode: err ? 1 : 0 });
+              });
+            });
+            if (result.exitCode === 0 && result.stdout.trim().length > 1) {
+              captured = result.stdout.trim();
+              source = 'primary';
+            }
+          } catch {
+            // xclip not available or failed
+          }
+
+          // Try xsel if xclip failed
+          if (!captured) {
+            try {
+              const { execFile } = await import('child_process');
+              const result = await new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+                execFile('xsel', ['-p'], { timeout: 2000 }, (err, stdout, stderr) => {
+                  resolve({ stdout: stdout?.toString() || '', stderr: stderr?.toString() || '', exitCode: err ? 1 : 0 });
+                });
+              });
+              if (result.exitCode === 0 && result.stdout.trim().length > 1) {
+                captured = result.stdout.trim();
+                source = 'primary';
+              }
+            } catch {
+              // xsel not available
+            }
+          }
+        }
+
+        // Try wl-paste for Wayland (if supported)
+        if (!captured && isWayland) {
+          try {
+            const { execFile } = await import('child_process');
+            const result = await new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+              execFile('wl-paste', ['--primary'], { timeout: 2000 }, (err, stdout, stderr) => {
+                resolve({ stdout: stdout?.toString() || '', stderr: stderr?.toString() || '', exitCode: err ? 1 : 0 });
+              });
+            });
+            if (result.exitCode === 0 && result.stdout.trim().length > 1) {
+              captured = result.stdout.trim();
+              source = 'primary';
+            }
+          } catch {
+            // wl-paste not available or --primary not supported
+          }
+        }
+
+        // Fallback: use CLIPBOARD selection (Ctrl+C simulation)
+        if (!captured) {
+          const originalText = clipboard.readText();
+
+          // Simulate Ctrl+C using xdotool (X11) or try ydotool (Wayland)
+          if (!isWayland) {
+            try {
+              const { execFile } = await import('child_process');
+              await new Promise<void>((resolve) => {
+                execFile('xdotool', ['key', 'ctrl+c'], { timeout: 1000 }, (err) => {
+                  if (err) console.warn('[captureSelectedText] xdotool failed:', err.message);
+                  resolve();
+                });
+              });
+              await new Promise(r => setTimeout(r, 150));
+            } catch {
+              // xdotool not available
+            }
+          } else {
+            // Wayland: try ydotool
+            try {
+              const { execFile } = await import('child_process');
+              await new Promise<void>((resolve) => {
+                execFile('ydotool', ['key', 'ctrl+c'], { timeout: 1000 }, (err) => {
+                  if (err) console.warn('[captureSelectedText] ydotool failed:', err.message);
+                  resolve();
+                });
+              });
+              await new Promise(r => setTimeout(r, 150));
+            } catch {
+              // ydotool not available
+            }
+          }
+
+          const newText = clipboard.readText();
+          if (newText && newText !== originalText && newText.length > 1) {
+            captured = newText;
+            source = 'clipboard';
+            // Restore original clipboard
+            if (originalText) clipboard.writeText(originalText);
+            else clipboard.clear();
+          } else if (originalText && originalText.length > 1) {
+            captured = originalText;
+            source = 'clipboard';
+          }
+        }
+
+      } else if (platform === 'win32') {
+        // Windows: Simulate Ctrl+C using PowerShell SendKeys
+        const originalText = clipboard.readText();
+
+        const { execFile } = await import('child_process');
+        await new Promise<void>((resolve) => {
+          execFile('powershell', [
+            '-Command',
+            '$wshell = New-Object -ComObject wscript.shell; $wshell.SendKeys(\'^c\')'
+          ], { timeout: 1000 }, (err) => {
+            if (err) console.warn('[captureSelectedText] PowerShell SendKeys failed:', err.message);
+            resolve();
+          });
+        });
+
+        await new Promise(r => setTimeout(r, 150));
+
+        const newText = clipboard.readText();
+        if (newText && newText !== originalText && newText.length > 1) {
+          captured = newText;
+          source = 'clipboard';
+          // Restore original clipboard
+          if (originalText) clipboard.writeText(originalText);
+          else clipboard.clear();
+        } else if (originalText && originalText.length > 1) {
+          captured = originalText;
+          source = 'clipboard';
+        }
+      }
+
+      return { success: true, captured, source };
+    } catch (e: unknown) {
+      console.error('[computer:captureSelectedText]', e instanceof Error ? e.message : String(e));
+      return { success: false, error: e instanceof Error ? e.message : String(e), captured: '', source: 'error' };
+    }
+  });
+
   // ── Volume / brightness / system controls ────────────────────────────────
   ipcMain.handle('computer:setVolume', async (_e, level: number) => {
     const { setVolume } = await import('../../src/platform/system');
@@ -392,19 +817,122 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
     }
   });
 
-  // ── Type text (requires Accessibility) ───────────────────────────────
+  // ── Type text (cross-platform) ──────────────────────────────────────────
   ipcMain.handle('computer:typeText', async (_event, text: string) => {
     try {
-      if (platform !== 'darwin') {
-        return { success: false, error: 'Keyboard control via AppleScript is macOS only.' };
+      let cmd: string;
+      if (platform === 'darwin') {
+        const escaped = text.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        cmd = `osascript -e 'tell application "System Events" to keystroke "${escaped}"'`;
+      } else if (platform === 'linux') {
+        // Use xdotool to type text
+        const escaped = text.replace(/"/g, '\\"').replace(/`/g, '\\`').replace(/\$/g, '\\$');
+        cmd = `xdotool type -- "${escaped}"`;
+      } else if (platform === 'win32') {
+        // Use PowerShell to send text
+        const escaped = text.replace(/'/g, "''").replace(/"/g, '`"');
+        cmd = `powershell -Command "$wshell = New-Object -ComObject wscript.shell; $wshell.SendKeys('${escaped}')"`;
+      } else {
+        return { success: false, error: `Unsupported platform: ${platform}` };
       }
-      const escaped = text.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-      const result = await runCmd(
-        `osascript -e 'tell application "System Events" to keystroke "${escaped}"'`,
-        10000
-      );
-      return { success: result.exitCode === 0, error: result.exitCode !== 0 ? result.stderr : undefined };    } catch (e: unknown) {
+      const result = await runCmd(cmd, 10000);
+      return { success: result.exitCode === 0, error: result.exitCode !== 0 ? result.stderr : undefined };
+    } catch (e: unknown) {
       console.error('[computer:typeText]', e instanceof Error ? e.message : String(e));
+      throw e;
+    }
+  });
+
+  // ── Activate application (cross-platform) ──────────────────────────────────
+  ipcMain.handle('computer:activateApplication', async (_event, appName: string) => {
+    try {
+      let cmd: string;
+      if (platform === 'darwin') {
+        cmd = `osascript -e 'tell application "${appName.replace(/"/g, '\\"')}" to activate'`;
+      } else if (platform === 'linux') {
+        // Try wmctrl first, then xdotool as fallback
+        cmd = `wmctrl -a "${appName.replace(/"/g, '\\"')}" 2>/dev/null || xdotool search --name "${appName.replace(/"/g, '\\"')}" windowactivate 2>/dev/null`;
+      } else if (platform === 'win32') {
+        cmd = `powershell -Command "(Get-Process -ProcessName '${appName.replace(/'/g, "''")}' | Where-Object {$_.MainWindowTitle}).ForEach({Set-ForegroundWindow $_.MainWindowHandle})"`;
+      } else {
+        return { success: false, error: `Unsupported platform: ${platform}` };
+      }
+      const result = await runCmd(cmd, 10000);
+      return { success: result.exitCode === 0, error: result.exitCode !== 0 ? result.stderr : undefined };
+    } catch (e: unknown) {
+      console.error('[computer:activateApplication]', e instanceof Error ? e.message : String(e));
+      throw e;
+    }
+  });
+
+  // ── Focus AI input / address bar (cross-platform) ──────────────────────────
+  ipcMain.handle('computer:focusAiInput', async (_event, appName: string) => {
+    try {
+      let cmd: string;
+      if (platform === 'darwin') {
+        // macOS: Cmd+L to focus address bar
+        cmd = `osascript -e 'tell application "System Events" to keystroke "l" using command down'`;
+      } else if (platform === 'linux') {
+        // Linux: Ctrl+L to focus address bar
+        cmd = `xdotool key ctrl+l`;
+      } else if (platform === 'win32') {
+        // Windows: Ctrl+L to focus address bar
+        cmd = `powershell -Command "$wshell = New-Object -ComObject wscript.shell; $wshell.AppActivate('${appName.replace(/'/g, "''")}'); Start-Sleep -Milliseconds 200; $wshell.SendKeys('^l')"`;
+      } else {
+        return { success: false, error: `Unsupported platform: ${platform}` };
+      }
+      const result = await runCmd(cmd, 5000);
+      return { success: result.exitCode === 0, error: result.exitCode !== 0 ? result.stderr : undefined };
+    } catch (e: unknown) {
+      console.error('[computer:focusAiInput]', e instanceof Error ? e.message : String(e));
+      throw e;
+    }
+  });
+
+  // ── Press a key (cross-platform) ───────────────────────────────────────────
+  ipcMain.handle('computer:pressKey', async (_event, key: string) => {
+    try {
+      let cmd: string;
+      if (platform === 'darwin') {
+        // Map key names to macOS key codes
+        const keyCodes: Record<string, string> = {
+          'enter': '36',
+          'return': '36',
+          'tab': '48',
+          'escape': '53',
+          'space': '49',
+        };
+        const keyCode = keyCodes[key.toLowerCase()] || key;
+        cmd = `osascript -e 'tell application "System Events" to key code ${keyCode}'`;
+      } else if (platform === 'linux') {
+        // Linux: use xdotool key names
+        const keyMap: Record<string, string> = {
+          'enter': 'Return',
+          'return': 'Return',
+          'tab': 'Tab',
+          'escape': 'Escape',
+          'space': 'space',
+        };
+        const xdotoolKey = keyMap[key.toLowerCase()] || key;
+        cmd = `xdotool key ${xdotoolKey}`;
+      } else if (platform === 'win32') {
+        // Windows: use PowerShell SendKeys
+        const keyMap: Record<string, string> = {
+          'enter': '~',
+          'return': '~',
+          'tab': '{TAB}',
+          'escape': '{ESC}',
+          'space': ' ',
+        };
+        const sendKey = keyMap[key.toLowerCase()] || key;
+        cmd = `powershell -Command "$wshell = New-Object -ComObject wscript.shell; $wshell.SendKeys('${sendKey}')"`;
+      } else {
+        return { success: false, error: `Unsupported platform: ${platform}` };
+      }
+      const result = await runCmd(cmd, 5000);
+      return { success: result.exitCode === 0, error: result.exitCode !== 0 ? result.stderr : undefined };
+    } catch (e: unknown) {
+      console.error('[computer:pressKey]', e instanceof Error ? e.message : String(e));
       throw e;
     }
   });
