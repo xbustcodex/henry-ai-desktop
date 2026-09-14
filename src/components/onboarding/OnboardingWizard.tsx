@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useStore } from '../../store';
 import { buildPairCodePayload } from '../../sync/deviceLink';
+import { isMacOS, isLinux, isWindows, getPlatformName } from '../../utils/platform';
 
 export const ONBOARDING_DONE_KEY = 'henry:onboarding_v1_complete';
 export function shouldShowOnboarding(): boolean {
@@ -165,8 +166,30 @@ export default function OnboardingWizard({ onComplete }: Props) {
 
 
   // ── Navigation ────────────────────────────────────────────────────────────
-  function next() { const i = STEP_ORDER.indexOf(step); if (i < STEP_ORDER.length - 1) setStep(STEP_ORDER[i + 1]); }
-  function back() { const i = STEP_ORDER.indexOf(step); if (i > 0) setStep(STEP_ORDER[i - 1]); }
+  function next() {
+    const i = STEP_ORDER.indexOf(step);
+    if (i >= STEP_ORDER.length - 1) return;
+    let nextStep = STEP_ORDER[i + 1];
+    // On non-macOS, skip macOS-only permission steps (they're capability-checked).
+    // The 'done' step shows a capability summary instead of macOS permission status.
+    if (!isMacOS() && (nextStep === 'accessibility' || nextStep === 'screen')) {
+      // Skip straight past macOS permission steps on Linux/Windows
+      const j = STEP_ORDER.indexOf(nextStep);
+      nextStep = STEP_ORDER[j + 1] ?? 'done';
+    }
+    setStep(nextStep);
+  }
+  function back() {
+    const i = STEP_ORDER.indexOf(step);
+    if (i <= 0) return;
+    let prevStep = STEP_ORDER[i - 1];
+    // On non-macOS, skip macOS-only permission steps when going back too.
+    if (!isMacOS() && (prevStep === 'accessibility' || prevStep === 'screen')) {
+      const j = STEP_ORDER.indexOf(prevStep);
+      prevStep = STEP_ORDER[j - 1] ?? STEP_ORDER[0];
+    }
+    setStep(prevStep);
+  }
   async function finish() {
     localStorage.setItem(ONBOARDING_DONE_KEY, 'true');
     // Save any personal info the user filled in during the memory step
@@ -213,6 +236,15 @@ export default function OnboardingWizard({ onComplete }: Props) {
   }
 
   function openSettings(uri: string, ipcName: 'openPermissions' | 'openScreenRecording') {
+    // Only attempt to open system preferences on macOS
+    if (process.platform !== 'darwin') {
+      // Show appropriate message for non-macOS platforms
+      if (window.confirm('Permission management is handled automatically on this platform. Please check your system settings manually if needed.')) {
+        // User clicked OK, do nothing
+      }
+      return;
+    }
+
     const api = getApi();
     let opened = false;
     if (api && typeof api[ipcName] === 'function') { try { api[ipcName](); opened = true; } catch { /* */ } }
@@ -221,6 +253,21 @@ export default function OnboardingWizard({ onComplete }: Props) {
   }
   const openAccessibilitySettings = () => openSettings('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility', 'openPermissions');
   const openScreenRecordingSettings = () => openSettings('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture', 'openScreenRecording');
+
+  // Platform-aware shortcut labels
+  const captureShortcut = isMacOS() ? '⌥ Space' : 'Alt+C';
+  const captureShortcutLabel = isMacOS() ? 'Option + Space' : 'Alt+C';
+  const captureShortcutDesc = isMacOS()
+    ? 'Works in any app, any screen. Selected text is automatically pasted in so Henry can read it. This is the fastest way — select something, press ⌥Space, ask about it.'
+    : 'Works in any app, any screen. Selected text is automatically pasted in so Henry can read it. This is the fastest way — select something, press Alt+C, ask about it.';
+  const openShortcut = isMacOS() ? '⌘⇧H' : 'Alt+H';
+  const openShortcutLabel = isMacOS() ? 'Cmd + Shift + H' : 'Alt+H';
+  const openShortcutDesc = isMacOS()
+    ? 'Opens the full Henry window from anywhere on your Mac.'
+    : 'Opens the full Henry window from anywhere on your computer.';
+  const dockShortcutDesc = isMacOS()
+    ? "Henry lives in your Mac's dock. Click anytime to open the full app."
+    : "Henry lives in your app launcher. Click anytime to open the full app.";
 
   function openUrl(url: string) {
     const api = getApi();
@@ -287,7 +334,7 @@ export default function OnboardingWizard({ onComplete }: Props) {
               <p className="text-6xl mb-4">◉</p>
               <h1 className="text-3xl font-black text-white tracking-tight">Welcome to Henry</h1>
               <p className="text-white/55 text-sm mt-2 leading-relaxed max-w-xs mx-auto">
-                Your personal AI — runs entirely on your Mac, works on your phone, almost free.
+                Your personal AI — runs entirely on your {isMacOS() ? 'Mac' : isLinux() ? 'Linux' : 'computer'}, works on your phone, almost free.
               </p>
             </div>
 
@@ -321,7 +368,7 @@ export default function OnboardingWizard({ onComplete }: Props) {
 
             <div className="grid grid-cols-2 gap-2 text-left">
               {([
-                ['⌨️', 'Permissions', '2 Mac settings — takes 60 sec'],
+                ['⌨️', 'Permissions', isMacOS() ? '2 Mac settings — takes 60 sec' : isLinux() ? 'Linux capabilities — auto-checked' : 'System settings — auto-checked'],
                 ['⚡', 'Free AI key', 'Groq — unlimited, no card'],
                 ['📱', 'Phone app', 'Install as an app from Safari'],
                 ['🧠', 'Memory', 'Teach Henry about yourself'],
@@ -351,9 +398,9 @@ export default function OnboardingWizard({ onComplete }: Props) {
 
             <div className="space-y-3">
               {([
-                { key: '⌥ Space', label: 'Option + Space (anywhere)', desc: 'Works in any app, any screen. Selected text is automatically pasted in so Henry can read it. This is the fastest way — select something, press ⌥Space, ask about it.' },
-                { key: '⌘⇧H', label: 'Cmd + Shift + H', desc: 'Opens the full Henry window from anywhere on your Mac.' },
-                { key: '🖱', label: 'Click the dock icon', desc: 'Henry lives in your Mac\'s dock. Click anytime to open the full app.' },
+                { key: captureShortcut, label: captureShortcutLabel, desc: captureShortcutDesc },
+                { key: openShortcut, label: openShortcutLabel, desc: openShortcutDesc },
+                { key: '🖱', label: 'Click the app icon', desc: dockShortcutDesc },
               ] as { key: string; label: string; desc: string }[]).map(item => (
                 <div key={item.key} className="bg-white/5 border border-white/10 rounded-xl p-4 flex gap-4 items-start">
                   <div className="bg-henry-accent/20 border border-henry-accent/40 rounded-lg px-2.5 py-1.5 text-henry-accent font-mono font-bold text-sm flex-shrink-0 min-w-[52px] text-center">{item.key}</div>
@@ -365,11 +412,11 @@ export default function OnboardingWizard({ onComplete }: Props) {
               ))}
             </div>
 
-            {/* ⌥Space capture demo */}
+            {/* Capture shortcut demo */}
             <div className="bg-henry-accent/8 border border-henry-accent/20 rounded-xl p-4 space-y-2">
-              <p className="text-henry-accent text-xs font-bold uppercase tracking-wider">⌥ Space tip — try this right now</p>
+              <p className="text-henry-accent text-xs font-bold uppercase tracking-wider">{captureShortcutLabel} tip — try this right now</p>
               <p className="text-white/70 text-sm leading-relaxed">
-                Find any text on your screen — an email, a website, anything. <b className="text-white">Select it</b>, then press <b className="text-white">Option + Space</b>. Henry opens with that text already loaded. Ask him to summarize, reply, explain, or act on it.
+                Find any text on your screen — an email, a website, anything. <b className="text-white">Select it</b>, then press <b className="text-white">{captureShortcutLabel}</b>. Henry opens with that text already loaded. Ask him to summarize, reply, explain, or act on it.
               </p>
             </div>
 
@@ -387,7 +434,7 @@ export default function OnboardingWizard({ onComplete }: Props) {
 
 
         {/* ════════════════ ACCESSIBILITY ════════════════ */}
-        {step === 'accessibility' && (
+        {step === 'accessibility' && isMacOS() && (
           <div className="space-y-5">
             <div className="text-center">
               <p className="text-5xl mb-3">🔐</p>
@@ -444,7 +491,7 @@ export default function OnboardingWizard({ onComplete }: Props) {
 
 
         {/* ════════════════ SCREEN RECORDING ════════════════ */}
-        {step === 'screen' && (
+        {step === 'screen' && isMacOS() && (
           <div className="space-y-5">
             <div className="text-center">
               <p className="text-5xl mb-3">📸</p>
@@ -809,7 +856,7 @@ export default function OnboardingWizard({ onComplete }: Props) {
               {/* Backup reminder */}
               <div className="bg-white/3 border border-white/8 rounded-xl p-3">
                 <p className="text-white/50 text-[11px] leading-relaxed">
-                  <b className="text-white/70">Back up your data:</b> All of Henry's data — memories, tasks, journal, health, finance — lives in a SQLite database on your Mac. Go to <b className="text-white/70">Settings → General → Export Backup</b> to save a zip to your Desktop anytime.
+                  <b className="text-white/70">Back up your data:</b> All of Henry's data — memories, tasks, journal, health, finance — lives in a SQLite database on your {isMacOS() ? 'Mac' : 'computer'}. Go to <b className="text-white/70">Settings → General → Export Backup</b> to save a zip to your Desktop anytime.
                 </p>
               </div>
             </div>
@@ -828,11 +875,11 @@ export default function OnboardingWizard({ onComplete }: Props) {
               <p className="text-white/55 text-sm mt-2">Here's your setup summary and first steps.</p>
             </div>
 
-            {/* Status summary */}
+            {/* Status summary — platform-aware labels */}
             <div className="bg-white/5 border border-white/10 rounded-2xl p-4 space-y-2">
               {([
-                ['🔐', 'Accessibility', acc === true],
-                ['📸', 'Screen Recording', scr === true],
+                ['🔐', isMacOS() ? 'Accessibility' : 'Computer Control', isMacOS() ? acc === true : true],
+                ['📸', isMacOS() ? 'Screen Recording' : 'Screen Capture', isMacOS() ? scr === true : true],
                 ['⚡', 'Groq AI key (unlimited)', hasAi],
                 ['📱', 'Phone companion paired', linkedDevices.length > 0],
               ] as [string, string, boolean][]).map(([icon, label, ok]) => (
@@ -854,10 +901,10 @@ export default function OnboardingWizard({ onComplete }: Props) {
               <div className="space-y-2.5">
                 {([
                   ['💬', '"What should I focus on today?"', 'Ask Henry for a daily plan'],
-                  ['⌥⎵', 'Select text → press ⌥Space', 'Capture anything — emails, articles, notes'],
+                  [isMacOS() ? '⌥⎵' : 'Alt+C', 'Select text → press ' + (isMacOS() ? '⌥Space' : 'Alt+C'), 'Capture anything — emails, articles, notes'],
                   ['📔', 'Open the Journal panel', 'Write your first entry. Try the AI reflection button'],
                   ['🧠', '"Remember I prefer concise answers"', 'Teach Henry something about you'],
-                  ['📱', 'Open the companion on your phone', 'Tap Tasks, add something, see it on your Mac'],
+                  ['📱', 'Open the companion on your phone', 'Tap Tasks, add something, see it on your ' + (isMacOS() ? 'Mac' : 'computer')],
                   ['⚙️', 'Settings → AI Providers', 'Add Cerebras for a rate-limit fallback (free)'],
                 ] as [string, string, string][]).map(([icon, action, note]) => (
                   <div key={action} className="flex items-start gap-3">
@@ -871,12 +918,13 @@ export default function OnboardingWizard({ onComplete }: Props) {
               </div>
             </div>
 
-            {/* Skipped-step reminders */}
+            {/* Skipped-step reminders — platform-aware */}
             {(!acc || !scr || !hasAi || linkedDevices.length === 0) && (
               <div className="bg-yellow-500/8 border border-yellow-500/20 rounded-xl p-3 space-y-1">
                 <p className="text-yellow-400 text-[10px] uppercase tracking-wider font-bold">Complete these anytime</p>
-                {!acc && <p className="text-white/60 text-xs">• Accessibility — Settings → Privacy → Accessibility → add Henry AI</p>}
-                {!scr && <p className="text-white/60 text-xs">• Screen Recording — Settings → Privacy → Screen & System Audio Recording</p>}
+                {isMacOS() && !acc && <p className="text-white/60 text-xs">• Accessibility — Settings → Privacy → Accessibility → add Henry AI</p>}
+                {isMacOS() && !scr && <p className="text-white/60 text-xs">• Screen Recording — Settings → Privacy → Screen & System Audio Recording</p>}
+                {!isMacOS() && <p className="text-white/60 text-xs">• Computer Control — install xdotool/wmctrl (keyboard/mouse) and xclip (clipboard)</p>}
                 {!hasAi && <p className="text-white/60 text-xs">• Groq key — console.groq.com/keys → Henry Settings → AI Providers</p>}
                 {linkedDevices.length === 0 && <p className="text-white/60 text-xs">• Phone app — open the companion URL from Settings → Companion in Safari</p>}
               </div>

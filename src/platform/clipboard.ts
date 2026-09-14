@@ -4,7 +4,21 @@
  */
 
 import { clipboard } from 'electron';
-import { platform } from 'os';
+
+/**
+ * Get the platform string.
+ * In the renderer, use the preload-exposed process.platform.
+ * In the main process, use os.platform() directly.
+ */
+let platformString: string;
+if (typeof window !== 'undefined') {
+  // Renderer: use the value exposed by the preload contextBridge
+  platformString = window.henryAPI.platform();
+} else {
+  // Main process: use Node's os.platform directly
+  const os = require('os');
+  platformString = os.platform();
+}
 
 /**
  * Reads text from the clipboard
@@ -84,7 +98,7 @@ export async function checkLinuxClipboardUtilities(): Promise<{
     electron: true
   };
 
-  if (platform() !== 'linux') {
+  if (platformString !== 'linux') {
     return result;
   }
 

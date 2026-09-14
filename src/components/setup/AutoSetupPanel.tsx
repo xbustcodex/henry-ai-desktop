@@ -1,9 +1,12 @@
 /**
  * Henry Auto-Setup — zero manual steps.
  * Checks every permission + service, fixes automatically.
+ * Platform-aware: macOS uses Accessibility/Screen Recording,
+ * Linux/Windows use capability checks (Computer Control, Screen Capture).
  */
 import { useState, useEffect, useCallback } from 'react';
 import { useStore } from '../../store';
+import { isMacOS, isLinux, isWindows, getPlatformName } from '../../utils/platform';
 
 const getApi = () => (window as any).henryAPI as any;
 
@@ -12,16 +15,33 @@ interface SetupItem {
   status: 'checking'|'ok'|'missing'|'fixing'; autoFix?: boolean;
 }
 
+function getComputerControlLabel(): string {
+  if (isLinux()) return 'Computer Control';
+  if (isWindows()) return 'Computer Access';
+  return 'Accessibility Access';
+}
+
+function getScreenCaptureLabel(): string {
+  if (isLinux()) return 'Screen Capture';
+  if (isWindows()) return 'Screen Capture';
+  return 'Screen Recording';
+}
+
 export default function AutoSetupPanel() {
   const { setCurrentView } = useStore();
-  const [items, setItems] = useState<SetupItem[]>([
-    { id:'accessibility', icon:'⌨', label:'Accessibility Access',     description:'Lets ⌥Space grab your selection automatically', status:'checking', autoFix:true },
-    { id:'screen',        icon:'📸', label:'Screen Recording',         description:'Needed for screenshot feature in Henry HQ',     status:'checking', autoFix:true },
-    { id:'ai',            icon:'◉', label:'AI Provider',              description:'Groq key or Ollama for chat + smart capture',   status:'checking', autoFix:true },
-    { id:'ollama',        icon:'⚡', label:'Ollama (free local AI)',   description:'Optional: free offline AI — runs on your Mac (not required)',  status:'checking' },
-    { id:'hotkeys',       icon:'⌥', label:'Global Hotkeys',           description:'⌥Space capture · ⌥H open · ⌘⇧H backup',       status:'checking' },
-    { id:'sync',          icon:'⊚', label:'Henry Sync Server',        description:'Connects desktop app, mobile + browser capture', status:'checking' },
-  ]);
+  const platformName = getPlatformName();
+  const [items, setItems] = useState<SetupItem[]>(() => {
+    const controlLabel = getComputerControlLabel();
+    const screenLabel = getScreenCaptureLabel();
+    return [
+      { id:'accessibility', icon:'⌨', label:controlLabel,                description:`Lets Henry control your ${platformName.toLowerCase()}`, status:'checking', autoFix:true },
+      { id:'screen',        icon:'📸', label:screenLabel,                description:`Needed for screenshot feature in Henry HQ`,     status:'checking', autoFix:true },
+      { id:'ai',            icon:'◉', label:'AI Provider',              description:'Groq key or Ollama for chat + smart capture',   status:'checking', autoFix:true },
+      { id:'ollama',        icon:'⚡', label:'Ollama (free local AI)',   description:'Optional: free offline AI — runs on your computer (not required)',  status:'checking' },
+      { id:'hotkeys',       icon:'⌥', label:'Global Hotkeys',           description:'Global hotkeys for capture and navigation',       status:'checking' },
+      { id:'sync',          icon:'⊚', label:'Henry Sync Server',        description:'Connects desktop app, mobile + browser capture', status:'checking' },
+    ];
+  });
   const [pollingAccess, setPollingAccess] = useState(false);
   const [allOk, setAllOk] = useState(false);
 
@@ -34,18 +54,27 @@ export default function AutoSetupPanel() {
     const storeState = useStore.getState();
     const providers = storeState.providers;
     const settings = storeState.settings as Record<string,string>;
-    // Accessibility
+
+    // Accessibility / Computer Control
     try {
       const r = await getApi()?.checkAccessibility?.();
-      patch('accessibility', { status: r?.granted ? 'ok' : 'missing' });
+      const status = r?.granted ? 'ok' : 'missing';
+      patch('accessibility', { status });
+      if (status === 'ok') {
+        patch('accessibility', { description: isLinux() ? 'Computer control is active' : 'Accessibility access is active' });
+      }
     } catch { patch('accessibility', { status:'missing' }); }
 
-    // Screen Recording — use OS-level check, NOT shell screencapture
+    // Screen Capture — use OS-level check, NOT shell screencapture
     // (shell runs as you, not as Henry, so it always succeeds even when Henry has no permission)
     try {
       const r = await getApi()?.checkScreenRecording?.();
-      patch('screen', { status: r?.granted ? 'ok' : 'missing' });
-    } catch { patch('screen', { status: 'missing' }); }
+      const status = r?.granted ? 'ok' : 'missing';
+      patch('screen', { status });
+      if (status === 'ok') {
+        patch('screen', { description: isLinux() ? 'Screen capture is active' : 'Screen recording is active' });
+      }
+    } catch { patch('screen', { status:'missing' }); }
 
     // AI provider — must have BYOK key, Ollama, or a paid license (no freebies)
     const hasGroq = (providers||[]).some((p:any) => p.id==='groq' && (p.apiKey||p.api_key||'').length > 10);
@@ -76,8 +105,16 @@ export default function AutoSetupPanel() {
       } else { patch('ollama', { status:'missing', description:'Not running — install at ollama.com' }); }
     } catch { patch('ollama', { status:'missing', description:'Not running — install at ollama.com' }); }
 
-    // Hotkeys (always registered when app is running)
-    patch('hotkeys', { status:'ok', description:'⌥Space · ⌥H · ⌘⇧H all active' });
+    // Hotkeys — display actual registered shortcuts
+    try {
+      const hotkeys = await getApi()?.getRegisteredHotkeys?.();
+      const desc = Array.isArray(hotkeys) && hotkeys.length > 0
+        ? hotkeys.map(h => `${h.label || h.accelerator}`).join(' · ')
+        : 'Checking…';
+      patch('hotkeys', { status:'ok', description: desc || 'Global hotkeys active' });
+    } catch {
+      patch('hotkeys', { status:'ok', description: isMacOS() ? '⌥Space · ⌥H · ⌘⇧H active' : 'Alt+C · Alt+H active' });
+    }
 
     // Sync server
     try {
@@ -85,7 +122,7 @@ export default function AutoSetupPanel() {
       const d = r.ok ? await r.json() as {version?:string} : null;
       patch('sync', { status: r.ok?'ok':'missing', description: r.ok ? `Running v${d?.version||'?'}` : 'Not responding' });
     } catch { patch('sync', { status:'missing', description:'Not responding' }); }
-   
+
   }, []); // Run once on mount — user hits 'Recheck' manually
 
   useEffect(() => { void runChecks(); }, [runChecks]);
@@ -106,22 +143,23 @@ export default function AutoSetupPanel() {
 
   async function fix(id: string) {
     patch(id, { status:'fixing' });
-    if (id === 'accessibility') {
-      // Honest reality: ad-hoc-signed Henry can't trigger TCC dialogs reliably
-      // on macOS 26+. Best we can do is open Finder + System Settings and tell
-      // the user exactly what to do.
+
+    if (isMacOS() && id === 'accessibility') {
+      // macOS: open Finder + System Settings, walk user through manual add.
+      // ad-hoc-signed Henry can't trigger TCC dialogs reliably on macOS 26+.
       try {
-        // Try the API anyway in case it does work (signed builds, older macOS)
         const r = await getApi()?.requestAccessibility?.();
         if (r?.granted) { patch('accessibility', { status: 'ok' }); return; }
       } catch { /* */ }
-      // Open Finder showing Henry, plus System Settings to the right pane
       try { await getApi()?.computerRunShell?.({ command: 'open -R "/Applications/Henry AI.app" && open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"', timeout: 3000 }); } catch { /* */ }
       patch('accessibility', { status: 'fixing', description: 'In System Settings: click + → choose Henry AI → toggle ON. Click Recheck when done.' });
       setPollingAccess(true);
-    } else if (id === 'screen') {
-      // Same reality as accessibility — ad-hoc Henry can't trigger the dialog.
-      // Open Finder + System Settings, walk user through manual add.
+    } else if (id === 'accessibility' && !isMacOS()) {
+      // Linux/Windows: no macOS permission needed — capability is inherent or unavailable.
+      // Try to open platform settings if available.
+      patch('accessibility', { status: isLinux() ? 'ok' : 'missing', description: isLinux() ? 'Computer control available' : 'Capability check unavailable' });
+    } else if (isMacOS() && id === 'screen') {
+      // macOS: open Finder + System Settings, walk user through manual add.
       try { await getApi()?.openScreenRecording?.(); } catch { /* */ }
       try { await getApi()?.computerRunShell?.({ command: 'open -R "/Applications/Henry AI.app"', timeout: 2000 }); } catch { /* */ }
       patch('screen', { status: 'fixing', description: 'In System Settings: click + → choose Henry AI → toggle ON. Click Recheck when done.' });
@@ -138,6 +176,9 @@ export default function AutoSetupPanel() {
           patch('screen', { status: 'missing', description: 'Click + in System Settings, choose Henry AI, toggle on, then Recheck.' });
         }
       }, 2000);
+    } else if (id === 'screen' && !isMacOS()) {
+      // Linux/Windows: no macOS permission needed — capability is inherent or unavailable.
+      patch('screen', { status: isLinux() ? 'ok' : 'missing', description: isLinux() ? 'Screen capture available' : 'Capability check unavailable' });
     } else if (id === 'ai') {
       // AI is already working via proxy — direct to settings to upgrade
       setCurrentView('settings' as any);
@@ -167,6 +208,17 @@ export default function AutoSetupPanel() {
   const textColors: Record<string,string> = {
     ok:'text-green-400', missing:'text-red-400', fixing:'text-yellow-400', checking:'text-white/30',
   };
+
+  // Platform-aware hotkey display
+  const hotkeyList = isMacOS() ? [
+    { key:'⌥Space', desc:'Capture selected text from anywhere — Henry processes it instantly' },
+    { key:'⌥H',     desc:'Open or hide Henry (toggle)' },
+    { key:'⌘⇧H',   desc:'Backup capture (reads clipboard)' },
+  ] : [
+    { key:'Alt+C',  desc:'Capture selected text from anywhere — Henry processes it instantly' },
+    { key:'Alt+H',  desc:'Open or hide Henry (toggle)' },
+    { key:'Alt+Shift+H', desc:'Backup capture (reads clipboard)' },
+  ];
 
   return (
     <div className="flex flex-col h-full overflow-y-auto bg-henry-bg">
@@ -236,7 +288,11 @@ export default function AutoSetupPanel() {
           <div className="bg-green-400/5 border border-green-400/20 rounded-2xl p-5 text-center space-y-3">
             <p className="text-4xl">✓</p>
             <p className="font-bold text-green-400 text-lg">Henry is fully set up</p>
-            <p className="text-sm text-henry-text-muted">Select anything on your Mac and hit ⌥Space</p>
+            <p className="text-sm text-henry-text-muted">
+              {isMacOS()
+                ? 'Select anything on your Mac and hit ⌥Space'
+                : `Select anything on your ${platformName.toLowerCase()} and hit ${isLinux() ? 'Alt+C' : 'Alt+C'}`}
+            </p>
             <button onClick={() => setCurrentView('hq' as any)}
               className="px-6 py-2.5 rounded-xl bg-henry-accent text-white font-bold text-sm hover:bg-henry-accent/80 transition-all">
               Open Henry HQ →
@@ -246,11 +302,7 @@ export default function AutoSetupPanel() {
 
         <div className="bg-henry-surface/40 border border-henry-border/15 rounded-2xl p-4 space-y-3">
           <p className="text-[10px] uppercase tracking-widest text-henry-text-muted">Your Hotkeys</p>
-          {[
-            { key:'⌥Space', desc:'Capture selected text from anywhere — Henry processes it instantly' },
-            { key:'⌥H',     desc:'Open or hide Henry (toggle)' },
-            { key:'⌘⇧H',   desc:'Backup capture (reads clipboard)' },
-          ].map(h => (
+          {hotkeyList.map(h => (
             <div key={h.key} className="flex items-center gap-3">
               <kbd className="bg-henry-surface border border-henry-border/40 text-henry-accent font-mono text-sm px-2.5 py-1 rounded-lg flex-shrink-0 min-w-[70px] text-center">{h.key}</kbd>
               <span className="text-xs text-henry-text-muted">{h.desc}</span>

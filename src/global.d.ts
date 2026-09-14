@@ -509,6 +509,7 @@ declare global {
     createConversation: (title: string) => Promise<Conversation>;
     updateConversation: (id: string, title: string) => Promise<boolean>;
     deleteConversation: (id: string) => Promise<boolean>;
+    platform: () => string;
 
     getMessages: (conversationId: string) => Promise<Message[]>;
     saveMessage: (message: Message) => Promise<boolean>;

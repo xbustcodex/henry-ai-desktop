@@ -42,6 +42,8 @@ contextBridge.exposeInMainWorld('henryAPI', {
   // Signal flag — tells webMock that real Electron IPC is available
   // Must be a function — contextBridge strips non-function properties in sandbox mode
   __isElectron: () => true,
+  // ── Platform ────────────────────────────────────────────
+  platform: () => process.platform,
   // ── Settings ──────────────────────────────────────────────
   getSettings: () => ipcRenderer.invoke('settings:getAll'),
   saveSetting: (key: string, value: string) => ipcRenderer.invoke('settings:save', { key, value }),
@@ -300,6 +302,7 @@ contextBridge.exposeInMainWorld('henryAPI', {
   checkScreenRecording: () => ipcRenderer.invoke('henry:checkScreenRecording'),
   openPermissions: () => ipcRenderer.invoke('henry:openPermissions'),
   openScreenRecording: () => ipcRenderer.invoke('henry:openScreenRecording'),
+  getRegisteredHotkeys: () => ipcRenderer.invoke('henry:getRegisteredHotkeys'),
   onPermissionsStatus: (cb: (status: { accessibility: boolean; screenRecording: boolean }) => void) => {
     const handler = (_: IpcRendererEvent, status: { accessibility: boolean; screenRecording: boolean }) => cb(status);
     ipcRenderer.on('henry:permissions:status', handler);

@@ -23,9 +23,16 @@ export interface ScreenshotResult {
 export async function captureScreenshot(region?: { x: number; y: number; w: number; h: number }): Promise<ScreenshotResult> {
   const { spawn } = await import('child_process');
   const { join } = await import('path');
-  const os = await import('os');
-  const { tmpdir } = os;
-  const platformString = os.platform(); // Call the function to get the string
+  const { tmpdir } = require('os');
+  let platformString: string;
+  if (typeof window !== 'undefined') {
+    // Renderer: use the value exposed by the preload contextBridge
+    platformString = window.henryAPI.platform();
+  } else {
+    // Main process: use Node's os.platform directly
+    const os = require('os');
+    platformString = os.platform();
+  }
   const { existsSync, unlinkSync } = await import('fs');
 
   const tmpFile = join(tmpdir(), `henry_screenshot_${Date.now()}.png`);

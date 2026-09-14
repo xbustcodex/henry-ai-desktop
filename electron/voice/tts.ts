@@ -38,15 +38,6 @@ async function envelope<T>(fn: () => T | Promise<T>): Promise<Envelope<T>> {
 const DEFAULT_ELEVEN_VOICE = '21m00Tcm4TlvDq8ikWAM';
 const ELEVEN_MODEL = 'eleven_turbo_v2_5';
 
-export interface TtsSpeakResult {
-  engine: TtsActiveEngine | 'none';
-  spoke?: boolean;
-  /** ElevenLabs mp3 bytes for renderer-side playback. */
-  audio?: Buffer;
-  /** True when ElevenLabs was tried but the local voice spoke instead. */
-  fellBack?: boolean;
-}
-
 // ── Settings / key helpers ──────────────────────────────────────────────────
 
 function readSetting(db: Database.Database, key: string): string | null {

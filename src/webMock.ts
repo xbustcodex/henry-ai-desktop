@@ -10,6 +10,11 @@ function getStore<T>(key: string, defaultValue: T): T {
   }
 }
 
+let platformString: string;
+if (typeof window !== "undefined") {
+  // Renderer: use the value exposed by the preload contextBridge
+  platformString = window.henryAPI.platform();
+}
 function setStore<T>(key: string, value: T): void {
   localStorage.setItem(key, JSON.stringify(value));
 }
@@ -269,6 +274,7 @@ const henryAPI: Window['henryAPI'] = {
     return true;
   },
 
+  platform: () => platformString,
   getConversations: async () => {
     return getStore('henry:conversations', []);
   },

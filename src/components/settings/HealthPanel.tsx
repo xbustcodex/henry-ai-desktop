@@ -16,6 +16,12 @@ interface DiagnosticReport {
   summary: { ok: number; fixed: number; failed: number; warnings: number };
 }
 
+interface RegisteredHotkey {
+  accelerator: string;
+  label: string;
+  description: string;
+}
+
 const getApi = () => (window as any).henryAPI as any;
 
 const STATUS_ICON: Record<string, string> = {
@@ -42,6 +48,7 @@ export default function HealthPanel() {
   const [report, setReport] = useState<DiagnosticReport | null>(null);
   const [running, setRunning] = useState(false);
   const [lastRun, setLastRun] = useState<string | null>(null);
+  const [hotkeys, setHotkeys] = useState<RegisteredHotkey[]>([]);
 
   useEffect(() => {
     // Load last report on mount
@@ -50,6 +57,14 @@ export default function HealthPanel() {
         const last = await getApi()?.invoke('henry:diagnostic:last');
         if (last) { setReport(last); setLastRun(last.timestamp); }
       } catch { /* no report yet */ }
+    })();
+
+    // Load registered hotkeys
+    void (async () => {
+      try {
+        const hk = await getApi()?.getRegisteredHotkeys?.();
+        if (hk) setHotkeys(hk);
+      } catch { /* ignore */ }
     })();
 
     // Listen for background diagnostic completion
@@ -126,6 +141,22 @@ export default function HealthPanel() {
               </div>
             ))}
           </div>
+
+          {/* Global Hotkeys — shows actually registered shortcuts */}
+          {hotkeys.length > 0 && (
+            <div className="bg-henry-surface rounded-xl border border-henry-border/20 p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-henry-text-muted mb-3">Global Hotkeys</p>
+              <div className="space-y-2">
+                {hotkeys.map((hk, i) => (
+                  <div key={i} className="flex items-center gap-3 p-2 rounded-lg bg-henry-bg/50 border border-henry-border/10">
+                    <span className="font-mono text-xs bg-henry-accent/20 border border-henry-accent/30 text-henry-accent px-2 py-0.5 rounded">{hk.label}</span>
+                    <span className="text-sm text-henry-text">{hk.description}</span>
+                    <span className="text-[10px] text-henry-text-muted font-mono ml-auto">{hk.accelerator}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Check groups */}
           {(['required', 'recommended', 'optional'] as const).map(cat => {

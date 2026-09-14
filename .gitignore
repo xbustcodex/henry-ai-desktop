@@ -73,3 +73,8 @@ _backups/
 # Python bytecode (session_store.py bridge)
 __pycache__/
 *.pyc
+
+# Local editor/repair backups
+*.bak
+*.backup
+*.backup[0-9]*

@@ -31,11 +31,12 @@ function getCtx(sessionId: string): {role:string;content:string}[] {
  */
 
 import http from 'http';
+import path from 'path';
 import { IS_MAC, IS_WIN, IS_LINUX, tryExec, desktopPath, downloadPath, revealFile, setVolumeCmd, getVolumeCmd, muteCmd, unmuteCmd, setBrightnessCmd, getBrightnessCmd, sleepCmd, lockScreenCmd, restartCmd, shutdownCmd, getBatteryInfo, getDiskInfo, listPrintersCmd, getDefaultPrinterCmd, printFileCmd, screenshotCmd, listAppsCmd, quitAppCmd, getOsVersion, getChipInfo, getHostname, getStartupItemsCmd, getCloudflaredPath } from './platformCommands';
 import crypto from 'crypto';
 import os from 'os';
 import fs from 'fs';
-import { ipcMain, BrowserWindow, webContents } from 'electron';
+import { ipcMain, BrowserWindow, webContents, app } from 'electron';
 
 /* === henry-remote-control v1 === */
 import {
@@ -589,11 +590,11 @@ async function handleRequest(
   }
 
   const url = new URL(req.url ?? '/', `http://localhost:${currentPort}`);
-  const path = url.pathname;
+  const urlPath = url.pathname;
   const urlToken = url.searchParams.get('token') || '';
 
   // ── Mobile Companion UI ──────────────────────────────────────────────
-  if ((path === '/' || path === '/companion') && req.method === 'GET') {
+  if ((urlPath === '/' || urlPath === '/companion') && req.method === 'GET') {
     const macName = os.hostname().replace('.local', '');
     const initToken = urlToken || '';
 
@@ -604,7 +605,7 @@ async function handleRequest(
   }
   /* === henry-remote-control v1 === */
   // ── Remote control: pairing ─────────────────────────────────────────────
-  if (path === '/sync/pair' && req.method === 'POST') {
+  if (urlPath === '/sync/pair' && req.method === 'POST') {
     try {
       const body: any = await readBody(req);
       const ip = (req.socket.remoteAddress || 'unknown').replace('::ffff:', '');
@@ -632,7 +633,7 @@ async function handleRequest(
   // check, which is bypassable by cloudflare-tunneled requests that arrive
   // at 127.0.0.1. Use the central _denyDangerous helper to also reject any
   // request carrying cf-connecting-ip / x-forwarded-for / cf-ray.
-  if (path === '/sync/pairing-info' && req.method === 'GET') {
+  if (urlPath === '/sync/pairing-info' && req.method === 'GET') {
     if (_denyDangerous(req, res, 'loopback')) return;
     const pin = authCurrentPin();
     const active = remoteActive();
@@ -648,7 +649,7 @@ async function handleRequest(
     return;
   }
 
-  if (path === '/sync/pin/rotate' && req.method === 'POST') {
+  if (urlPath === '/sync/pin/rotate' && req.method === 'POST') {
     if (_denyDangerous(req, res, 'loopback')) return;
     const pin = authRotatePin();
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -656,7 +657,7 @@ async function handleRequest(
     return;
   }
 
-  if (path === '/sync/unattended' && req.method === 'POST') {
+  if (urlPath === '/sync/unattended' && req.method === 'POST') {
     if (_denyDangerous(req, res, 'loopback')) return;
     const body: any = await readBody(req);
     const ok = authSetUnattended(body?.password ?? null);
@@ -665,9 +666,9 @@ async function handleRequest(
     return;
   }
 
-  if (path && path.startsWith('/sync/unpair/') && req.method === 'POST') {
+  if (urlPath && urlPath.startsWith('/sync/unpair/') && req.method === 'POST') {
     if (_denyDangerous(req, res, 'loopback')) return;
-    const id = decodeURIComponent(path.replace('/sync/unpair/', ''));
+    const id = decodeURIComponent(urlPath.replace('/sync/unpair/', ''));
     authUnpair(id);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true }));
@@ -675,20 +676,20 @@ async function handleRequest(
   }
 
   // ── Remote control: HTML pages ──────────────────────────────────────────
-  if (path === '/companion/pair' && req.method === 'GET') {
+  if (urlPath === '/companion/pair' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(REMOTE_PAIR_HTML);
     return;
   }
 
-  if (path === '/companion/control' && req.method === 'GET') {
+  if (urlPath === '/companion/control' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(REMOTE_CONTROL_HTML);
     return;
   }
 
   // ── Remote control: session lifecycle ───────────────────────────────────
-  if (path === '/companion/session/request' && req.method === 'POST') {
+  if (urlPath === '/companion/session/request' && req.method === 'POST') {
     const sess = authVerify(req.headers.authorization as string | undefined);
     if (!sess) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -706,7 +707,7 @@ async function handleRequest(
     return;
   }
 
-  if (path === '/companion/session/end' && req.method === 'POST') {
+  if (urlPath === '/companion/session/end' && req.method === 'POST') {
     const sess = authVerify(req.headers.authorization as string | undefined);
     if (!sess) { res.writeHead(401); res.end(); return; }
     if (remoteActiveFor(sess.deviceId)) remoteEnd('user_ended');
@@ -717,24 +718,24 @@ async function handleRequest(
 
   /* === henry-remote-control v2-pencil === */
   // ── v2 multi-display + pencil input ──────────────────────────────────
-  if (path === '/companion/displays' && req.method === 'POST') {
+  if (urlPath === '/companion/displays' && req.method === 'POST') {
     await remoteV2Displays(req, res); return;
   }
-  if (path === '/companion/v2/click' && req.method === 'POST') {
+  if (urlPath === '/companion/v2/click' && req.method === 'POST') {
     await remoteV2Click(req, res); return;
   }
-  if (path === '/companion/v2/move' && req.method === 'POST') {
+  if (urlPath === '/companion/v2/move' && req.method === 'POST') {
     await remoteV2Move(req, res); return;
   }
-  if (path === '/companion/v2/drag' && req.method === 'POST') {
+  if (urlPath === '/companion/v2/drag' && req.method === 'POST') {
     await remoteV2Drag(req, res); return;
   }
-  if (path === '/companion/v2/scroll' && req.method === 'POST') {
+  if (urlPath === '/companion/v2/scroll' && req.method === 'POST') {
     await remoteV2Scroll(req, res); return;
   }
   /* === end v2-pencil === */
 
-  if (path === '/companion/session/ping' && req.method === 'POST') {
+  if (urlPath === '/companion/session/ping' && req.method === 'POST') {
     const sess = authVerify(req.headers.authorization as string | undefined);
     if (!sess) { res.writeHead(401); res.end(); return; }
     const active = remoteActiveFor(sess.deviceId);
@@ -755,7 +756,7 @@ async function handleRequest(
   if (isInternal && req.method === 'POST') {
     if (_denyDangerous(req, res, 'loopback')) return;
 
-    if (path === '/computer/shell') {
+    if (urlPath === '/computer/shell') {
       const body = await readBody<{command: string}>(req);
       if (!body) { jsonResponse(res, 400, {success: false, error: 'Bad request'}); return; }
       try {
@@ -776,7 +777,7 @@ async function handleRequest(
       }
       return;
     }
-    if (path === '/computer/newfolder') {
+    if (urlPath === '/computer/newfolder') {
       const body = await readBody<{path: string}>(req);
       if (!body) { jsonResponse(res, 400, {ok: false, error: 'Bad request'}); return; }
       try {
@@ -792,7 +793,7 @@ async function handleRequest(
       }
       return;
     }
-    if (path === '/computer/openapp') {
+    if (urlPath === '/computer/openapp') {
       const body = await readBody<{name: string}>(req);
       if (!body) { jsonResponse(res, 400, {ok: false, error: 'Bad request'}); return; }
       try {
@@ -805,7 +806,7 @@ async function handleRequest(
       }
       return;
     }
-    if (path === '/computer/screenshot') {
+    if (urlPath === '/computer/screenshot') {
       try {
         const tmpFile = os.tmpdir() + '/henry_sc_' + Date.now() + '.png';
         const { exec } = await import('child_process');
@@ -820,7 +821,7 @@ async function handleRequest(
       }
       return;
     }
-    if (path === '/computer/osascript') {
+    if (urlPath === '/computer/osascript') {
       const body = await readBody<{script: string}>(req);
       if (!body || typeof body.script !== 'string') { jsonResponse(res, 400, {ok: false, error: 'Bad request'}); return; }
       try {
@@ -850,11 +851,11 @@ async function handleRequest(
   // POST /sync/generate-pair-internal and mint itself a valid pair token.
   if (isInternal) {
     if (_denyDangerous(req, res, 'loopback')) return;
-    if (path === '/sync/start-internal') {
+    if (urlPath === '/sync/start-internal') {
       jsonResponse(res, 200, { ok: serverRunning, port: currentPort });
       return;
     }
-    if (path === '/sync/state-internal') {
+    if (urlPath === '/sync/state-internal') {
       jsonResponse(res, 200, {
         running: serverRunning,
         port: currentPort,
@@ -867,25 +868,25 @@ async function handleRequest(
       });
       return;
     }
-    if (path === '/sync/generate-pair-internal' && req.method === 'POST') {
+    if (urlPath === '/sync/generate-pair-internal' && req.method === 'POST') {
       const token = Math.floor(100000 + Math.random() * 900000).toString();
       pairToken = token;
       pairTokenExpiry = Date.now() + 10 * 60 * 1000; // 10 min
       jsonResponse(res, 200, { token, expiry: pairTokenExpiry });
       return;
     }
-    if (path === '/sync/revoke-pair-internal' && req.method === 'POST') {
+    if (urlPath === '/sync/revoke-pair-internal' && req.method === 'POST') {
       revokePairToken();
       jsonResponse(res, 200, { ok: true });
       return;
     }
-    if (path === '/sync/unlink-device-internal' && req.method === 'POST') {
+    if (urlPath === '/sync/unlink-device-internal' && req.method === 'POST') {
       const body = await readBody<{id: string}>(req);
       if (body?.id) unlinkDevice(body.id);
       jsonResponse(res, 200, { ok: true });
       return;
     }
-    if (path === '/sync/get-tunnel-url') {
+    if (urlPath === '/sync/get-tunnel-url') {
       jsonResponse(res, 200, { url: tunnelUrl });
       return;
     }
@@ -893,7 +894,7 @@ async function handleRequest(
 
   // ── Health ────────────────────────────────────────────────────────────
   // Tunnel URL endpoint — returns current tunnel URL if active
-  if (path === '/sync/tunnel-url' && req.method === 'GET') {
+  if (urlPath === '/sync/tunnel-url' && req.method === 'GET') {
     jsonResponse(res, 200, { url: tunnelUrl || null });
     return;
   }
@@ -904,7 +905,7 @@ async function handleRequest(
   // demand. Now restricted to private LAN (and explicitly NOT tunnel).
   // For LAN snooping resistance, anything beyond same-WiFi requires a
   // paired-device flow (use /companion/control + /ws/screen instead).
-  if (path === '/screen' && req.method === 'GET') {
+  if (urlPath === '/screen' && req.method === 'GET') {
     if (_denyDangerous(req, res, 'lan')) return;
     try {
       const { execSync } = await import('child_process') as typeof import('child_process');
@@ -938,12 +939,12 @@ async function handleRequest(
   }
 
   // ── Companion remote control endpoints ───────────────────────────────────────
-  if (path.startsWith('/companion/') && req.method === 'OPTIONS') {
+  if (urlPath.startsWith('/companion/') && req.method === 'OPTIONS') {
     res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' });
     res.end(); return;
   }
 
-  if (path.startsWith('/companion/') && ['tap','scroll','key','type'].some(k => path === '/companion/' + k) && req.method === 'POST') {
+  if (urlPath.startsWith('/companion/') && ['tap','scroll','key','type'].some(k => urlPath === '/companion/' + k) && req.method === 'POST') {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Content-Type', 'application/json');
     // R2-Fix 9: these v1 endpoints previously had NO auth. Any device on the LAN
@@ -980,7 +981,7 @@ async function handleRequest(
       const bodyC = await readBody<Record<string,unknown>>(req);
       if (!bodyC) { res.writeHead(400); res.end('{}'); return; }
 
-      if (path === '/companion/tap') {
+      if (urlPath === '/companion/tap') {
         const w = (global as any).__screenW||1440; const h = (global as any).__screenH||900;
         const px = Math.round(Number(bodyC.x||0) * w);
         const py = Math.round(Number(bodyC.y||0) * h);
@@ -1002,7 +1003,7 @@ async function handleRequest(
         }
         res.writeHead(200); res.end(JSON.stringify({ ok:true, px, py }));
 
-      } else if (path === '/companion/scroll') {
+      } else if (urlPath === '/companion/scroll') {
         const sw = (global as any).__screenW||1440; const sh = (global as any).__screenH||900;
         const spx = Math.round(Number(bodyC.x||0.5) * sw);
         const spy = Math.round(Number(bodyC.y||0.5) * sh);
@@ -1023,7 +1024,7 @@ async function handleRequest(
         try { _esc6('swift ' + _stmp, { shell:'/bin/bash', timeout:5000 }); } finally { try { _usf6(_stmp); } catch {} }
         res.writeHead(200); res.end(JSON.stringify({ ok:true }));
 
-      } else if (path === '/companion/key') {
+      } else if (urlPath === '/companion/key') {
         // Fix F: accept BOTH the iPad-friendly modifier names ("Meta", "Control",
         // "Alt", "Shift", and aliases like "Cmd"/"Cmd down") AND the legacy
         // already-formatted AppleScript strings ("command down" etc.).
@@ -1072,7 +1073,7 @@ async function handleRequest(
         }
         res.writeHead(200); res.end(JSON.stringify({ ok:true }));
 
-      } else if (path === '/companion/type') {
+      } else if (urlPath === '/companion/type') {
         const safeText = String(bodyC.text||'').slice(0,200).replace(/["\\]/g,'');
         if (safeText) await _osa('tell application "System Events" to keystroke "' + safeText + '"');
         res.writeHead(200); res.end(JSON.stringify({ ok:true }));
@@ -1085,7 +1086,7 @@ async function handleRequest(
   }
 
   // ── PWA Static Assets ─────────────────────────────────────────────────────
-  if (path === '/manifest.json' && req.method === 'GET') {
+  if (urlPath === '/manifest.json' && req.method === 'GET') {
     const manifest = {
       name: "Henry AI",
       short_name: "Henry",
@@ -1115,7 +1116,7 @@ async function handleRequest(
     return;
   }
 
-  if (path === '/sw.js' && req.method === 'GET') {
+  if (urlPath === '/sw.js' && req.method === 'GET') {
     const swCode = `
 const CACHE_NAME = 'henry-ai-v1';
 const OFFLINE_CACHE = ['/'];
@@ -1164,8 +1165,8 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  if ((path === '/icon-192.png' || path === '/icon-512.png') && req.method === 'GET') {
-    const size = path.includes('512') ? 512 : 192;
+  if ((urlPath === '/icon-192.png' || urlPath === '/icon-512.png') && req.method === 'GET') {
+    const size = urlPath.includes('512') ? 512 : 192;
     // Generate a simple SVG icon and serve it as PNG via SVG data
     // We serve an SVG that Safari will render as the icon
     const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
@@ -1194,7 +1195,7 @@ self.addEventListener('fetch', (event) => {
   }
 
   // ── Shared chat history (phone ↔ desktop sync) ─────────────────────────
-  if (path === '/sync/chat/history' && req.method === 'GET') {
+  if (urlPath === '/sync/chat/history' && req.method === 'GET') {
     try {
       const url = new URL('http://x' + req.url!);
       const limit = Math.min(100, parseInt(url.searchParams.get('limit') || '50'));
@@ -1221,7 +1222,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  if (path === '/sync/chat/save' && req.method === 'POST') {
+  if (urlPath === '/sync/chat/save' && req.method === 'POST') {
     const body = await readBody<{ conversation_id: string; messages: Array<{id:string;role:string;content:string;model?:string;provider?:string}> }>(req);
     if (!body) { jsonResponse(res, 400, { error: 'bad body' }); return; }
     try {
@@ -1245,7 +1246,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  if (path === '/sync/chat/conversation_id' && req.method === 'GET') {
+  if (urlPath === '/sync/chat/conversation_id' && req.method === 'GET') {
     try {
       let conv = dbGetOne<{id:string}>(
         "SELECT id FROM conversations WHERE title = 'Henry — Companion' LIMIT 1"
@@ -1261,7 +1262,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  if (path === '/sync/health' && req.method === 'GET') {
+  if (urlPath === '/sync/health' && req.method === 'GET') {
     // Health is public — allows mobile to check server is up before pairing
     let appVersion = (() => {
   try {
@@ -1290,7 +1291,7 @@ self.addEventListener('fetch', (event) => {
   // ── Rejoin: persistent device re-auth — no pairing needed after first pair ──
   // Device stores its UUID and a shared secret. On reconnect it sends both.
   // Server validates against companion_linked_devices table and issues new token.
-  if (path === '/sync/rejoin' && req.method === 'POST') {
+  if (urlPath === '/sync/rejoin' && req.method === 'POST') {
     const body = await readBody<{deviceUuid: string; hmac: string; deviceName?: string}>(req);
     if (!body?.deviceUuid) { jsonResponse(res, 400, { error: 'Bad request' }); return; }
 
@@ -1349,7 +1350,7 @@ self.addEventListener('fetch', (event) => {
 
   // Auto-pair: generates token + pairs in one request, no code needed
   // Only works on local network (no external auth needed)
-  if (path === '/sync/auto-pair' && req.method === 'POST') {
+  if (urlPath === '/sync/auto-pair' && req.method === 'POST') {
     const body = await readBody<PairRequest>(req);
     if (!body) { jsonResponse(res, 400, { error: 'Bad request' }); return; }
 
@@ -1437,7 +1438,7 @@ self.addEventListener('fetch', (event) => {
     '/sync/mac/reminders/create', '/sync/mac/reminders/done',
     '/sync/mac/journal/create', '/sync/mac/health/log',
   ];
-  if (companionWebPaths.some(p => path === p) && req.method !== undefined) {
+  if (companionWebPaths.some(p => urlPath === p) && req.method !== undefined) {
     // Allow through — companion web page handles these without a paired token
     // Fall through to the route handlers below with a synthetic deviceId
     const syntheticDeviceId = 'companion-web';
@@ -1447,7 +1448,7 @@ self.addEventListener('fetch', (event) => {
 
   // All routes below require a valid token
   const deviceId = validateToken(req) || (
-    companionWebPaths.some(p => path === p) ? 'companion-web' : null
+    companionWebPaths.some(p => urlPath === p) ? 'companion-web' : null
   );
   if (!deviceId) {
     jsonResponse(res, 401, { error: 'Unauthorized' });
@@ -1467,7 +1468,7 @@ self.addEventListener('fetch', (event) => {
   }
 
   // ── Snapshot ──────────────────────────────────────────────────────────
-  if (path === '/sync/snapshot' && req.method === 'GET') {
+  if (urlPath === '/sync/snapshot' && req.method === 'GET') {
     const status = await getDesktopStatus();
     const snap = buildSnapshot(status);
     jsonResponse(res, 200, snap);
@@ -1475,7 +1476,7 @@ self.addEventListener('fetch', (event) => {
   }
 
   // ── Events (delta) ────────────────────────────────────────────────────
-  if (path === '/sync/events' && req.method === 'GET') {
+  if (urlPath === '/sync/events' && req.method === 'GET') {
     const since = parseInt(url.searchParams.get('since') ?? '0', 10);
     const events = eventLog.filter((e) => e.timestamp > since);
     jsonResponse(res, 200, events);
@@ -1483,8 +1484,8 @@ self.addEventListener('fetch', (event) => {
   }
 
   // ── Messages for a conversation ───────────────────────────────────────
-  if (path.startsWith('/sync/conversations/') && req.method === 'GET') {
-    const parts = path.split('/').filter(Boolean);
+  if (urlPath.startsWith('/sync/conversations/') && req.method === 'GET') {
+    const parts = urlPath.split('/').filter(Boolean);
     // /sync/conversations/:id or /sync/conversations/:id/messages
     const convId = parts[2];
     const tail = parts[3];
@@ -1503,7 +1504,7 @@ self.addEventListener('fetch', (event) => {
   }
 
   // ── SSE stream ────────────────────────────────────────────────────────
-  if (path === '/sync/stream' && req.method === 'GET') {
+  if (urlPath === '/sync/stream' && req.method === 'GET') {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
@@ -1536,7 +1537,7 @@ self.addEventListener('fetch', (event) => {
   }
 
   // ── Capture ───────────────────────────────────────────────────────────
-  if (path === '/sync/capture' && req.method === 'POST') {
+  if (urlPath === '/sync/capture' && req.method === 'POST') {
     const capture = await readBody<CapturePayload>(req);
     if (!capture) { jsonResponse(res, 400, { error: 'Bad request' }); return; }
     capture.fromDevice = deviceId;
@@ -1551,7 +1552,7 @@ self.addEventListener('fetch', (event) => {
 
   // ── Capture + AI process — Henry Engage hotkey & clipboard capture ─────────
   // Receives text, runs it through AI extraction, returns ideas/prospects/tasks
-  if (path === '/sync/capture-and-process' && req.method === 'POST') {
+  if (urlPath === '/sync/capture-and-process' && req.method === 'POST') {
     const body = await readBody<{ text: string; source?: string; pageTitle?: string; context?: string }>(req);
     if (!body?.text?.trim()) { jsonResponse(res, 400, { error: 'No text' }); return; }
 
@@ -1698,7 +1699,7 @@ self.addEventListener('fetch', (event) => {
     return text; // no resolution needed
   }
 
-  if (path === '/sync/prompt' && req.method === 'POST') {
+  if (urlPath === '/sync/prompt' && req.method === 'POST') {
     // ── Bible shortcut: BIBLE_LOOKUP:ref → fast DB query, no AI ─────────────
     if (req.method === 'POST') {
       try {
@@ -3371,19 +3372,25 @@ self.addEventListener('fetch', (event) => {
     // ── Permission fixes ──────────────────────────────────────────────────────
     const _permFix = lowerText.match(/^(?:fix|grant|enable|allow|open)(?: the?)? (screen ?recording|screen ?capture|accessibility|permissions?|micro?phone?)(?: (?:permission|access|setting)s?)?$/i);
     if (_permFix) {
+      // Only open system preferences on macOS
+      if (process.platform !== 'darwin') {
+        sendReply('Permission management is handled automatically on this platform. Please check your system settings manually if needed.');
+        return;
+      }
+
       const { execSync: _pfEx } = await import('child_process') as typeof import('child_process');
-      const _pt = (_permFix[1]||'').toLowerCase();
+      const _pt = (_permFix[1] || '').toLowerCase();
       let _purl = '';
       let _pmsg = '';
       if (_pt.includes('screen')) {
         _purl = 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture';
-        _pmsg = 'Opening Screen Recording in System Settings\u2026\n\n1. Find **Henry AI** in the list\n2. Toggle it **ON**\n3. Quit Henry (\u2318Q) then reopen it\n\nAfter that, your phone companion will show your Mac screen.';
+        _pmsg = 'Opening Screen Recording in System Settings…\n\n1. Find **Henry AI** in the list\n2. Toggle it **ON**\n3. Quit Henry (⌘Q) then reopen it\n\nAfter that, your phone companion will show your Mac screen.';
       } else if (_pt.includes('access')) {
         _purl = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility';
-        _pmsg = 'Opening Accessibility in System Settings\u2026\n\n1. Find **Henry AI** in the list\n2. Toggle it **ON**\n\nThis lets Henry click and type on your Mac from your phone.';
+        _pmsg = 'Opening Accessibility in System Settings…\n\n1. Find **Henry AI** in the list\n2. Toggle it **ON**\n\nThis lets Henry click and type on your Mac from your phone.';
       } else {
         _purl = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone';
-        _pmsg = 'Opening Microphone in System Settings\u2026\n\n1. Find **Henry AI** in the list\n2. Toggle it **ON**\n\nThe mic button will then work for voice commands.';
+        _pmsg = 'Opening Microphone in System Settings…\n\n1. Find **Henry AI** in the list\n2. Toggle it **ON**\n\nThe mic button will then work for voice commands.';
       }
       try { _pfEx('open "' + _purl + '"', { timeout: 3000, shell: '/bin/bash' }); } catch {}
       sendReply(_pmsg);
@@ -8967,8 +8974,8 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
   }
 
   // ── Action decision ───────────────────────────────────────────────────
-  if (path.match(/^\/sync\/actions\/[^/]+\/decide$/) && req.method === 'POST') {
-    const actionId = path.split('/')[3];
+  if (urlPath.match(/^\/sync\/actions\/[^/]+\/decide$/) && req.method === 'POST') {
+    const actionId = urlPath.split('/')[3];
     const decision = await readBody<ActionDecision>(req);
     if (!decision) { jsonResponse(res, 400, { error: 'Bad request' }); return; }
     decision.actionId = actionId;
@@ -8990,7 +8997,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
   }
 
   // ── Push token registration ───────────────────────────────────────────
-  if (path === '/sync/push-token' && req.method === 'POST') {
+  if (urlPath === '/sync/push-token' && req.method === 'POST') {
     const body = await readBody<{ pushToken: string }>(req);
     if (body?.pushToken) {
       const d = linkedDevices.get(deviceId);
@@ -9005,7 +9012,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
 
   // Live Mac screenshot → returns { image: 'data:image/png;base64,...' }
   // R2-Fix 1: also leaks the entire desktop. Same protection as /screen.
-  if (path === '/sync/mac/screen' && req.method === 'GET') {
+  if (urlPath === '/sync/mac/screen' && req.method === 'GET') {
     if (_denyDangerous(req, res, 'lan')) return;
     try {
       const { execSync: _scx } = await import('child_process');
@@ -9042,7 +9049,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
   }
 
   // Today summary — tasks, habits, reminders
-  if (path === '/sync/mac/today' && req.method === 'GET') {
+  if (urlPath === '/sync/mac/today' && req.method === 'GET') {
     try {
       const today = new Date().toISOString().slice(0, 10);
       const tasks = dbGet('SELECT id,title,notes,status,priority,due_at FROM personal_tasks WHERE status!=? ORDER BY created_at DESC LIMIT 10', 'done') as any[];
@@ -9059,7 +9066,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
 
   // Toggle a habit for today from companion
   // R2-Fix 3: was unauthenticated and tunnel-accessible — locked to LAN.
-  if (path === '/sync/mac/habit-toggle' && req.method === 'POST') {
+  if (urlPath === '/sync/mac/habit-toggle' && req.method === 'POST') {
     if (_denyDangerous(req, res, 'lan')) return;
     try {
       const body = await readBody(req) as { habit_id: string; date: string };
@@ -9084,7 +9091,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
   // regex below is trivially bypassable (e.g. `\rm`, `${IFS}sudo`, env tricks).
   // Restricted to loopback only — no LAN, no tunnel. Existing companion HTML
   // does not call this route, so locking it down has no UX impact.
-  if (path === '/sync/mac/run' && req.method === 'POST') {
+  if (urlPath === '/sync/mac/run' && req.method === 'POST') {
     if (_denyDangerous(req, res, 'loopback')) return;
     try {
       const body = await readBody(req) as { command: string };
@@ -9106,7 +9113,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
   // events. Restricted to private LAN or loopback — never via cloudflare tunnel.
   // The `open` (app-launch) action is also gated the same way to prevent
   // remote-attacker app launches.
-  if (path === '/sync/mac/open-app' && req.method === 'POST') {
+  if (urlPath === '/sync/mac/open-app' && req.method === 'POST') {
     if (_denyDangerous(req, res, 'lan')) return;
     try {
       const body = await readBody(req) as { app?: string; action?: string; x?: number; y?: number; key?: string; modifiers?: string; text?: string };
@@ -9148,7 +9155,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
   }
 
   // Finance summary for companion
-  if (path === '/sync/mac/reminders' && req.method === 'GET') {
+  if (urlPath === '/sync/mac/reminders' && req.method === 'GET') {
     const rows = dbGet<Record<string,unknown>>(
       "SELECT * FROM reminders WHERE done=0 ORDER BY due_at ASC LIMIT 20"
     );
@@ -9156,7 +9163,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
     return;
   }
 
-  if (path === '/sync/mac/tasks' && req.method === 'GET') {
+  if (urlPath === '/sync/mac/tasks' && req.method === 'GET') {
     const rows = dbGet<Record<string,unknown>>(
       "SELECT id,title,notes,priority,status,due_at,created_at FROM personal_tasks WHERE status!='done' ORDER BY created_at DESC LIMIT 30"
     );
@@ -9164,7 +9171,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
     return;
   }
 
-  if (path === '/sync/mac/tasks/create' && req.method === 'POST') {
+  if (urlPath === '/sync/mac/tasks/create' && req.method === 'POST') {
     if (_denyDangerous(req, res, 'lan')) return; // R2-Fix 3
     const body = await readBody<Record<string,unknown>>(req);
     const data: Record<string,unknown> = body || {};
@@ -9180,7 +9187,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
     return;
   }
 
-  if (path === '/sync/mac/tasks/complete' && req.method === 'POST') {
+  if (urlPath === '/sync/mac/tasks/complete' && req.method === 'POST') {
     if (_denyDangerous(req, res, 'lan')) return; // R2-Fix 3
     const body = await readBody<Record<string,unknown>>(req);
     const data: Record<string,unknown> = body || {};
@@ -9191,7 +9198,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
     return;
   }
 
-  if (path === '/sync/mac/goals' && req.method === 'GET') {
+  if (urlPath === '/sync/mac/goals' && req.method === 'GET') {
     const rows = dbGet<Record<string,unknown>>(
       "SELECT id,title,status,priority_score,summary FROM goals WHERE status='active' ORDER BY priority_score DESC LIMIT 10"
     );
@@ -9199,7 +9206,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
     return;
   }
 
-  if (path === '/sync/mac/goals' && req.method === 'POST') {
+  if (urlPath === '/sync/mac/goals' && req.method === 'POST') {
     if (_denyDangerous(req, res, 'lan')) return; // R2-Fix 3
     const body = await readBody<{action:string;id:string;updates:Record<string,unknown>}>(req);
     if (!body || !body.id) { jsonResponse(res, 400, { error: 'id required' }); return; }
@@ -9214,7 +9221,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
     return;
   }
 
-  if (path === '/sync/mac/reminders/create' && req.method === 'POST') {
+  if (urlPath === '/sync/mac/reminders/create' && req.method === 'POST') {
     if (_denyDangerous(req, res, 'lan')) return; // R2-Fix 3
     const body = await readBody<Record<string,unknown>>(req);
     const data: Record<string,unknown> = body || {};
@@ -9230,7 +9237,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
     return;
   }
 
-  if (path === '/sync/mac/reminders/done' && req.method === 'POST') {
+  if (urlPath === '/sync/mac/reminders/done' && req.method === 'POST') {
     if (_denyDangerous(req, res, 'lan')) return; // R2-Fix 3
     const body = await readBody<Record<string,unknown>>(req);
     const data: Record<string,unknown> = body || {};
@@ -9241,7 +9248,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
     return;
   }
 
-  if (path === '/sync/mac/journal/create' && req.method === 'POST') {
+  if (urlPath === '/sync/mac/journal/create' && req.method === 'POST') {
     if (_denyDangerous(req, res, 'lan')) return; // R2-Fix 3
     const body = await readBody<Record<string,unknown>>(req);
     const data: Record<string,unknown> = body || {};
@@ -9258,7 +9265,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
     return;
   }
 
-  if (path === '/sync/mac/health' && req.method === 'GET') {
+  if (urlPath === '/sync/mac/health' && req.method === 'GET') {
     try {
       const today = new Date().toISOString().slice(0,10);
       const logs = dbGet<{id:string;category:string;label:string;value:number;unit:string;date:string;created_at:string}>(
@@ -9280,7 +9287,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
   }
 
 
-  if (path === '/sync/mac/bible' && req.method === 'GET') {
+  if (urlPath === '/sync/mac/bible' && req.method === 'GET') {
     try {
       const url = new URL('http://x' + req.url!);
       const ref = url.searchParams.get('ref') || '';
@@ -9302,7 +9309,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
     return;
   }
 
-  if (path === '/sync/mac/health/log' && req.method === 'POST') {
+  if (urlPath === '/sync/mac/health/log' && req.method === 'POST') {
     if (_denyDangerous(req, res, 'lan')) return; // R2-Fix 3
     const body = await readBody<Record<string,unknown>>(req);
     const data: Record<string,unknown> = body || {};
@@ -9319,7 +9326,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
     return;
   }
 
-  if (path === '/sync/mac/finance' && req.method === 'GET') {
+  if (urlPath === '/sync/mac/finance' && req.method === 'GET') {
     try {
       const months = Array.from({length: 4}, (_, i) => {
         const d = new Date(); d.setMonth(d.getMonth() - i);
@@ -9337,7 +9344,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
     return;
   }
 
-  if (path === '/sync/devices' && req.method === 'GET') {
+  if (urlPath === '/sync/devices' && req.method === 'GET') {
     jsonResponse(res, 200, Array.from(linkedDevices.values()));
     return;
   }

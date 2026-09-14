@@ -8,7 +8,6 @@ import { spawn, execFile, type ChildProcess } from 'child_process';
 import type Database from 'better-sqlite3';
 import { decryptKey } from '../../electron/ipc/_keyStorage';
 import { prepareSpeechText } from '../../electron/voice/_speechText';
-import { platform } from 'os';
 
 /**
  * Available TTS engines
@@ -49,8 +48,20 @@ const DEFAULT_SAY_RATE = 175;
 const DEFAULT_ESPEAK_VOICE = 'en';
 const DEFAULT_ESPEAK_RATE = 175; // words per minute
 
-// Get the platform string once
-const platformString = platform();
+// Get the platform string once.
+/**
+ * In the renderer, use the preload-exposed process.platform.
+ * In the main process, use Node's os.platform directly.
+ */
+let platformString: string;
+if (typeof window !== 'undefined') {
+  // Renderer: use the value exposed by the preload contextBridge
+  platformString = window.henryAPI.platform();
+} else {
+  // Main process: use Node's os.platform directly
+  const os = require('os');
+  platformString = os.platform();
+}
 
 // ElevenLabs key helper
 function getElevenLabsKey(db: Database.Database): string {

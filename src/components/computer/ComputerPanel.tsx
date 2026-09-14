@@ -160,6 +160,14 @@ export default function ComputerPanel() {
   }, [steps]);
 
   function openSystemSettings() {
+    // Only open system preferences on macOS
+    const isMac = navigator.userAgent.indexOf('Mac OS X') !== -1;
+    if (!isMac) {
+      // Show appropriate message for non-macOS platforms
+      alert('Permission management is handled automatically on this platform. Please check your system settings manually if needed.');
+      return;
+    }
+
     fetch('http://127.0.0.1:4242/computer/shell', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Henry-Internal': 'true' },

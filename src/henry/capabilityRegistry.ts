@@ -12,8 +12,11 @@
  *
  * Do NOT mark anything `true` here unless the code fully implements it.
  */
+import { getPlatform } from '../utils/platform';
 
 // ── Computer / Device Capabilities ───────────────────────────────────────────
+
+const platform = getPlatform();
 
 /**
  * What Henry can actually do at the OS / device layer.
@@ -32,6 +35,9 @@
  * macOS-only features (AppleScript, screenshot, type, click) require macOS
  * Accessibility and Screen Recording permissions to be granted in System
  * Settings → Privacy & Security.
+ *
+ * Linux uses capability-based checks (xdotool/xclip/scrot backends).
+ * Windows uses PowerShell-based implementations.
  */
 export const COMPUTER_CAPABILITIES = {
   /** Read/write text files inside the configured workspace folder (IPC: fs:readFile, fs:writeFile). */
@@ -41,18 +47,24 @@ export const COMPUTER_CAPABILITIES = {
   shellAccess: true,
 
   /** AppleScript execution — app control, UI automation (IPC: computer:osascript, macOS only). */
-  applescript: true,
+  applescript: platform === 'darwin',
 
   /** Keyboard typing via AppleScript (IPC: computer:typeText, macOS only). */
-  typeText: true,
+  typeText: platform === 'darwin',
 
   /** Mouse click at coordinates via AppleScript (IPC: computer:click, macOS only). */
-  mouseClick: true,
+  mouseClick: platform === 'darwin',
 
-  /** Screenshot capture (IPC: computer:screenshot — screencapture on macOS, PowerShell on Windows). */
+  /** Keyboard typing on Linux via xdotool (IPC: computer:typeText). */
+  linuxTypeText: platform === 'linux',
+
+  /** Mouse click on Linux via xdotool (IPC: computer:click). */
+  linuxMouseClick: platform === 'linux',
+
+  /** Screenshot capture (IPC: computer:screenshot — screencapture on macOS, scrot/import on Linux, PowerShell on Windows). */
   screenshot: true,
 
-  /** Open an app by name (IPC: computer:openApp — open -a on macOS). */
+  /** Open an app by name (IPC: computer:openApp — open -a on macOS, xdg-open on Linux). */
   openApp: true,
 
   /** Open a URL in the default browser (IPC: computer:openUrl). */
@@ -61,8 +73,8 @@ export const COMPUTER_CAPABILITIES = {
   /** List installed/running apps and processes (IPC: computer:listApps, computer:listProcesses). */
   listApps: true,
 
-  /** Check macOS Accessibility + Screen Recording permissions (IPC: computer:checkPermissions). */
-  checkPermissions: true,
+  /** Check macOS Accessibility + Screen Recording permissions (IPC: computer:checkPermissions, macOS only). */
+  checkPermissions: platform === 'darwin',
 } as const;
 
 // ── System Prompt Block ───────────────────────────────────────────────────────
@@ -76,15 +88,29 @@ export function buildCapabilityRegistryBlock(): string {
   const computerLines: string[] = [
     `  Workspace file access (read/write text files in workspace): YES`,
     `  Shell command execution (computer:runShell, with safety blocklist): YES`,
-    `  AppleScript / app UI control (computer:osascript — macOS only): YES`,
-    `  Keyboard input / typing (computer:typeText — macOS, needs Accessibility permission): YES`,
-    `  Mouse click at coordinates (computer:click — macOS, needs Accessibility permission): YES`,
-    `  Screenshot capture (computer:screenshot — screencapture on macOS): YES`,
+    platform === 'darwin'
+      ? `  AppleScript / app UI control (computer:osascript — macOS only): YES`
+      : `  AppleScript / app UI control: NO (macOS only)`,
+    platform === 'darwin'
+      ? `  Keyboard input / typing (computer:typeText — macOS, needs Accessibility permission): YES`
+      : platform === 'linux'
+        ? `  Keyboard input / typing (computer:typeText via xdotool): YES`
+        : `  Keyboard input / typing: YES`,
+    platform === 'darwin'
+      ? `  Mouse click at coordinates (computer:click — macOS, needs Accessibility permission): YES`
+      : `  Mouse click at coordinates: YES`,
+    `  Screenshot capture (computer:screenshot — ${platform === 'darwin' ? 'screencapture' : platform === 'linux' ? 'scrot/import' : 'PowerShell'}): YES`,
     `  Open app by name (computer:openApp): YES`,
     `  Open URL in browser (computer:openUrl): YES`,
     `  List apps and processes (computer:listApps, computer:listProcesses): YES`,
-    `  Permission check (computer:checkPermissions): YES`,
-    `  NOTE: AppleScript/typeText/click/screenshot require macOS Accessibility + Screen Recording`,
+    platform === 'darwin'
+      ? `  Permission check (computer:checkPermissions — macOS Accessibility + Screen Recording): YES`
+      : `  Permission check: N/A (no macOS permissions on this platform)`,
+    platform === 'darwin'
+      ? `  NOTE: AppleScript/typeText/click/screenshot require macOS Accessibility + Screen Recording`
+      : platform === 'linux'
+        ? `  NOTE: Linux computer control requires xdotool/wmctrl; screenshots need scrot/ImageMagick`
+        : `  NOTE: Windows uses PowerShell-based computer control`,
     `  NOTE: These only work in the desktop Electron app — not in a browser context`,
   ];
 

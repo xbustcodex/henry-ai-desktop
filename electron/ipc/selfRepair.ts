@@ -81,9 +81,21 @@ function getHenryDir(): string {
 }
 
 // ── All health checks ──────────────────────────────────────────────────────
+function isDarwin(): boolean {
+  return process.platform === 'darwin';
+}
+
+function isLinux(): boolean {
+  return process.platform === 'linux';
+}
+
+function isWindows(): boolean {
+  return process.platform === 'win32';
+}
+
 export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
   const henryDir = getHenryDir();
-  const henryDbPath = path.join(henryDir, 'henry.db');
+  const henryDbPath = path.join(os.homedir(), 'henry.db');
 
   return [
 
@@ -91,9 +103,10 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
     {
       id: 'brew',
       name: 'Homebrew',
-      category: 'required',
+      category: isDarwin() ? 'required' : 'optional',
       description: 'Package manager — used to install everything else',
       check: async () => {
+        if (!isDarwin()) return { ok: true, detail: 'Homebrew is only available on macOS' };
         const v = toolVersion(BREW);
         return v ? { ok: true, version: v } : { ok: false, detail: 'Homebrew not found' };
       },
@@ -115,13 +128,38 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
     {
       id: 'cloudflared',
       name: 'Cloudflare Tunnel',
-      category: 'required',
+      category: 'optional',
       description: 'Secure tunnel so mobile works from anywhere',
       check: async () => {
-        const v = toolVersion('cloudflared');
-        return v ? { ok: true, volume: v } : { ok: false, detail: 'cloudflared not installed — mobile only works on home WiFi' };
+        if (isDarwin()) {
+          const v = toolVersion('cloudflared');
+          return v ? { ok: true, volume: v } : { ok: false, detail: 'cloudflared not installed — mobile only works on home WiFi' };
+        }
+        if (isLinux()) {
+          try { execSync('cloudflared --version', { encoding: 'utf8', env: ENV, timeout: 3000 }); return { ok: true, volume: 'cloudflared' }; } catch {
+            // Check via PATH or default install locations
+            try { execSync('which cloudflared', { encoding: 'utf8', env: ENV, timeout: 3000 }); return { ok: true, volume: 'cloudflared' }; } catch {
+              return { ok: false, detail: 'cloudflared not installed — install via: sudo apt-get install cloudflared, or download from https://developers.cloudflare.com/cloudflare-one/connections/how-to/install-cloudflared/' };
+            }
+          }
+        }
+        // Windows or other platforms
+        try { execSync('cloudflared --version', { encoding: 'utf8', env: ENV, timeout: 3000 }); return { ok: true, volume: 'cloudflared' }; } catch {
+          return { ok: false, detail: 'cloudflared not installed — optional for remote companion' };
+        }
       },
-      fix: async () => brewInstall('cloudflared'),
+      fix: async () => {
+        if (isDarwin()) {
+          return brewInstall('cloudflared');
+        }
+        if (isLinux()) {
+          try { execSync('apt-get update && apt-get install -y cloudflared', { env: ENV, timeout: 120_000 }); return { success: true, message: 'Installed cloudflared via apt' }; } catch {
+            return { success: false, message: 'Auto-install failed — install cloudflared manually: sudo apt-get install cloudflared' };
+          }
+        }
+        // Windows
+        return { success: false, message: 'Auto-install not supported on this platform — install cloudflared manually' };
+      },
     },
 
     {
@@ -206,11 +244,15 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
 
     {
       id: 'microphone',
-      name: 'Microphone Permission',
+      name: isLinux() ? 'Microphone' : isWindows() ? 'Microphone' : 'Microphone Permission',
       category: 'recommended',
       description: 'Required so Henry can hear you — voice input in chat',
       check: async () => {
         try {
+          if (isLinux() || isWindows()) {
+            // No macOS permission TCC on Linux/Windows — mic access is inherent.
+            return { ok: true, detail: 'Available' };
+          }
           const { systemPreferences } = require('electron');
           const status = systemPreferences.getMediaAccessStatus('microphone');
           // 'not-determined' is fine — macOS prompts automatically on first use.
@@ -225,7 +267,10 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
       },
       fix: async () => {
         // Report-only (like Screen Recording): open the right pane, user flips the toggle.
-        exec('open "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"');
+// Only open system preferences on macOS
+        if (process.platform === 'darwin') {
+          exec('open "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"');
+        }
         return { success: false, message: 'Opening Microphone settings — enable Henry AI, then try the mic again' };
       },
     },
@@ -340,16 +385,16 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
     {
       id: 'groq_key',
       name: 'Groq API Key',
-      category: 'required',
+      category: 'optional',
       description: 'Free AI model access — Henry\'s brain',
       check: async (_db) => {
         try {
-          const result = _db.prepare("SELECT api_key FROM providers WHERE id='groq' AND enabled=1;").get();
-          if (result && result.api_key && result.api_key.length > 10) return { ok: true, detail: `Key set (${result.api_key.length} chars)` };
-          return { ok: false, detail: 'No Groq API key — add one in Settings → AI Providers' };
+          const row = _db.prepare("SELECT api_key FROM providers WHERE id='groq' AND enabled=1;").get() as { api_key: string } | undefined;
+          if (row && row.api_key && row.api_key.length > 10) return { ok: true, detail: `Key set (${row.api_key.length} chars)` };
+          return { ok: false, detail: 'No Groq API key — configure in Settings → AI Providers' };
         } catch { return { ok: false, detail: 'Could not check API key' }; }
       },
-      // No auto-fix for API keys — user must provide
+      // No auto-fix for API keys — user must configure in Settings
     },
 
     {
@@ -359,8 +404,8 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
       description: 'Cloudflare tunnel starts automatically so mobile works anywhere',
       check: async (_db) => {
         try {
-          const result = _db.prepare("SELECT value FROM settings WHERE key='auto_tunnel_enabled';").get();
-          return result?.value === 'true'
+          const row = _db.prepare("SELECT value FROM settings WHERE key='auto_tunnel_enabled';").get() as { value: string } | undefined;
+          return row?.value === 'true'
             ? { ok: true, detail: 'Auto-tunnel enabled' }
             : { ok: false, detail: 'Auto-tunnel disabled — mobile only works on home WiFi' };
         } catch { return { ok: false, detail: 'Could not check tunnel setting' }; }
@@ -375,51 +420,162 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
 
     {
       id: 'screen_recording',
-      name: 'Screen Recording Permission',
+      name: isLinux() ? 'Screen Capture' : isWindows() ? 'Screen Capture' : 'Screen Recording Permission',
       category: 'recommended',
-      description: 'Required for live screen view on mobile',
+      description: isLinux() ? 'Required for screenshots and live screen view' : 'Required for live screen view on mobile',
       check: async () => {
         try {
-          // Try Electron's API first (works on macOS and Windows)
+          if (isLinux()) {
+            // Linux: real capability check — try an actual screen capture
+            // with the same backends Henry uses (scrot/import/gnome-screenshot)
+            const tmp = `${os.tmpdir()}/henry_health_check.png`;
+            const backends = [
+              `scrot "${tmp}" 2>/dev/null`,
+              `import -window root "${tmp}" 2>/dev/null`,
+              `gnome-screenshot -f "${tmp}" 2>/dev/null`,
+              `xfce4-screenshooter -s -f "${tmp}" 2>/dev/null`,
+            ].map(c => c + ` && [ -s "${tmp}" ]`);
+            let ok = false;
+            let usedBackend = '';
+            for (const cmd of backends) {
+              try {
+                const { execSync } = require('child_process');
+                execSync(cmd, { timeout: 5000, stdio: 'ignore' });
+                if (fs.existsSync(tmp)) {
+                  const stat = fs.statSync(tmp);
+                  if (stat.size > 5000) {
+                    ok = true;
+                    usedBackend = cmd.split(' ')[0];
+                  }
+                }
+              } catch { /* try next backend */ }
+              if (ok) break;
+            }
+            try { fs.unlinkSync(tmp); } catch { /* */ }
+            if (ok) return { ok: true, detail: `${usedBackend} available` };
+            // No backend available — check session type for helpful message
+            const sessionType = process.env.XDG_SESSION_TYPE || process.env.XDG_CURRENT_DESKTOP || 'unknown';
+            return { ok: false, detail: `No screenshot backend available (${sessionType}). Install scrot, ImageMagick, or gnome-screenshot.` };
+          }
+
+          if (isWindows()) {
+            // Windows: PowerShell screenshot capability
+            const tmp = `${os.tmpdir()}/henry_health_check.png`;
+            const cmd = `powershell -NoProfile -Command "Add-Type -AssemblyName System.Drawing; $bmp = New-Object System.Drawing.Bitmap(100, 100); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.FillRectangle([System.Drawing.Brushes]::White, 0, 0, 100, 100); $bmp.Save('${tmp}'); $bmp.Dispose()"`;
+            const { execSync } = require('child_process');
+            execSync(cmd, { timeout: 5000, stdio: 'ignore' });
+            let ok = false;
+            if (fs.existsSync(tmp)) {
+              const stat = fs.statSync(tmp);
+              ok = stat.size > 5000;
+            }
+            try { fs.unlinkSync(tmp); } catch { /* */ }
+            return ok ? { ok: true, detail: 'PowerShell screenshot available' } : { ok: false, detail: 'Screen capture check failed' };
+          }
+
+          // macOS: try Electron's API first, then functional check
           const { systemPreferences } = require('electron');
           const status = systemPreferences.getMediaAccessStatus('screen');
           if (status === 'granted') return { ok: true };
 
           // Fallback: try an actual screen capture
           const tmp = `${os.tmpdir()}/henry_health_check.png`;
-          let cmd: string;
-          if (process.platform === 'darwin') {
-            cmd = `screencapture -x -t png "${tmp}"`;
-          } else if (process.platform === 'win32') {
-            // PowerShell screenshot
-            cmd = `powershell -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen | ForEach-Object { $bmp = New-Object System.Drawing.Bitmap($_.Bounds.Width, $_.Bounds.Height); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($_.Bounds.Location, [System.Drawing.Point]::Empty, $_.Bounds.Size); $bmp.Save('${tmp}') }"`;
-          } else {
-            // Linux: use scrot or import
-            cmd = `scrot "${tmp}" 2>/dev/null || import -window root "${tmp}" 2>/dev/null`;
-          }
+          const macCmd = `screencapture -x -t png "${tmp}"`;
           const { execSync } = require('child_process');
-          execSync(cmd, { timeout: 3000, stdio: 'ignore' });
+          execSync(macCmd, { timeout: 3000, stdio: 'ignore' });
           const stat = fs.statSync(tmp);
           try { fs.unlinkSync(tmp); } catch { /* */ }
           // A real screen capture is hundreds of KB; a denied/empty one is < 5KB
           return { ok: stat.size > 5000 };
         } catch {
-          return { ok: false, detail: 'Screen Recording check failed' };
+          return { ok: false, detail: 'Screen capture check failed' };
         }
       },
       fix: async () => {
-        await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+        if (isLinux()) {
+          // Linux: install a screenshot backend (scrot/ImageMagick/gnome-screenshot)
+          return { success: false, message: 'Install a screenshot tool: sudo apt install scrot (or ImageMagick for "import")' };
+        }
+        if (isWindows()) {
+          return { success: true, message: 'Screen capture available on Windows' };
+        }
+        // Only open system preferences on macOS
+        if (process.platform === 'darwin') {
+          await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+        }
         return { success: false, message: 'Opening Screen Recording settings — enable Henry AI, then restart Henry' };
       },
     },
 
     {
       id: 'accessibility',
-      name: 'Accessibility Permission',
+      name: isLinux() ? 'Computer Control' : isWindows() ? 'Computer Access' : 'Accessibility Permission',
       category: 'recommended',
-      description: 'Required for iPad remote control — lets Henry move the mouse and type',
+      description: isLinux() ? 'Lets Henry control your computer — keyboard, mouse, clipboard, app switching' : isWindows() ? 'Lets Henry control your computer' : 'Required for iPad remote control — lets Henry move the mouse and type',
       check: async () => {
         try {
+          if (isLinux()) {
+            // Linux: real capability check — verify the backends Henry uses
+            // for keyboard/mouse control, clipboard, and app activation.
+            const { execSync } = require('child_process');
+            const ENV = { ...process.env, HOME: os.homedir(), PATH: `/usr/local/bin:/usr/bin:/bin:${process.env.PATH || ''}` };
+
+            const sessionType = process.env.XDG_SESSION_TYPE || process.env.XDG_CURRENT_DESKTOP || 'unknown';
+            const checkBin = (bins: string[]): string | null => {
+              for (const b of bins) {
+                try { execSync(`which ${b} 2>/dev/null`, { encoding: 'utf8', env: ENV, timeout: 3000 }); return b; } catch { /* continue */ }
+              }
+              return null;
+            };
+
+            // Backends Henry relies on
+            const xdotool = checkBin(['xdotool']);
+            const wmctrl = checkBin(['wmctrl']);
+            const xclip = checkBin(['xclip', 'xsel']);
+            const wlCopy = checkBin(['wl-copy', 'wl-paste']);
+
+            const wayland = sessionType === 'wayland';
+            const x11 = sessionType === 'x11' || sessionType === 'org.kde.plasma';
+            const isWSL = (process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP) ? true : false;
+
+            // Determine status
+            const hasAutomation = !!(xdotool || wmctrl);
+            const hasClipboard = !!(xclip || wlCopy);
+
+            if (hasAutomation) {
+              const backends = [xdotool, wmctrl].filter(Boolean).join(', ');
+              return { ok: true, detail: `${backends}${hasClipboard ? ` · clipboard: ${xclip || wlCopy}` : ''}` };
+            }
+
+            // No automation tool found — explain based on session
+            if (wayland) {
+              return {
+                ok: false,
+                detail: isWSL
+                  ? 'Wayland/WSLg session — computer control needs xdotool or wmctrl installed (X11 tools). Install: sudo apt install xdotool wmctrl xclip'
+                  : 'Wayland session — computer control needs xdotool or wmctrl. Some Wayland compositors allow X11 tools via XWayland.'
+              };
+            }
+            if (x11) {
+              return {
+                ok: false,
+                detail: isWSL
+                  ? 'X11/WSLg session — computer control needs xdotool or wmctrl. Install: sudo apt install xdotool wmctrl xclip'
+                  : `X11 session — install xdotool and wmctrl (and xclip for clipboard): sudo apt install xdotool wmctrl xclip`
+              };
+            }
+            return {
+              ok: false,
+              detail: `Unknown session (${sessionType}) — computer control needs xdotool / wmctrl / xclip.`
+            };
+          }
+
+          if (isWindows()) {
+            // Windows: no macOS-style permission. Computer access is inherent.
+            return { ok: true, detail: 'Computer access available' };
+          }
+
+          // macOS: preserve existing permission check
           const { systemPreferences } = require('electron');
           const ok = systemPreferences.isTrustedAccessibilityClient(false);
           return ok
@@ -431,9 +587,20 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
       },
       fix: async (): Promise<FixResult> => {
         try {
+          if (isLinux()) {
+            // Linux: no macOS permissions. Report how to install the tools.
+            const pkg = 'xdotool wmctrl';
+            return { success: false, message: `Install computer control tools: sudo apt install ${pkg}` };
+          }
+          if (isWindows()) {
+            return { success: true, message: 'Computer access available on Windows' };
+          }
           const { systemPreferences, shell } = require('electron');
           systemPreferences.isTrustedAccessibilityClient(true);
-          await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
+          // Only open system preferences on macOS
+          if (process.platform === 'darwin') {
+            await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
+          }
           return { success: false, message: 'Opening Accessibility settings — enable Henry AI, then restart' };
         } catch (e) {
           return { success: false, message: 'Could not open Accessibility settings: ' + String(e) };
@@ -477,7 +644,7 @@ export async function runDiagnostic(autoFix = true, db: Database.Database): Prom
       category: check.category,
       status: result.ok ? 'ok' : (check.category === 'required' ? 'error' : 'warning'),
       detail: result.detail,
-      volume: (result as CheckResult).version,
+      version: (result as CheckResult).version,
     };
 
     if (!result.ok && autoFix && check.fix) {

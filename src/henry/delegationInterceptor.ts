@@ -150,11 +150,13 @@ export async function executeDelegation(delegation: DelegationTarget): Promise<s
   }
 }
 
+// Get the platform string once — renderer uses preload-exposed platform, main uses Node os.
+let platformString: string;
+// Renderer: use the value exposed by the preload contextBridge
+platformString = window.henryAPI.platform();
+
 // Platform-specific helper functions
 async function activateApplication(appName: string): Promise<void> {
-  const { platform } = await import('os');
-  const platformString = platform();
-
   if (platformString === 'darwin') {
     // macOS: use osascript
     const { execFile } = await import('child_process');
@@ -205,9 +207,7 @@ async function activateApplication(appName: string): Promise<void> {
 }
 
 async function focusAiInput(appName: string): Promise<void> {
-  const { platform } = await import('os');
-  const platformString = platform();
-
+  // Use the pre-initialized platformString from the top of the file
   if (platformString === 'darwin') {
     // macOS: Cmd+L to focus address bar (works for most web chatbots)
     const { execFile } = await import('child_process');
@@ -249,9 +249,7 @@ async function focusAiInput(appName: string): Promise<void> {
 }
 
 async function typeText(text: string): Promise<void> {
-  const { platform } = await import('os');
-  const platformString = platform();
-
+  // Use the pre-initialized platformString from the top of the file
   if (platformString === 'darwin') {
     // macOS: use osascript
     const { execFile } = await import('child_process');
@@ -293,9 +291,7 @@ async function typeText(text: string): Promise<void> {
 }
 
 async function pressEnter(): Promise<void> {
-  const { platform } = await import('os');
-  const platformString = platform();
-
+  // Use the pre-initialized platformString from the top of the file
   if (platformString === 'darwin') {
     // macOS: use osascript
     const { execFile } = await import('child_process');

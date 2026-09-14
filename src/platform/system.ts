@@ -6,10 +6,21 @@
 import { app } from 'electron';
 import { ipcMain } from 'electron';
 import { BrowserWindow } from 'electron';
-import * as os from 'os';
 
-// Get the platform string once
-const platformString = os.platform();
+/**
+ * Get the platform string.
+ * In the renderer, use the preload-exposed process.platform.
+ * In the main process, use os.platform() directly.
+ */
+let platformString: string;
+if (typeof window !== 'undefined') {
+  // Renderer: use the value exposed by the preload contextBridge
+  platformString = window.henryAPI.platform();
+} else {
+  // Main process: use Node's os.platform directly
+  const os = require('os');
+  platformString = os.platform();
+}
 
 /**
  * Volume control result
@@ -271,6 +282,7 @@ export async function showNotification(title: string, body?: string): Promise<No
  * @returns Promise resolving to system info result
  */
 export async function getSystemInfo(): Promise<SystemInfoResult> {
+  const os = require('os');
   const { arch, hostname, totalmem, freemem } = os;
   const result: SystemInfoResult = {
     platform: platformString,

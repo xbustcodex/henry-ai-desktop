@@ -62,6 +62,15 @@ export function getMainWindow(): BrowserWindow | null {
   return wins.find((w) => !w.isDestroyed()) || null;
 }
 
+/** Check if a binary exists in PATH. Returns the path if found, else empty string. */
+function tryExecBin(bin: string): string {
+  try {
+    const { execSync } = require('child_process');
+    const out = execSync(`which ${bin} 2>/dev/null || command -v ${bin} 2>/dev/null`, { encoding: 'utf8', timeout: 3000 });
+    return (out || '').trim().split('\n')[0].trim() || '';
+  } catch { return ''; }
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -283,6 +292,10 @@ app.whenReady().then(() => {
   // IPC: renderer can request permission grants
   // Reset stale TCC entries first so macOS will re-prompt cleanly
   ipcMain.handle('henry:requestAccessibility', async () => {
+    // Non-macOS: no TCC permissions to request — capabilities are inherent.
+    if (process.platform !== 'darwin') {
+      return { granted: true, native: true };
+    }
     try {
       // First check — if already granted, no need to do anything
       if (systemPreferences.isTrustedAccessibilityClient(false)) {
@@ -296,7 +309,7 @@ app.whenReady().then(() => {
       // Trigger the prompt
       const trusted = systemPreferences.isTrustedAccessibilityClient(true);
       // ALSO open System Settings as a fallback so user can grant manually if dialog didn't appear
-      if (!trusted) {
+      if (!trusted && process.platform === 'darwin') {
         await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
       }
       return { granted: trusted };
@@ -325,6 +338,22 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('henry:checkAccessibility', () => {
+    // Non-macOS: check real capabilities instead of macOS TCC permission
+    if (process.platform !== 'darwin') {
+      try {
+        const cp = require('child_process');
+        if (process.platform === 'win32') return { granted: true };
+
+        // Linux: check for the automation backends Henry uses
+        const { execSync } = cp;
+        const hasXdotool = !!tryExecBin('xdotool');
+        const hasWmctrl = !!tryExecBin('wmctrl');
+        const hasClipboard = !!tryExecBin('xclip') || !!tryExecBin('xsel') || !!tryExecBin('wl-copy');
+        // Computer control is available if Henry has automation + clipboard tools
+        const granted = hasXdotool || hasWmctrl || hasClipboard;
+        return { granted, native: true, detail: { hasXdotool, hasWmctrl, hasClipboard } };
+      } catch { return { granted: true }; }
+    }
     try {
       // First try Electron's API
       const electronSays = systemPreferences.isTrustedAccessibilityClient(false);
@@ -344,18 +373,41 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('henry:checkScreenRecording', async () => {
     try {
-      // Electron's check first
+      // Non-macOS: functional capability check
+      if (process.platform !== 'darwin') {
+        try {
+          const cp = require('child_process');
+          const fs = require('fs');
+          const os = require('os');
+          const tmp = `${os.tmpdir()}/henry_perm_check_${Date.now()}.png`;
+          let cmd: string;
+          if (process.platform === 'win32') {
+            cmd = `powershell -NoProfile -Command "Add-Type -AssemblyName System.Drawing; $bmp = New-Object System.Drawing.Bitmap(100,100); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.FillRectangle([System.Drawing.Brushes]::White, 0, 0, 100, 100); $bmp.Save('${tmp}'); $bmp.Dispose()"`;
+          } else {
+            // Linux: try the backends Henry actually uses
+            cmd = `scrot "${tmp}" 2>/dev/null || import -window root "${tmp}" 2>/dev/null || gnome-screenshot -f "${tmp}" 2>/dev/null`;
+          }
+          cp.execSync(cmd, { timeout: 5000, stdio: 'ignore' });
+          if (fs.existsSync(tmp)) {
+            const stat = fs.statSync(tmp);
+            try { fs.unlinkSync(tmp); } catch { /* */ }
+            return { granted: stat.size > 5000, native: true };
+          }
+          return { granted: false, native: true };
+        } catch { return { granted: false, native: true }; }
+      }
+      // macOS: Electron's check first
       const status = systemPreferences.getMediaAccessStatus('screen');
       if (status === 'granted') return { granted: true };
       // Fallback: try an actual screen capture. If it produces a non-empty
       // file with reasonable size, screen recording is granted regardless
       // of what getMediaAccessStatus claims.
       try {
-        const cp = require('child_process');
+        const { execSync } = require('child_process');
         const fs = require('fs');
         const os = require('os');
         const tmp = `${os.tmpdir()}/henry_perm_check_${Date.now()}.png`;
-        cp.execSync(`screencapture -x -t png "${tmp}"`, { timeout: 3000, stdio: 'ignore' });
+        execSync(`screencapture -x -t png "${tmp}"`, { timeout: 3000, stdio: 'ignore' });
         const stat = fs.statSync(tmp);
         try { fs.unlinkSync(tmp); } catch { /* */ }
         // A real screen capture is hundreds of KB; a denied/empty one is < 5KB
@@ -364,7 +416,10 @@ app.whenReady().then(() => {
     } catch { return { granted: false }; }
   });
   ipcMain.handle('henry:openPermissions', async () => {
-    await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
+    // Only open system preferences on macOS
+    if (process.platform === 'darwin') {
+      await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
+    }
     return { ok: true };
   });
   ipcMain.handle('henry:openScreenRecording', async () => {
@@ -384,7 +439,10 @@ app.whenReady().then(() => {
         }).catch(() => {});
       } catch { /* */ }
       // Open System Settings to the Screen Recording pane so user can toggle Henry on
-      await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+      // Only open system preferences on macOS
+      if (process.platform === 'darwin') {
+        await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+      }
       return { ok: true };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
@@ -525,7 +583,7 @@ app.whenReady().then(() => {
   setTimeout(async () => {
     try {
       log.debug('[Henry] Running self-diagnostic...');
-      const report = await runDiagnostic(true); // autoFix=true
+      const report = await runDiagnostic(true, db); // autoFix=true
       saveReport(db, report);
       const { fixed, failed } = report.summary;
       if (fixed > 0) log.debug(`[Henry] Self-repair: fixed ${fixed} issue(s)`);
@@ -539,7 +597,7 @@ app.whenReady().then(() => {
 
   // Self-repair IPC — renderer can trigger and read diagnostics
   ipcMain.handle('henry:diagnostic:run', async () => {
-    const report = await runDiagnostic(true);
+    const report = await runDiagnostic(true, db);
     saveReport(db, report);
     return report;
   });
@@ -759,16 +817,27 @@ app.whenReady().then(() => {
 
   // ── Register hotkeys ──────────────────────────────────────────────────────────
 
+  // macOS: Option+Space (⌥Space), Option+H (⌥H), Cmd+Shift+H (⌘⇧H) backup
+  // Linux/Windows: Alt+C capture fallback when Alt+Space is unavailable,
+  // Alt+H toggle, Ctrl+Shift+H (or Win+Shift+H) backup.
+  const isMac = process.platform === 'darwin';
+  const registeredHotkeys: Array<{ accelerator: string; label: string; description: string }> = [];
+
   // ⌥Space — Smart Capture (primary capture hotkey — simple, one modifier)
   const spaceOk = globalShortcut.register('Alt+Space', () => { void henrySmartCapture(); });
-  if (!spaceOk) {
+  if (spaceOk) {
+    registeredHotkeys.push({ accelerator: 'Alt+Space', label: isMac ? '⌥Space' : 'Alt+Space', description: 'Capture selected text' });
+  } else {
     // ⌥Space is taken (Spotlight?) — fall back to ⌥C
-    globalShortcut.register('Alt+C', () => { void henrySmartCapture(); });
+    const altCOk = globalShortcut.register('Alt+C', () => { void henrySmartCapture(); });
+    if (altCOk) {
+      registeredHotkeys.push({ accelerator: 'Alt+C', label: 'Alt+C', description: 'Capture selected text' });
+    }
     log.info('[Henry] Alt+Space unavailable — using Alt+C for capture');
   }
 
   // ⌥H — Open / focus Henry (simple, one key + one modifier)
-  globalShortcut.register('Alt+H', () => {
+  const altHOk = globalShortcut.register('Alt+H', () => {
     const win = getMainWindow();
     if (win) {
       if (win.isVisible() && win.isFocused()) {
@@ -779,9 +848,18 @@ app.whenReady().then(() => {
       }
     }
   });
+  if (altHOk) {
+    registeredHotkeys.push({ accelerator: 'Alt+H', label: isMac ? '⌥H' : 'Alt+H', description: 'Open or hide Henry' });
+  }
 
   // Keep ⌘⇧H as backup for users who prefer it
-  globalShortcut.register('CommandOrControl+Shift+H', () => { void henrySmartCapture(); });
+  const backupOk = globalShortcut.register('CommandOrControl+Shift+H', () => { void henrySmartCapture(); });
+  if (backupOk) {
+    registeredHotkeys.push({ accelerator: isMac ? 'Command+Shift+H' : 'Control+Shift+H', label: isMac ? '⌘⇧H' : 'Ctrl+Shift+H', description: 'Backup capture (reads clipboard)' });
+  }
+
+  // Expose the actually-registered hotkeys to the renderer
+  ipcMain.handle('henry:getRegisteredHotkeys', () => registeredHotkeys);
 
   // Unregister on quit
   app.on('will-quit', () => {
