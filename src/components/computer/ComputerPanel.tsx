@@ -394,12 +394,12 @@ export default function ComputerPanel() {
                 </span>
               </>
             )}
-            {needsPerms && (
+            {needsPerms && isMacOS() && (
               <button
                 onClick={openSystemSettings}
                 className="text-[10px] px-2 py-0.5 rounded-full border border-henry-accent/30 bg-henry-accent/8 text-henry-accent font-medium hover:bg-henry-accent/15 transition-all"
               >
-                {isMacOS() ? 'Fix permissions →' : 'Open Settings →'}
+                Fix permissions →
               </button>
             )}
           </div>
@@ -413,14 +413,32 @@ export default function ComputerPanel() {
           <p className="text-xs text-henry-text-muted mb-3 leading-relaxed">
             {isMacOS()
               ? `Henry needs Accessibility${!perms?.screenRecording ? ' and Screen Recording' : ''} to control your Mac.`
-              : `Henry needs Computer Control${!perms?.screenRecording ? ' and Screen Capture' : ''} to control your {getPlatformLabel()}.`}
-            Click below — {getSystemSettingsLabel()} will open to the exact page.
+              : `Henry needs Computer Control${!perms?.screenRecording ? ' and Screen Capture' : ''} to control your ${getPlatformLabel()}.`}
+            {isMacOS() ? (
+              <>Click below — {getSystemSettingsLabel()} will open to the exact page.</>
+            ) : (
+              <>Capability-based setup — see details below.</>
+            )}
           </p>
           <ol className="text-xs text-henry-text-muted space-y-1 mb-3">
-            <li>1. Click "Open System Settings" below</li>
-            {!perms?.accessibility && <li>2. Find <strong className="text-henry-text">{isMacOS() ? 'Accessibility' : 'Computer Control'}</strong> → find Henry AI → toggle ON</li>}
-            {!perms?.screenRecording && <li>{!perms?.accessibility ? '3.' : '2.'} Find <strong className="text-henry-text">{isMacOS() ? 'Screen Recording' : 'Screen Capture'}</strong> → find Henry AI → toggle ON</li>}
-            <li>{(!perms?.accessibility && !perms?.screenRecording) ? '4.' : !perms?.accessibility || !perms?.screenRecording ? '3.' : '2.'} Restart Henry</li>
+            {isMacOS() ? (
+              <>
+                <li>1. Click "Open System Settings" below</li>
+                {!perms?.accessibility && <li>2. Find <strong className="text-henry-text">Accessibility</strong> → find Henry AI → toggle ON</li>}
+                {!perms?.screenRecording && <li>{!perms?.accessibility ? '3.' : '2.'} Find <strong className="text-henry-text">Screen Recording</strong> → find Henry AI → toggle ON</li>}
+                <li>{(!perms?.accessibility && !perms?.screenRecording) ? '4.' : !perms?.accessibility || !perms?.screenRecording ? '3.' : '2.'} Restart Henry</li>
+              </>
+            ) : (
+              <>
+                {!perms?.accessibility && (
+                  <li>1. Install Computer Control backend: <code className="text-henry-accent bg-henry-accent/10 px-1 rounded">sudo apt install xdotool wmctrl</code> (X11) or <code className="text-henry-accent bg-henry-accent/10 px-1 rounded">sudo apt install ydotool</code> (Wayland)</li>
+                )}
+                {!perms?.screenRecording && (
+                  <li>{!perms?.accessibility ? '1.' : '2.'} Install Screen Capture backend: <code className="text-henry-accent bg-henry-accent/10 px-1 rounded">sudo apt install scrot</code> (X11) or <code className="text-henry-accent bg-henry-accent/10 px-1 rounded">sudo apt install grim</code> (Wayland)</li>
+                )}
+                <li>{(!perms?.accessibility && !perms?.screenRecording) ? '1.' : !perms?.accessibility || !perms?.screenRecording ? '2.' : '3.'} Restart Henry after installing missing backends</li>
+              </>
+            )}
           </ol>
           <button
             onClick={openSystemSettings}
