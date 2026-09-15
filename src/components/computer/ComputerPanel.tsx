@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useStore } from '../../store';
 import { type ComputerStep } from '../../henry/computerAgent';
-import { isMacOS, isLinux, isWindows } from '../../utils/platform';
+import { isMacOS, isLinux, isWindows, getPlatformName } from '../../utils/platform';
 
 // Direct sync server execution — bypasses Groq tool-use API (which fails on llama)
 async function execOnMac(command: string): Promise<{success: boolean; output: string; error: string}> {
@@ -15,6 +15,14 @@ async function execOnMac(command: string): Promise<{success: boolean; output: st
   } catch (e) {
     return { success: false, output: '', error: String(e) };
   }
+}
+
+function getPlatformLabel(): string {
+  return isMacOS() ? 'Mac' : isLinux() ? 'Linux' : isWindows() ? 'Windows' : 'computer';
+}
+
+function getSystemSettingsLabel(): string {
+  return isMacOS() ? 'System Settings' : 'System Settings';
 }
 
 // Platform-aware shell command builders
@@ -127,9 +135,8 @@ function lockScreenCommand(): string {
   }
 }
 
-// Parse plain English commands into shell commands
 function parseCommand(text: string): { shell: string; description: string }[] {
-  const home = localStorage.getItem('henry:mac_home') || '/Users/' + (localStorage.getItem('henry:mac_username') || 'user');
+  const home = localStorage.getItem('henry:home') || localStorage.getItem('henry:mac_home') || '/Users/' + (localStorage.getItem('henry:username') || localStorage.getItem('henry:mac_username') || 'user');
   const t = text.toLowerCase().trim();
 
   // Create folder — many phrasings
@@ -216,7 +223,7 @@ function parseCommand(text: string): { shell: string; description: string }[] {
 
   // Restart / shutdown — be safe, confirm first
   if (t.match(/restart|reboot/)) {
-    return [{ shell: `osascript -e 'tell app "System Events" to restart'`, description: 'Restarting Mac' }];
+    return [{ shell: isMacOS() ? `osascript -e 'tell app "System Events" to restart'` : isLinux() ? `systemctl reboot` : `shutdown /r /t 5`, description: `Restarting ${getPlatformLabel()}` }];
   }
 
   // Fallback: treat as raw shell command if it looks like one
@@ -346,31 +353,53 @@ export default function ComputerPanel() {
       {/* Header */}
       <div className="px-5 pt-5 pb-3 border-b border-henry-border/20 shrink-0">
         <h2 className="text-base font-semibold text-henry-text">Computer Control</h2>
-        <p className="text-xs text-henry-text-muted mt-0.5">Henry executes real actions on your Mac</p>
+        <p className="text-xs text-henry-text-muted mt-0.5">Henry executes real actions on your {getPlatformLabel()}</p>
 
-        {/* Permission badges */}
+        {/* Permission badges - platform aware */}
         {perms && (
           <div className="flex items-center gap-2 mt-2 flex-wrap">
-            <span className={`text-[10px] px-2 py-0.5 rounded-full border font-medium ${
-              perms.accessibility
-                ? 'border-green-500/30 bg-green-500/8 text-green-400'
-                : 'border-red-500/30 bg-red-500/8 text-red-400'
-            }`}>
-              {perms.accessibility ? '✓' : '✗'} Accessibility
-            </span>
-            <span className={`text-[10px] px-2 py-0.5 rounded-full border font-medium ${
-              perms.screenRecording
-                ? 'border-green-500/30 bg-green-500/8 text-green-400'
-                : 'border-red-500/30 bg-red-500/8 text-red-400'
-            }`}>
-              {perms.screenRecording ? '✓' : '✗'} Screen Recording
-            </span>
+            {isMacOS() && (
+              <>
+                <span className={`text-[10px] px-2 py-0.5 rounded-full border font-medium ${
+                  perms.accessibility
+                    ? 'border-green-500/30 bg-green-500/8 text-green-400'
+                    : 'border-red-500/30 bg-red-500/8 text-red-400'
+                }`}>
+                  {perms.accessibility ? '✓' : '✗'} Accessibility
+                </span>
+                <span className={`text-[10px] px-2 py-0.5 rounded-full border font-medium ${
+                  perms.screenRecording
+                    ? 'border-green-500/30 bg-green-500/8 text-green-400'
+                    : 'border-red-500/30 bg-red-500/8 text-red-400'
+                }`}>
+                  {perms.screenRecording ? '✓' : '✗'} Screen Recording
+                </span>
+              </>
+            )}
+            {!isMacOS() && (
+              <>
+                <span className={`text-[10px] px-2 py-0.5 rounded-full border font-medium ${
+                  perms.accessibility
+                    ? 'border-green-500/30 bg-green-500/8 text-green-400'
+                    : 'border-red-500/30 bg-red-500/8 text-red-400'
+                }`}>
+                  {perms.accessibility ? '✓' : '✗'} Computer Control
+                </span>
+                <span className={`text-[10px] px-2 py-0.5 rounded-full border font-medium ${
+                  perms.screenRecording
+                    ? 'border-green-500/30 bg-green-500/8 text-green-400'
+                    : 'border-red-500/30 bg-red-500/8 text-red-400'
+                }`}>
+                  {perms.screenRecording ? '✓' : '✗'} Screen Capture
+                </span>
+              </>
+            )}
             {needsPerms && (
               <button
                 onClick={openSystemSettings}
                 className="text-[10px] px-2 py-0.5 rounded-full border border-henry-accent/30 bg-henry-accent/8 text-henry-accent font-medium hover:bg-henry-accent/15 transition-all"
               >
-                Fix permissions →
+                {isMacOS() ? 'Fix permissions →' : 'Open Settings →'}
               </button>
             )}
           </div>
@@ -382,20 +411,22 @@ export default function ComputerPanel() {
         <div className="mx-5 mt-4 p-4 rounded-xl border border-henry-accent/20 bg-henry-accent/5 shrink-0">
           <p className="text-sm font-medium text-henry-text mb-1">Permissions needed</p>
           <p className="text-xs text-henry-text-muted mb-3 leading-relaxed">
-            Henry needs Accessibility{!perms?.screenRecording ? ' and Screen Recording' : ''} to control your Mac.
-            Click below — System Settings will open to the exact page.
+            {isMacOS()
+              ? `Henry needs Accessibility${!perms?.screenRecording ? ' and Screen Recording' : ''} to control your Mac.`
+              : `Henry needs Computer Control${!perms?.screenRecording ? ' and Screen Capture' : ''} to control your {getPlatformLabel()}.`}
+            Click below — {getSystemSettingsLabel()} will open to the exact page.
           </p>
           <ol className="text-xs text-henry-text-muted space-y-1 mb-3">
             <li>1. Click "Open System Settings" below</li>
-            {!perms?.accessibility && <li>2. Find <strong className="text-henry-text">Accessibility</strong> → find Henry AI → toggle ON</li>}
-            {!perms?.screenRecording && <li>{!perms?.accessibility ? '3.' : '2.'} Find <strong className="text-henry-text">Screen Recording</strong> → find Henry AI → toggle ON</li>}
+            {!perms?.accessibility && <li>2. Find <strong className="text-henry-text">{isMacOS() ? 'Accessibility' : 'Computer Control'}</strong> → find Henry AI → toggle ON</li>}
+            {!perms?.screenRecording && <li>{!perms?.accessibility ? '3.' : '2.'} Find <strong className="text-henry-text">{isMacOS() ? 'Screen Recording' : 'Screen Capture'}</strong> → find Henry AI → toggle ON</li>}
             <li>{(!perms?.accessibility && !perms?.screenRecording) ? '4.' : !perms?.accessibility || !perms?.screenRecording ? '3.' : '2.'} Restart Henry</li>
           </ol>
           <button
             onClick={openSystemSettings}
             className="w-full py-2.5 rounded-xl bg-henry-accent text-henry-bg font-semibold text-sm hover:bg-henry-accent/90 transition-all"
           >
-            Open System Settings
+            {isMacOS() ? 'Open System Settings' : 'Open Settings'}
           </button>
         </div>
       )}
@@ -407,24 +438,27 @@ export default function ComputerPanel() {
             <div className="text-4xl mb-3">⌘</div>
             <p className="text-sm font-medium text-henry-text mb-1">Tell Henry what to do</p>
             <p className="text-xs text-henry-text-muted max-w-xs leading-relaxed">
-              Type any command in plain English. Henry executes real shell commands on your Mac.
+              Type any command in plain English. Henry executes real shell commands on your {getPlatformLabel()}.
             </p>
             <div className="mt-4 space-y-1.5">
               {[
                 'Create a folder called henrystuff on my desktop',
-                'Open Safari and go to google.com',
+                {ex: 'Open Firefox and go to google.com', mac: 'Open Safari and go to google.com'},
                 'What apps are currently running?',
                 'Take a screenshot and show me',
-                'Open my Desktop folder in Finder',
-              ].map(ex => (
-                <button
-                  key={ex}
-                  onClick={() => { setCommand(ex); inputRef.current?.focus(); }}
-                  className="block text-left text-[11px] text-henry-accent hover:underline px-2 w-full"
-                >
-                  "{ex}"
-                </button>
-              ))}
+                {ex: 'Open my Desktop folder in Finder', mac: 'Open my Desktop folder in Finder', linux: 'Open my Desktop folder in Files', win: 'Open my Desktop folder in Explorer'},
+              ].map((item, idx) => {
+                const ex = typeof item === 'string' ? item : item[isMacOS() ? 'mac' : isLinux() ? 'linux' : 'win'] || item.ex;
+                return (
+                  <button
+                    key={idx}
+                    onClick={() => { setCommand(ex); inputRef.current?.focus(); }}
+                    className="block text-left text-[11px] text-henry-accent hover:underline px-2 w-full"
+                  >
+                    "{ex}"
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
@@ -484,7 +518,7 @@ export default function ComputerPanel() {
             value={command}
             onChange={e => setCommand(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') run(); }}
-            placeholder="Tell Henry what to do on your Mac…"
+            placeholder={`Tell Henry what to do on your ${getPlatformLabel()}…`}
             disabled={running}
             className="flex-1 bg-henry-surface/50 border border-henry-border/30 rounded-xl px-4 py-3 text-sm text-henry-text placeholder-henry-text-muted outline-none focus:border-henry-accent/40 transition-all disabled:opacity-40"
           />

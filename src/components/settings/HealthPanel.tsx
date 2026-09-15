@@ -239,11 +239,10 @@ export default function HealthPanel() {
           )}
 
           {/* Desktop Capabilities — cross-platform capability status */}
-          {(capabilities || capsLoading) && (
+          {capabilities && (
             <div className="bg-henry-surface rounded-xl border border-henry-border/20 p-4">
               <div className="flex items-center justify-between mb-3">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-henry-text-muted">Desktop Capabilities</p>
-                {capsLoading && <span className="text-[10px] text-henry-accent animate-pulse">Checking…</span>}
                 {capabilities?.session && (
                   <span className="text-[9px] text-henry-text-muted font-mono">
                     {capabilities.session.type} {capabilities.session.isWayland ? '(Wayland)' : ''} {capabilities.session.isWSL ? '(WSL)' : ''}
@@ -251,10 +250,40 @@ export default function HealthPanel() {
                 )}
               </div>
               <div className="space-y-2">
-                {renderCapability(capabilities!.clipboard, 'Clipboard')}
-                {renderCapability(capabilities!.selectedText, 'Selected Text')}
-                {renderCapability(capabilities!.screenCapture, 'Screen Capture')}
-                {renderCapability(capabilities!.inputAutomation, 'Input Automation')}
+                {renderCapability(capabilities.clipboard, 'Clipboard')}
+                {renderCapability(capabilities.selectedText, 'Selected Text')}
+                {renderCapability(capabilities.screenCapture, 'Screen Capture')}
+                {renderCapability(capabilities.inputAutomation, 'Input Automation')}
+              </div>
+            </div>
+          )}
+          {capsLoading && !capabilities && (
+            <div className="bg-henry-surface rounded-xl border border-henry-border/20 p-4">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-henry-text-muted">Desktop Capabilities</p>
+                <span className="text-[10px] text-henry-accent animate-pulse">Checking…</span>
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center gap-3 p-2 rounded-lg bg-henry-bg/50 border border-henry-border/10 animate-pulse">
+                  <span className="text-sm font-bold flex-shrink-0 text-gray-400">⟳</span>
+                  <span className="text-sm font-medium text-henry-text w-48">Clipboard</span>
+                  <span className="text-xs text-gray-400 font-mono px-2 py-0.5 rounded bg-henry-bg/30">loading</span>
+                </div>
+                <div className="flex items-center gap-3 p-2 rounded-lg bg-henry-bg/50 border border-henry-border/10 animate-pulse">
+                  <span className="text-sm font-bold flex-shrink-0 text-gray-400">⟳</span>
+                  <span className="text-sm font-medium text-henry-text w-48">Selected Text</span>
+                  <span className="text-xs text-gray-400 font-mono px-2 py-0.5 rounded bg-henry-bg/30">loading</span>
+                </div>
+                <div className="flex items-center gap-3 p-2 rounded-lg bg-henry-bg/50 border border-henry-border/10 animate-pulse">
+                  <span className="text-sm font-bold flex-shrink-0 text-gray-400">⟳</span>
+                  <span className="text-sm font-medium text-henry-text w-48">Screen Capture</span>
+                  <span className="text-xs text-gray-400 font-mono px-2 py-0.5 rounded bg-henry-bg/30">loading</span>
+                </div>
+                <div className="flex items-center gap-3 p-2 rounded-lg bg-henry-bg/50 border border-henry-border/10 animate-pulse">
+                  <span className="text-sm font-bold flex-shrink-0 text-gray-400">⟳</span>
+                  <span className="text-sm font-medium text-henry-text w-48">Input Automation</span>
+                  <span className="text-xs text-gray-400 font-mono px-2 py-0.5 rounded bg-henry-bg/30">loading</span>
+                </div>
               </div>
             </div>
           )}
