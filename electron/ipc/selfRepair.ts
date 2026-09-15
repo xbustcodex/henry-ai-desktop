@@ -23,7 +23,7 @@ const ENV = { ...process.env, HOME, PATH: `/opt/homebrew/bin:/usr/local/bin:/usr
 export interface HealthCheck {
   id: string;
   name: string;
-  category: 'required' | 'recommended' | 'optional';
+  category: 'required' | 'recommended' | 'optional' | 'configuration' | 'not-applicable';
   description: string;
   check: (db: Database.Database) => Promise<CheckResult>;
   fix?: (db: Database.Database) => Promise<FixResult>;
@@ -65,13 +65,37 @@ function toolExists(cmd: string): boolean {
   try { execSync(`which ${cmd}`, { encoding: 'utf8', env: ENV, timeout: 3000 }); return true; } catch { return false; }
 }
 
-async function brewInstall(pkg: string): Promise<FixResult> {
-  return new Promise(resolve => {
-    exec(`${BREW} install ${pkg}`, { env: ENV, timeout: 120_000 }, (err) => {
-      if (err) resolve({ success: false, message: `brew install ${pkg} failed: ${err.message.slice(0, 100)}` });
-      else resolve({ success: true, message: `Installed ${pkg} via brew` });
+async function installViaPackageManager(pkg: string): Promise<FixResult> {
+  const platform = process.platform;
+  if (platform === 'darwin') {
+    return new Promise(resolve => {
+      exec(`${BREW} install ${pkg}`, { env: ENV, timeout: 120_000 }, (err) => {
+        if (err) resolve({ success: false, message: `brew install ${pkg} failed: ${err.message.slice(0, 100)}` });
+        else resolve({ success: true, message: `Installed ${pkg} via brew` });
+      });
     });
-  });
+  } else if (platform === 'linux') {
+    // Try apt first, then fallback to generic instructions
+    return new Promise(resolve => {
+      exec(`apt-get update && apt-get install -y ${pkg}`, { env: ENV, timeout: 120_000 }, (err) => {
+        if (err) resolve({ success: false, message: `apt install ${pkg} failed (need sudo?): ${err.message.slice(0, 100)}. Try: sudo apt-get install ${pkg}` });
+        else resolve({ success: true, message: `Installed ${pkg} via apt` });
+      });
+    });
+  } else if (platform === 'win32') {
+    // Windows: prefer winget, fallback to choco, then manual
+    return new Promise(resolve => {
+      exec(`winget install --id ${pkg} --silent --accept-source-agreements --accept-package-agreements`, { env: ENV, timeout: 120_000 }, (err) => {
+        if (!err) return resolve({ success: true, message: `Installed ${pkg} via winget` });
+        // Try chocolatey
+        exec(`choco install ${pkg} -y`, { env: ENV, timeout: 120_000 }, (err2) => {
+          if (err2) resolve({ success: false, message: `Auto-install failed. Try: winget install ${pkg} or choco install ${pkg}` });
+          else resolve({ success: true, message: `Installed ${pkg} via chocolatey` });
+        });
+      });
+    });
+  }
+  return { success: false, message: `Auto-install not supported on this platform for ${pkg}` };
 }
 
 // Get Henry workspace directory
@@ -103,26 +127,26 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
     {
       id: 'brew',
       name: 'Homebrew',
-      category: isDarwin() ? 'required' : 'optional',
-      description: 'Package manager — used to install everything else',
+      category: isDarwin() ? 'required' : 'not-applicable',
+      description: 'Package manager — used to install everything else (macOS only)',
       check: async () => {
-        if (!isDarwin()) return { ok: true, detail: 'Homebrew is only available on macOS' };
+        if (!isDarwin()) return { ok: true, detail: 'Not applicable on this platform' };
         const v = toolVersion(BREW);
         return v ? { ok: true, version: v } : { ok: false, detail: 'Homebrew not found' };
       },
       // brew can't auto-install itself — give user a one-liner
     },
 
-    {
+{
       id: 'node',
       name: 'Node.js',
       category: 'required',
-      description: 'JavaScript runtime for Henry\'s backend',
+      description: "JavaScript runtime for Henry's backend",
       check: async () => {
         const v = toolVersion('node');
-        return v ? { ok: true, volume: v } : { ok: false, detail: 'Node.js not installed' };
+        return v ? { ok: true, version: v } : { ok: false, detail: 'Node.js not installed' };
       },
-      fix: async () => brewInstall('node'),
+      fix: async () => installViaPackageManager('node'),
     },
 
     {
@@ -150,7 +174,7 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
       },
       fix: async () => {
         if (isDarwin()) {
-          return brewInstall('cloudflared');
+          return installViaPackageManager('cloudflared');
         }
         if (isLinux()) {
           try { execSync('apt-get update && apt-get install -y cloudflared', { env: ENV, timeout: 120_000 }); return { success: true, message: 'Installed cloudflared via apt' }; } catch {
@@ -169,9 +193,9 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
       description: 'Version control — used for Henry updates',
       check: async () => {
         const v = toolVersion('git');
-        return v ? { ok: true, volume: v } : { ok: false, detail: 'Git not installed' };
+        return v ? { ok: true, version: v } : { ok: false, detail: 'Git not installed' };
       },
-      fix: async () => brewInstall('git'),
+      fix: async () => installViaPackageManager('git'),
     },
 
     // ── Media tools ───────────────────────────────────────────────────────────
@@ -182,9 +206,9 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
       description: 'Audio/video processing — required for voice features and media generation',
       check: async () => {
         const v = toolVersion('ffmpeg', '-version');
-        return v ? { ok: true, volume: v.split('\n')[0] } : { ok: false, detail: 'ffmpeg not installed — voice processing unavailable' };
+        return v ? { ok: true, version: v.split('\n')[0] } : { ok: false, detail: 'ffmpeg not installed — voice processing unavailable' };
       },
-      fix: async () => brewInstall('ffmpeg'),
+      fix: async () => installViaPackageManager('ffmpeg'),
     },
 
     // ── Voice (free local speech) ─────────────────────────────────────────────
@@ -204,12 +228,7 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
           return { ok: false, detail: String(e) };
         }
       },
-      fix: async () => {
-        if (!toolVersion(BREW)) {
-          return { success: false, message: 'Homebrew not found — cannot auto-install whisper-cpp' };
-        }
-        return brewInstall('whisper-cpp');
-      },
+      fix: async () => installViaPackageManager('whisper-cpp'),
     },
 
     {
@@ -282,9 +301,9 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
       description: 'Video downloader — for media capture features',
       check: async () => {
         const v = toolVersion('yt-dlp');
-        return v ? { ok: true, volume: v } : { ok: false, detail: 'yt-dlp not installed' };
+        return v ? { ok: true, version: v } : { ok: false, detail: 'yt-dlp not installed' };
       },
-      fix: async () => brewInstall('yt-dlp'),
+      fix: async () => installViaPackageManager('yt-dlp'),
     },
 
     // ── Python ────────────────────────────────────────────────────────────────
@@ -295,9 +314,9 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
       description: 'Used for AI scripts, data processing, and Henry utilities',
       check: async () => {
         const v = toolVersion('python3');
-        return v ? { ok: true, volume: v } : { ok: false, detail: 'Python 3 not installed' };
+        return v ? { ok: true, version: v } : { ok: false, detail: 'Python 3 not installed' };
       },
-      fix: async () => brewInstall('python3'),
+      fix: async () => installViaPackageManager('python3'),
     },
 
     // ── Coder engine ──────────────────────────────────────────────────────────
@@ -378,21 +397,21 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
           ? { ok: true, volume: v, detail: `DB: ${(fs.statSync(henryDbPath).size / 1024).toFixed(0)}KB` }
           : { ok: false, detail: !dbExists ? 'Database file missing — will recreate on restart' : 'sqlite3 not installed' };
       },
-      fix: async () => brewInstall('sqlite3'),
+      fix: async () => installViaPackageManager('sqlite3'),
     },
 
     // ── Henry settings check ──────────────────────────────────────────────────
     {
       id: 'groq_key',
       name: 'Groq API Key',
-      category: 'optional',
-      description: 'Free AI model access — Henry\'s brain',
+      category: 'configuration',
+      description: 'Free AI model access — Henry\'s brain (configuration, not system health)',
       check: async (_db) => {
         try {
           const row = _db.prepare("SELECT api_key FROM providers WHERE id='groq' AND enabled=1;").get() as { api_key: string } | undefined;
           if (row && row.api_key && row.api_key.length > 10) return { ok: true, detail: `Key set (${row.api_key.length} chars)` };
-          return { ok: false, detail: 'No Groq API key — configure in Settings → AI Providers' };
-        } catch { return { ok: false, detail: 'Could not check API key' }; }
+          return { ok: true, detail: 'No Groq API key — configure in Settings → AI Providers (optional)' };
+        } catch { return { ok: true, detail: 'Could not check API key' }; }
       },
       // No auto-fix for API keys — user must configure in Settings
     },
@@ -637,17 +656,26 @@ export async function runDiagnostic(autoFix = true, db: Database.Database): Prom
 
   const checks = HEALTH_CHECKS(db);
   for (const check of checks) {
+    const category = check.category; // Store to avoid type narrowing issues
+    const isConfig = category === 'configuration';
+    const isRequired = category === 'required';
     const result = await check.check(db).catch(e => ({ ok: false, detail: String(e) }));
     const entry: DiagnosticReport['checks'][0] = {
       id: check.id,
       name: check.name,
       category: check.category,
-      status: result.ok ? 'ok' : (check.category === 'required' ? 'error' : 'warning'),
+      status: result.ok
+        ? 'ok'
+        : isRequired
+          ? 'error'
+          : isConfig
+            ? 'ok'
+            : 'warning',
       detail: result.detail,
       version: (result as CheckResult).version,
     };
 
-    if (!result.ok && autoFix && check.fix) {
+    if (!result.ok && autoFix && check.fix && !isConfig) {
       try {
         const fixResult = await check.fix(db);
         if (fixResult.success) {
@@ -655,22 +683,20 @@ export async function runDiagnostic(autoFix = true, db: Database.Database): Prom
           entry.fixMessage = fixResult.message;
           report.summary.fixed++;
         } else {
-          entry.status = check.category === 'required' ? 'fix_failed' : 'warning';
+          entry.status = isRequired ? 'fix_failed' : 'warning';
           entry.fixMessage = fixResult.message;
-          if (check.category === 'required') report.summary.failed++;
+          if (isRequired) report.summary.failed++;
           else report.summary.warnings++;
         }
       } catch (e) {
         entry.fixMessage = String(e);
         entry.status = 'fix_failed';
-        if (check.category === 'required') report.summary.failed++;
+        if (isRequired) report.summary.failed++;
         else report.summary.warnings++;
       }
     } else if (result.ok) {
       report.summary.ok++;
-    } else if (check.category === 'required') {
-      report.summary.failed++;
-    } else {
+    } else if (!isConfig) {
       report.summary.warnings++;
     }
 

@@ -12,10 +12,10 @@ type NavItem = { id: ViewType; icon?: string; lucideIcon?: ComponentType<{ size?
 // Core nav — the things you actually use daily
 // Everything else is accessible but not cluttering the rail
 const CORE_NAV: NavItem[] = [
-  { id: 'hq',         icon: '◈',  label: 'HQ',          desc: 'Command hub — control your Mac and automate workflows' },
+  { id: 'hq',         icon: '◈',  label: 'HQ',          desc: 'Command hub — control your computer and automate workflows' },
   { id: 'today',      icon: '⌂',  label: 'Today',       desc: "Today's plan and what needs you" },
   { id: 'chat',       icon: '◉',  label: 'Chat',        desc: 'Talk to Henry' },
-  { id: 'computer',   icon: '⌘',  label: 'Computer',    desc: 'Let Henry run apps and commands on your Mac' },
+  { id: 'computer',   icon: '⌘',  label: 'Computer',    desc: 'Let Henry run apps and commands on your computer' },
   { id: 'journal',    icon: '✦',  label: 'Journal',     desc: 'Private journal entries' },
   { id: 'book',       lucideIcon: BookOpen, label: 'Book', desc: 'Capture your life story — the Book Crew turns it into chapters' },
   { id: 'scripture',  icon: '✝',  label: 'Scripture',   desc: 'Bible study and scripture tools' },

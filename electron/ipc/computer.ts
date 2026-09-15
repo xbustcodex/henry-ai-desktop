@@ -770,8 +770,15 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
   // ── Kill process ─────────────────────────────────────────────────────────
   ipcMain.handle('computer:killProcess', async (_e, pid: number) => {
     const { execSync } = await import('child_process');
-    try { execSync(`kill ${pid}`, { timeout: 2000 }); return { ok: true }; }
-    catch (e) { return { ok: false, error: String(e) }; }
+    const platform = process.platform;
+    try {
+      if (platform === 'win32') {
+        execSync(`taskkill /PID ${pid} /F`, { timeout: 2000 });
+      } else {
+        execSync(`kill ${pid}`, { timeout: 2000 });
+      }
+      return { ok: true };
+    } catch (e) { return { ok: false, error: String(e) }; }
   });
 
   // ── Schedule / automation ─────────────────────────────────────────────────

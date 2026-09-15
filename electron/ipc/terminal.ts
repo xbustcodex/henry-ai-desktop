@@ -71,9 +71,9 @@ export function registerTerminalHandlers(winGetter: WindowGetter, workspacePath:
       const timeout = params.timeout || 30000; // Default 30s timeout
 
       return new Promise((resolve) => {
-        const child = spawn('sh', ['-c', params.command], {
+        const child = spawn(process.platform === 'win32' ? 'cmd' : 'sh', process.platform === 'win32' ? ['/c', params.command] : ['-c', params.command], {
           cwd,
-          env: { ...process.env, TERM: 'xterm-256color' },
+          env: { ...process.env, TERM: process.platform === 'win32' ? undefined : 'xterm-256color' },
           timeout,
         });
 

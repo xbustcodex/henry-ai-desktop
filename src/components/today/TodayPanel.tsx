@@ -5,6 +5,7 @@ import { getTodayBriefing, getTodayKey, saveBriefing, setGenerating, isGeneratin
 import type { DailyBriefing } from '../../henry/proactiveBriefing';
 import { getDailyIntention, setDailyIntention, clearDailyIntention } from '../../henry/dailyIntention';
 import { PANEL_QUICK_ASK } from '../../henry/henryQuickAsk';
+import { isMacOS, isLinux, isWindows } from '../../utils/platform';
 
 const HENRY_LAST_GREETING_KEY = 'henry:last_greeting_date';
 const HENRY_OPERATING_MODE_KEY = 'henry_operating_mode';
@@ -647,17 +648,17 @@ Keep it brief and encouraging.`;
             {/* Hotkey reference card */}
             <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-henry-surface/50 border border-henry-border/15">
               <div className="flex items-center gap-2">
-                <kbd className="bg-henry-surface border border-henry-border/40 text-henry-accent font-mono text-[10px] px-2 py-0.5 rounded-md">⌥Space</kbd>
+                <kbd className="bg-henry-surface border border-henry-border/40 text-henry-accent font-mono text-[10px] px-2 py-0.5 rounded-md">{isMacOS() ? '⌥Space' : 'Alt+C'}</kbd>
                 <span className="text-[11px] text-henry-text-muted">Capture anything</span>
               </div>
               <div className="w-px h-3 bg-henry-border/30" />
               <div className="flex items-center gap-2">
-                <kbd className="bg-henry-surface border border-henry-border/40 text-henry-text-muted font-mono text-[10px] px-2 py-0.5 rounded-md">⌥H</kbd>
+                <kbd className="bg-henry-surface border border-henry-border/40 text-henry-text-muted font-mono text-[10px] px-2 py-0.5 rounded-md">{isMacOS() ? '⌥H' : 'Alt+H'}</kbd>
                 <span className="text-[11px] text-henry-text-muted">Open / hide</span>
               </div>
               <div className="w-px h-3 bg-henry-border/30" />
               <div className="flex items-center gap-2">
-                <kbd className="bg-henry-surface border border-henry-border/40 text-henry-text-muted font-mono text-[10px] px-2 py-0.5 rounded-md">⌘⇧H</kbd>
+                <kbd className="bg-henry-surface border border-henry-border/40 text-henry-text-muted font-mono text-[10px] px-2 py-0.5 rounded-md">{isMacOS() ? '⌘⇧H' : (isWindows() ? 'Ctrl+Shift+H' : 'Ctrl+Shift+H')}</kbd>
                 <span className="text-[11px] text-henry-text-muted">Capture (backup)</span>
               </div>
             </div>

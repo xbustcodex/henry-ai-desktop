@@ -655,7 +655,7 @@ export default function App() {
                   </div>
                 </div>
                 <p className="text-sm text-henry-text-muted leading-relaxed">
-                  Henry runs locally. Your data never leaves this Mac. He can talk, think, write, automate your computer, generate images and video, study scripture, run your business — all from one place.
+                  Henry runs locally. Your data never leaves this computer. He can talk, think, write, automate your computer, generate images and video, study scripture, run your business — all from one place.
                 </p>
               </div>
 
@@ -663,7 +663,7 @@ export default function App() {
               <div className="px-6 py-4 space-y-2.5">
                 {[
                   { icon: '💬', label: 'Just start typing', desc: 'Henry is in Chat mode — ready now' },
-                  { icon: '🖥️', label: 'Computer control', desc: 'Tell Henry to do things on your Mac' },
+                  { icon: '🖥️', label: 'Computer control', desc: 'Tell Henry to do things on your computer' },
                   { icon: '📖', label: 'Bible study', desc: 'Deep scripture study with full canon awareness' },
                   { icon: '⚙️', label: 'Add your API keys', desc: 'Settings → AI Providers for image & video gen' },
                 ].map(item => (

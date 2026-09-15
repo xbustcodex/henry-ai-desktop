@@ -314,5 +314,5 @@ export function getCloudflaredPath(): string {
 export function installCloudflaredHint(): string {
   if (IS_MAC)   return 'brew install cloudflared';
   if (IS_WIN)   return 'winget install Cloudflare.cloudflared  (or download from cloudflare.com/products/tunnel)';
-  return 'curl -L --output /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 && chmod +x /usr/local/bin/cloudflared';
+  return 'sudo apt-get install cloudflared';
 }

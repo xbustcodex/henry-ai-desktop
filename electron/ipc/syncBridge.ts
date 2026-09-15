@@ -98,8 +98,9 @@ interface SSEClient {
 export async function startSyncTunnel(port: number): Promise<string | null> {
   try {
     const { spawn, execSync } = await import('child_process') as typeof import('child_process');
-    const cfPath = '/opt/homebrew/bin/cloudflared';
-    try { execSync(`which cloudflared || test -f ${cfPath}`, { stdio: 'ignore' }); }
+    const isMac = process.platform === 'darwin';
+    const cfPath = isMac ? '/opt/homebrew/bin/cloudflared' : undefined;
+    try { execSync(isMac ? `which cloudflared || test -f ${cfPath}` : 'which cloudflared', { stdio: 'ignore' }); }
     catch {
       log.debug('[SyncBridge] cloudflared not found');
       return null;
@@ -9454,7 +9455,9 @@ function getBundledBin(name: string, fallbacks: string[] = []): string {
 
 // Resolve bundled binaries once at startup
 const CLOUDFLARED_BIN = getBundledBin('cloudflared', [
-  '/opt/homebrew/bin/cloudflared', '/usr/local/bin/cloudflared'
+  ...(process.platform === 'darwin' ? ['/opt/homebrew/bin/cloudflared', '/usr/local/bin/cloudflared'] : []),
+  ...(process.platform === 'linux' ? ['/usr/bin/cloudflared', '/usr/local/bin/cloudflared'] : []),
+  ...(process.platform === 'win32' ? ['cloudflared.exe'] : []),
 ]);
 const OPENSCAD_BIN = getBundledBin('openscad', [
   '/Applications/OpenSCAD.app/Contents/MacOS/OpenSCAD',
