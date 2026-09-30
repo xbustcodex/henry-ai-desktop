@@ -31,7 +31,7 @@ const MIME_EXT: Record<string, string> = {
   'audio/wav': 'wav',
 };
 
-export interface AttachmentRecord {
+interface AttachmentRecord {
   id: string;
   conversation_id: string | null;
   message_id: string | null;

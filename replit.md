@@ -18,8 +18,8 @@ Desktop remains the source of truth. Sync via LAN (port 4242 HTTP+SSE) with clou
 - **Camera**: `@capacitor/camera` installed; configured in `capacitor.config.ts`
 - **QR scanner**: `@capacitor-mlkit/barcode-scanning` (native-only, externalized from web Rollup build)
 
-Supports OpenAI, Anthropic, Google Gemini, Groq, and Ollama. 7 built-in modes + unlimited custom modes:
-- **Companion** (chat) · **Secretary** (email, scheduling, tasks) · **Writer** · **Developer** (code) · **Biblical** (Ethiopian Orthodox aware) · **Coach** · **Business Builder**
+Supports OpenAI, Anthropic, Google Gemini, Groq, and Ollama. 10 built-in modes + unlimited custom modes:
+- **Chat** · **Writing** · **Code** · **App Builder** · **3D / Design** · **Secretary** · **Computer** · **Coach** · **Strategic** · **Business Builder**
 - **Custom Modes** — create and save your own modes with name, icon, description, system prompt, and launch with one tap
 
 ### Features
@@ -67,9 +67,8 @@ Supports OpenAI, Anthropic, Google Gemini, Groq, and Ollama. 7 built-in modes + 
 **Core AI**
 - **Groq hardwired** — Groq is set as the permanent default engine; 8B Instant (fast) + 70B Versatile (quality) auto-routed by `modelRouter.ts`
 - **Maximum memory** — `HENRY_MEMORY_CAPS` tuned for 128K context: 50 facts, 12K summary, 40 history turns, 8K chars/message
-- **maxTokens wired** — 16,384 tokens for biblical/quality tasks, 8,192 for fast tasks; passed to every stream call
+- **maxTokens wired** — passed to every stream call; each provider falls back to 4096 when a caller does not set one
 - **Full web access** — `webTools.ts` tool layer: `search_web`, `open_url`, `extract_page_text`, `summarize_page`, `collect_sources`; auto-detects web intent before LLM call; injects live context into system prompt; shows source citations as clickable pills
-- **Bible Corpus** — `bibleCorpus.ts`: downloads full KJV (~31K verses) from CDN, stores in IndexedDB; `getBibleContextForPrompt()` injects up to 100K chars of scripture into biblical mode context; "Load Full Bible" button with live download progress
 - **⌘K Command Palette** — fuzzy search across all modes, quick actions, recent conversations, navigation
 - **Rich memory** — projects, goals, and people injected into Henry's system prompt (localStorage)
 
@@ -172,7 +171,7 @@ src/
       TodayPanel.tsx      - Home screen; quick-ask input, mode cards, briefing
     settings/
       SettingsView.tsx    - Providers, Engines, General, Memory (Projects/Goals/People)
-  henry/          - Core AI logic, scripture tools, workspace utilities
+  henry/          - Core AI logic, gateway/router, workspace utilities
   store/          - Zustand global state
   global.d.ts     - CANONICAL type declarations for window.henryAPI
 vite.web.config.ts  - Web-specific Vite config (no Electron plugins, port 5000)
@@ -201,7 +200,7 @@ npm run rebuild        # rebuild better-sqlite3 for Electron
 ```bash
 npm run build:mac:unsigned
 ```
-Output: `release/Henry AI-*.dmg`
+Output: `release2/Henry AI-*.dmg`
 
 ### Build signed + notarized DMG (for distribution)
 1. Have an Apple Developer ID certificate in your Keychain
@@ -217,12 +216,12 @@ npm run build:mac
 ```
 
 ### Auto-updater (GitHub Releases)
-- `electron-updater` is wired and checks GitHub for new releases 10 s after launch
+- `electron-updater` is wired: it checks GitHub once on launch and then every 4 hours, with `autoInstallOnAppQuit` enabled
 - To publish a release with update artifacts:
 ```bash
 GH_TOKEN=your_github_token npm run build:mac
 ```
-- Then create a GitHub Release from the `release/` directory artifacts
+- Then create a GitHub Release from the `release2/` directory artifacts
 - Future app installs will auto-download and show an in-app banner: "Henry update ready — restart to apply"
 
 ## Mobile & Cross-Platform
@@ -307,12 +306,10 @@ The app uses `window.henryAPI` (Electron IPC bridge) everywhere. In web mode, `s
 - AI providers: OpenAI, Anthropic, Google Gemini, Ollama (direct API calls)
 - Streaming responses from all providers
 - Tasks, memory facts, conversation summaries (localStorage)
-- Scripture store (localStorage)
 - Virtual file system (localStorage)
 
 ### Limitations in Web Mode:
 - Terminal execution (disabled — shows friendly message)
-- File picker for scripture import (disabled — returns canceled)
 - Ollama requires CORS headers (`OLLAMA_ORIGINS=*`)
 
 ## Engine Configuration
@@ -358,7 +355,7 @@ After the first assistant response in a new conversation, Henry fires a backgrou
 - **Electron + React + Vite + TypeScript** desktop app.
 - **SQLite** (`better-sqlite3`) and **IPC** in `electron/` — the renderer talks only through `preload.ts` → `window.henryAPI`.
 
-Henry is intentionally **not** a generic chat wrapper: identity, lean memory, Biblical / Writer / Design3D modes, task bridge, export packs, and session recovery are first-class.
+Henry is intentionally **not** a generic chat wrapper: identity, lean memory, Writing / 3D-Design / Coach / Strategic modes, task bridge, export packs, and session recovery are first-class.
 
 ## Running locally (intended path)
 
@@ -387,7 +384,6 @@ Runs TypeScript checks and a **Vite production build** (renderer + main + preloa
 
 - Henry voice: calm, wise, strong, direct (`src/henry/charter.ts` and related prompts).
 - Lean memory (`src/henry/memoryContext.ts`, memory IPC).
-- Biblical mode + **Ethiopian Orthodox canon** and **Ethiopian Study Bible** profiles (`src/henry/biblicalProfiles.ts`; default profile is Ethiopian canon awareness).
 - Writer and Design3D modes, workspace context honesty (`src/henry/workspaceContext.ts`).
 - Task ↔ workspace linkage, export packs (`src/henry/exportBundle.ts`, `exportManifest.ts`), session recovery (`src/henry/sessionResume.ts`).
 - Command layer: `src/henry/commandLayer.ts`, `src/henry/commandActions.ts`, wired in `ChatView` (try `/help`).
@@ -396,7 +392,7 @@ Runs TypeScript checks and a **Vite production build** (renderer + main + preloa
 
 - **Installers**: `npm run build` runs `electron-builder` — needs platform tooling and signing for release.
 - **Workspace path**: Settings → General → **Workspace hint** stores `workspace_path` for UI gates and prompts; filesystem sandbox remains under app userData (see `electron/main.ts`).
-- **Automated E2E**: no Playwright/Cypress in repo; manual smoke on chat, tasks, files, scripture import, export pack, session restore after restart.
+- **Automated E2E**: no Playwright/Cypress in repo; manual smoke on chat, tasks, files, export pack, session restore after restart.
 
 ## Files to read first
 

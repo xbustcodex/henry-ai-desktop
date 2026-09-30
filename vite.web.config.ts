@@ -191,10 +191,6 @@ export default defineConfig({
           if (id.includes('node_modules/')) {
             return 'vendor';
           }
-          // App split: scripture / Bible corpus (large data)
-          if (id.includes('/henry/scripture') || id.includes('/henry/biblicalProfiles') || id.includes('/henry/scriptureImport')) {
-            return 'bible';
-          }
           // App split: heavy UI panels that are navigated to, not always visible
           if (id.includes('/components/workspace/') || id.includes('/components/terminal/') || id.includes('/components/recorder/')) {
             return 'panels-heavy';

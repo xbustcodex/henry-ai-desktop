@@ -1,7 +1,7 @@
 # RELEASE_READINESS.md
 
 **Version:** 3.0.7  
-**Date:** 2025-09-15  
+**Date:** 2026-09-30  
 **Phase:** 6 — Release Candidate Audit Complete
 
 ---
@@ -19,7 +19,7 @@ All audits pass. The Linux x64 build is verified as a release candidate. Windows
 | Check | Linux (x64) | Windows (x64) | macOS |
 |-------|-------------|---------------|-------|
 | TypeScript typecheck | ✅ PASS | ✅ PASS | ✅ PASS |
-| Unit/integration tests (283) | ✅ PASS | ✅ PASS | ✅ PASS |
+| Unit/integration tests (318 across 22 files) | ✅ PASS | ✅ PASS | ✅ PASS |
 | Production build (build:web) | ✅ PASS | ✅ PASS | ✅ PASS |
 | Electron security (nodeIntegration=false, contextIsolation=true, sandbox=true) | ✅ PASS | ✅ PASS | ✅ PASS |
 | Runtime startup | ✅ VERIFIED | 🔴 UNTESTED | 🔴 UNTESTED |
@@ -181,30 +181,40 @@ webPreferences: {
 
 ## Release Configuration
 
-### Package.json (version 3.0.7)
-- **Linux targets:** AppImage (x64), DEB (x64)
+### package.json → `build` field (version 3.0.7)
+This is the **only** builder configuration. `electron-builder.config.cjs` and `electron-builder.config.js` have been deleted; there is no external config file.
+- **Linux targets:** AppImage (x64), deb (x64)
 - **Windows targets:** NSIS installer (x64, arm64), Portable (x64)
-- **macOS targets:** DMG (arm64 only — x64 intentionally excluded)
-- **Output directory:** `release2/` (package.json), `release/` (electron-builder.config.cjs)
+- **macOS targets:** DMG (arm64, x64) and ZIP (arm64, x64)
+- **Output directory:** `release2/` (`directories.output`)
+- **Icons:** `build/icon.png` (Linux), `build/icon.ico` (Windows), `build/icon.icns` (macOS)
+- **Extra resources bundled:** `resources/bin` → `bin`, `resources/marketplace` → `marketplace`
+- **After sign:** `scripts/notarize.cjs`
 - **Artifact names:**
-  - Linux: `Henry-AI-${version}.AppImage`, `henry-ai_${version}_amd64.deb`
-  - Windows: `Henry-AI-Setup-${version}-${arch}.exe`, portable exe
+  - Linux: `Henry AI-${version}.AppImage`, `henry-ai-desktop_${version}_amd64.deb`
+  - Windows: `Henry-AI-Setup-${version}-${arch}.exe` (NSIS), portable exe
   - macOS: `Henry AI-${version}.dmg`
 
-### Electron Builder Configs
-- **package.json:** Legacy config (kept for reference)
-- **electron-builder.config.cjs:** Primary config (single source of truth)
-  - Mac: arm64 only (x64 intentionally excluded)
-  - Win: NSIS + portable, x64
-  - Linux: AppImage + DEB, x64 + arm64
+### Build Scripts
+| Script | Produces |
+|--------|----------|
+| `npm run build:linux` | AppImage + deb, x64 |
+| `npm run build:win` | NSIS + portable, x64 |
+| `npm run build:win:arm64` | NSIS, arm64 |
+| `npm run build:mac` | Signed DMG + ZIP, arm64 and x64 |
+| `npm run build:mac:unsigned` | Unsigned macOS build for local testing |
 
-### Build Resources Needed
-- `build/icon.icns` (macOS) — **missing, need to add**
-- `build/icon.ico` (Windows) — **missing, need to add**
-- `build/icons/` directory (Linux) — **missing, need to add**
-- `build/entitlements.mac.plist` — exists
-- `build/installer-header.bmp` (NSIS) — **missing, need to add**
-- `LICENSE` file — exists
+### Build Resources — all present
+| Resource | Consumer | Status |
+|----------|----------|--------|
+| `build/icon.icns` | macOS | ✅ exists |
+| `build/icon.ico` | Windows (installer + uninstaller icon) | ✅ exists |
+| `build/installer-header.bmp` | NSIS installer header | ✅ exists |
+| `build/icon.png` | Linux package icon | ✅ exists |
+| `build/entitlements.mac.plist` | macOS hardened runtime | ✅ exists |
+| `LICENSE` | NSIS license page | ✅ exists |
+
+There is no `build/icons/` directory and none is required: Linux packaging uses the single `build/icon.png` set in `package.json → build.linux.icon`.
 
 ---
 
@@ -216,8 +226,6 @@ webPreferences: {
 | cloudflared auto-install fails (apt needs sudo) | Harmless | Optional dependency; manual install documented |
 | Vite `resolve.alias` customResolver deprecation | Harmless | Vite 8 warning, will need update for Vite 9 |
 | Large bundle chunks (>500KB) | Harmless | Code-splitting opportunity, not a blocker |
-| Missing build icons/resources | Genuine defect | Need to add icons before packaging |
-| Missing installer-header.bmp | Genuine defect | Need for NSIS installer |
 
 ---
 
@@ -251,7 +259,7 @@ The Linux x64 build (AppImage + DEB) is verified as a release candidate. All run
 
 ## Next Steps
 
-1. Add missing build resources (icons, installer-header.bmp)
+1. ~~Add missing build resources (icons, installer-header.bmp)~~ — resolved: all resources are present in `build/`
 2. Run `npm run build:linux` to produce AppImage + DEB
 3. Test AppImage and DEB on clean Linux VM
 4. Test Windows build on Windows machine

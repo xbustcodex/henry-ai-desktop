@@ -94,7 +94,7 @@ function candidateBinaries(): string[] {
  * nested inside another Claude Code session.
  */
 /** Child env for detection + runs. Shared with the opencode engine. */
-export const buildClaudeChildEnv = buildCoderChildEnv;
+const buildClaudeChildEnv = buildCoderChildEnv;
 
 let cachedCli: ClaudeCliInfo | null = null;
 

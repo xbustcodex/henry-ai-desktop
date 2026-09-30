@@ -52,6 +52,7 @@ tsconfig.node.tsbuildinfo
 
 
 # Build outputs — generated on every build, do not track
+renderer/index.html
 renderer/assets/
 dist/
 dist-electron/

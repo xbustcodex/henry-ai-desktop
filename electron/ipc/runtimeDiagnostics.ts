@@ -55,7 +55,7 @@ export function recordStartupFailure(err: unknown): void {
   }
 }
 
-export function readStartupFailure(): StartupFailure | null {
+function readStartupFailure(): StartupFailure | null {
   try {
     const raw = fs.readFileSync(failureFile(), 'utf8');
     const parsed = JSON.parse(raw) as StartupFailure;
@@ -65,7 +65,7 @@ export function readStartupFailure(): StartupFailure | null {
   }
 }
 
-export function clearStartupFailure(): void {
+function clearStartupFailure(): void {
   try {
     fs.rmSync(failureFile(), { force: true });
   } catch {
