@@ -34,7 +34,10 @@ export interface TtsStatus {
 export interface TtsSpeakResult {
   engine: TtsActiveEngine | 'none';
   spoke?: boolean;
-  /** ElevenLabs mp3 bytes for renderer-side playback. */
+  /**
+   * Encoded speech for renderer-side playback: mp3 from ElevenLabs, WAV from
+   * the local eSpeak engine on Linux.
+   */
   audio?: Buffer;
   /** True when ElevenLabs was tried but the local voice spoke instead. */
   fellBack?: boolean;
@@ -227,55 +230,113 @@ async function listEspeakVoices(): Promise<Array<{ name: string; language: strin
   }
 }
 
-function speakLocalEspeak(text: string, voice: string, rate: number): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    if (platformString !== 'linux') {
-      reject(new Error('eSpeak is only available on Linux'));
+/** Currently-speaking local child, so stopSpeaking() can actually interrupt it. */
+let espeakProcess: ChildProcess | null = null;
+
+/** espeak-ng is preferred, espeak is the older fallback. Probed once. */
+let espeakBin: string | null = null;
+let espeakProbe: Promise<string> | null = null;
+
+function resolveEspeakBinary(): Promise<string> {
+  if (espeakBin) return Promise.resolve(espeakBin);
+  if (espeakProbe) return espeakProbe;
+  // Asynchronous probe: a spawnSync here ran on the Electron main thread and
+  // froze the whole UI (including Stop) for up to a second on every utterance.
+  espeakProbe = new Promise<string>((resolve, reject) => {
+    const child = spawn('espeak-ng', ['--version'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    let settled = false;
+    const fallback = (reason: string) => {
+      if (settled) return;
+      settled = true;
+      if (reason) {
+        // espeak-ng absent — fall back to the older binary, but only if it
+        // actually exists, rather than blindly falling through to a spawn
+        // error for a command that is not installed.
+        const alt = spawn('espeak', ['--version'], { stdio: ['ignore', 'ignore', 'ignore'] });
+        alt.on('error', () => { espeakProbe = null; reject(new Error('Neither espeak-ng nor espeak is installed.')); });
+        alt.on('close', (code) => {
+          if (code === 0) { espeakBin = 'espeak'; resolve('espeak'); }
+          else { espeakProbe = null; reject(new Error('Neither espeak-ng nor espeak is installed.')); }
+        });
+        return;
+      }
+      espeakBin = 'espeak-ng';
+      resolve('espeak-ng');
+    };
+    const timer = setTimeout(() => fallback('timeout'), 2000);
+    child.on('error', () => { clearTimeout(timer); fallback('missing'); });
+    child.on('close', (code) => { clearTimeout(timer); if (code === 0) fallback(''); else fallback('missing'); });
+  });
+  return espeakProbe;
+}
+
+/** Cap on captured audio, so a runaway child cannot exhaust memory. */
+const MAX_SPEECH_BYTES = 24 * 1024 * 1024;
+
+async function speakLocalEspeak(text: string, voice: string, rate: number): Promise<Buffer> {
+  if (platformString !== 'linux') {
+    throw new Error('eSpeak is only available on Linux');
+  }
+  const cmd = await resolveEspeakBinary();
+
+  // `--stdout` makes espeak emit a WAV on stdout instead of trying to open the
+  // audio device itself. Without it espeak speaks nothing on a headless or
+  // device-less session and the captured buffer was discarded anyway.
+  //
+  // The text goes in on stdin rather than argv: long replies can exceed the
+  // per-argument limit (E2BIG) and fail the spawn outright.
+  const child = spawn(cmd, ['--stdout', '-v', voice, '-s', String(rate), '-z'], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  espeakProcess = child;
+
+  const chunks: Buffer[] = [];
+  let captured = 0;
+  child.stdout?.on('data', (data: Buffer) => {
+    if (captured >= MAX_SPEECH_BYTES) {
+      try { child.kill('SIGTERM'); } catch { /* already gone */ }
       return;
     }
+    captured += data.byteLength;
+    chunks.push(data);
+  });
+  child.stderr?.on('data', () => { /* espeak chatters on stderr even on success */ });
+  // Feed the text and close stdin so espeak starts rendering.
+  child.stdin?.on('error', () => { /* child died first */ });
+  child.stdin?.end(`${text}\n`);
 
-    // Try espeak-ng first, then espeak
-    const espeakCmd = require('child_process').spawnSync('espeak-ng', ['--version'], { timeout: 1000 });
-    const cmd = espeakCmd.status === 0 ? 'espeak-ng' : 'espeak';
-
-    // eSpeak rate is in words per minute
-    const child = spawn(cmd, [
-      '-v', voice,
-      '-s', String(rate),
-      '-z', // null sentence pause at end
-      text
-    ], { stdio: ['ignore', 'pipe', 'pipe'] });
-
-    let audioData = Buffer.alloc(0);
-    child.stdout?.on('data', (data: Buffer) => {
-      audioData = Buffer.concat([audioData, data]);
-    });
-
-    child.stderr?.on('data', (data: Buffer) => {
-      // Ignore stderr for now, could log if needed
-    });
-
-    child.on('error', (err: Error) => {
-      reject(new Error(`${cmd} failed: ${err.message}`));
-    });
-
-    child.on('close', (code: number) => {
+  return new Promise<Buffer>((resolve, reject) => {
+    const settle = (fn: () => void) => {
+      if (espeakProcess === child) espeakProcess = null;
+      fn();
+    };
+    child.on('error', (err: Error) => settle(() => reject(new Error(`${cmd} failed: ${err.message}`))));
+    child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+      // A signal here means stopSpeaking() killed it — that is a clean stop,
+      // not a failure to report as an error.
+      if (signal === 'SIGTERM' || signal === 'SIGKILL') {
+        settle(() => resolve(Buffer.alloc(0)));
+        return;
+      }
       if (code === 0) {
-        // Return audio data - in a real implementation, we'd convert to appropriate format
-        // For now, we'll resolve without audio since Electron renderer handles playback
-        resolve();
+        const audio = Buffer.concat(chunks);
+        if (audio.byteLength === 0) settle(() => reject(new Error(`${cmd} produced no audio — is espeak installed?`)));
+        else settle(() => resolve(audio));
       } else {
-        reject(new Error(`${cmd} exited with code ${code}`));
+        settle(() => reject(new Error(`${cmd} exited with code ${code}`)));
       }
     });
   });
 }
 
 /**
- * Web Speech API fallback (handled in renderer)
- * This is a placeholder - actual implementation would be in renderer process
+ * Web Speech API fallback (handled in the renderer).
+ *
+ * This deliberately does nothing in the main process: SpeechSynthesis only
+ * exists in a renderer, and the renderer already falls back to it when no
+ * engine returns audio.
  */
-function speakLocalWeb(text: string): Promise<void> {
+function speakLocalWeb(_text: string): Promise<void> {
   // This would be implemented in the renderer using Web Speech API
   // For now, we'll just resolve immediately as a placeholder
   return Promise.resolve();
@@ -348,40 +409,46 @@ export async function speak(
         const audio = await fetchElevenLabsAudio(clean, apiKey, voiceId);
         return { engine: 'elevenlabs', audio };
       } catch (e) {
-        console.warn('[Henry voice] ElevenLabs failed, falling back to local say:', e instanceof Error ? e.message : e);
+        console.warn('[Henry voice] ElevenLabs failed, falling back to local voice:', e instanceof Error ? e.message : e);
       }
     }
     // No key (explicit elevenlabs pick) or request failed → free local voice.
-    await speakLocal(db, clean);
-    return { engine: 'local', spoke: true, fellBack: true };
+    const fellBackAudio = await speakLocal(db, clean);
+    return fellBackAudio
+      ? { engine: 'local', spoke: true, audio: fellBackAudio, fellBack: true }
+      : { engine: 'local', spoke: false, fellBack: true };
   }
 
-  await speakLocal(db, clean);
-  return { engine: 'local', spoke: true };
+  const localAudio = await speakLocal(db, clean);
+  return localAudio
+    ? { engine: 'local', spoke: true, audio: localAudio }
+    : { engine: 'local', spoke: false };
 }
 
 /**
  * Platform-specific local speech
  */
-async function speakLocal(db: Database.Database, text: string): Promise<void> {
+async function speakLocal(db: Database.Database, text: string): Promise<Buffer | null> {
   if (platformString === 'darwin') {
-    // macOS: use say command
+    // macOS: `say` renders straight to the device, so there is no buffer.
     await speakLocalSay(text, sayVoiceSetting(db), sayRateSetting(db));
-  } else if (platformString === 'linux') {
-    // Linux: try eSpeak first
+    return null;
+  }
+  if (platformString === 'linux') {
     try {
-      await speakLocalEspeak(text, espeakVoiceSetting(db), espeakRateSetting(db));
-      return;
+      const audio = await speakLocalEspeak(text, espeakVoiceSetting(db), espeakRateSetting(db));
+      // An empty buffer means stopSpeaking() cut the utterance short. Report
+      // that as "did not speak" rather than handing the renderer a 0-byte blob
+      // to try to play.
+      return audio.byteLength > 0 ? audio : null;
     } catch (espeakError) {
       console.warn('[Henry voice] eSpeak failed:', espeakError);
-      // Fall back to Web Speech API in renderer
-      await speakLocalWeb(text);
-      return;
+      return null;
     }
-  } else {
-    // Windows and other platforms: for now, use Web Speech API fallback
-    await speakLocalWeb(text);
   }
+  // Windows and anything else have no local engine — the renderer falls back
+  // to the Web Speech API. Return null instead of claiming we spoke.
+  return null;
 }
 
 /**
@@ -409,7 +476,9 @@ export async function getTtsStatus(db: Database.Database): Promise<TtsStatus> {
     // In a full implementation, we'd add voice details to status
   }
 
-  // Web Speech API is always available as fallback
+  // Web Speech is a RENDERER fallback (src/henry/ttsService.ts), not a main
+  // process engine. It is listed so the UI can offer it, but it only works in
+  // a renderer context.
   status.availableEngines.push('web-speech');
 
   if (getElevenLabsKey(db)) {
@@ -423,32 +492,35 @@ export async function getTtsStatus(db: Database.Database): Promise<TtsStatus> {
  * Stop speaking (platform-specific)
  */
 export function stopSpeaking(): boolean {
-  if (platformString === 'darwin') {
-    // For macOS, we'd need to track the say process
-    // This is simplified - in a full implementation we'd track the child process
-    return true; // Placeholder
-  } else if (platformString === 'linux') {
-    // For eSpeak, we'd need to track the process
-    return true; // Placeholder
-  }
-
-  return false;
+  if (!espeakProcess) return false;
+  try { espeakProcess.kill('SIGTERM'); } catch { /* already gone */ }
+  espeakProcess = null;
+  return true;
 }
 
 /**
  * IPC registration
  */
 export function registerPlatformTtsHandlers(db: Database.Database): void {
-  ipcMain.handle('voice:speak', (_e, params: { text: string; engine?: string }) => {
-    // We need to wrap this properly - this is simplified
-    return speak(db, params);
-  });
+  // The renderer checks `res.ok` and reads `res.result` for all three channels
+  // (see src/henry/voice.ts and HenryVoiceResult in src/global.d.ts). These
+  // handlers used to return the raw value, so every call saw `ok === undefined`
+  // and threw — Henry could never speak.
+  const envelope = <T>(fn: () => T | Promise<T>) =>
+    Promise.resolve()
+      .then(fn)
+      .then((result) => ({ ok: true as const, result }))
+      .catch((e: unknown) => ({
+        ok: false as const,
+        error: e instanceof Error ? e.message : String(e),
+      }));
 
-  ipcMain.handle('voice:stopSpeaking', () => {
-    return { stopped: stopSpeaking() };
-  });
+  ipcMain.handle('voice:speak', (_e, params: { text: string; engine?: string }) =>
+    envelope(() => speak(db, params)));
 
-  ipcMain.handle('voice:ttsStatus', () => {
-    return getTtsStatus(db);
-  });
+  ipcMain.handle('voice:stopSpeaking', () =>
+    envelope(() => ({ stopped: stopSpeaking() })));
+
+  ipcMain.handle('voice:ttsStatus', () =>
+    envelope(() => getTtsStatus(db)));
 }

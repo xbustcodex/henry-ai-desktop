@@ -7,7 +7,7 @@
  *
  * Areas:
  * business  — work, clients, products, revenue, professional
- * faith     — prayer, scripture, church, spiritual growth
+ * faith     — prayer, worship, church, spiritual growth
  * health    — physical energy, exercise, sleep, food, wellness
  * family    — marriage, kids, parents, relationships, home
  * money     — budget, income, expenses, savings, financial
@@ -41,7 +41,7 @@ export const LIFE_AREA_LABELS: Record<LifeArea, string> = {
 
 const AREA_KEYWORDS: Record<LifeArea, string[]> = {
   business:  ['work', 'client', 'project', 'product', 'revenue', 'business', 'app', 'service', 'deploy', 'launch', 'marketing', 'customer', 'startup', 'company', 'meeting', 'proposal', 'invoice', 'contract', 'code', 'build', 'feature', 'release', 'github', 'development'],
-  faith:     ['prayer', 'church', 'bible', 'scripture', 'faith', 'devotion', 'spiritual', 'god', 'jesus', 'worship', 'ethiopian', 'orthodox', 'tewahedo', 'fasting', 'mass', 'psalm', 'sermon', 'holy'],
+  faith:     ['prayer', 'church', 'faith', 'devotion', 'spiritual', 'god', 'jesus', 'worship', 'ethiopian', 'orthodox', 'tewahedo', 'fasting', 'mass', 'sermon', 'holy'],
   health:    ['workout', 'exercise', 'health', 'energy', 'sleep', 'food', 'diet', 'running', 'gym', 'rest', 'tired', 'walk', 'stretch', 'nutrition', 'water', 'mental health', 'stress', 'medicine', 'doctor'],
   family:    ['family', 'wife', 'husband', 'child', 'kids', 'son', 'daughter', 'parents', 'marriage', 'home', 'relationship', 'together', 'dinner', 'date', 'anniversary', 'mom', 'dad', 'sibling'],
   money:     ['money', 'income', 'budget', 'expense', 'invoice', 'bank', 'savings', 'debt', 'stripe', 'finance', 'tax', 'payment', 'pay', 'cost', 'price', 'financial', 'revenue', 'profit', 'invest'],

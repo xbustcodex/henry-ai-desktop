@@ -89,7 +89,7 @@ export function shouldOfferCreateTaskFromMessage(
   const c = (message.content || '').trim();
   if (!c) return false;
 
-  if (operatingMode === 'writer' || operatingMode === 'design3d' || operatingMode === 'biblical') {
+  if (operatingMode === 'writer' || operatingMode === 'design3d') {
     return true;
   }
   if (operatingMode === 'companion' || operatingMode === 'developer') {

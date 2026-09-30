@@ -20,6 +20,10 @@ import { useCapturesStore } from './ambient/capturesStore';
 import { registerShortcuts, buildShortcuts } from './henry/keyboardShortcuts';
 import CompanionApp from './components/mobile/CompanionApp';
 import ConfirmToolModal from './components/agent/ConfirmToolModal';
+import { syncOllamaDefaultsToBackendIfNeeded } from './henry/ollamaConfig';
+import { isMacOS, isLinux, isWindows } from './utils/platform';
+import { updateCapabilitySnapshot } from './henry/capabilityRegistry';
+import StartupFailureBanner from './components/health/StartupFailureBanner';
 
 // Check if companion mode is active
 // Logic: on native, default to companion mode if paired (unless user explicitly chose full mode)
@@ -85,6 +89,35 @@ export default function App() {
 
   useEffect(() => {
     void initApp();
+
+    // Spoken startup greeting — off unless the user turned it on. The audio is
+    // synthesized once and cached on disk, so this costs nothing per launch.
+    if (settings.voice_greeting === 'on') {
+      void (async () => {
+        try {
+          const res = await window.henryAPI.voiceGreeting?.({ speak: true });
+          if (!res?.ok || !res.result?.audio?.length) return;
+          // Copy into a fresh ArrayBuffer — IPC hands back a Uint8Array whose
+          // backing buffer may be a SharedArrayBuffer, which Blob rejects.
+          const bytes = new Uint8Array(res.result.audio);
+          const url = URL.createObjectURL(new Blob([bytes.buffer as ArrayBuffer], { type: res.result.mimeType }));
+          const audio = new Audio(url);
+          audio.onended = () => URL.revokeObjectURL(url);
+          audio.onerror = () => URL.revokeObjectURL(url);
+          void audio.play().catch(() => { /* autoplay may be blocked; that's fine */ });
+        } catch { /* a greeting is never worth an error */ }
+      })();
+    }
+
+    // Measure what this machine can actually do before the model is told.
+    // The capability block used to assume every feature worked.
+    void (async () => {
+      try {
+        const api = window.henryAPI as { computerCheckCapabilities?: () => Promise<unknown> } | undefined;
+        const caps = await api?.computerCheckCapabilities?.();
+        if (caps) updateCapabilitySnapshot(caps as never);
+      } catch { /* leave the block reporting "unknown" */ }
+    })();
     const cleanup = setupEventListeners();
     const stopNudges = startProactiveNudges((n) => setNudge(n));
     const stopHealing = startSelfHealing((event) => {
@@ -93,13 +126,6 @@ export default function App() {
     });
     // Sync reminders from SQLite to localStorage on startup
     void syncRemindersFromDb().catch(() => {});
-
-    // Tray navigation — handle 'navigate' IPC from tray menu
-    const handleNavigate = (_e: Event, view: string) => {
-      useStore.getState().setCurrentView(view as any);
-    };
-    (window as any).electron?.ipcRenderer?.on('navigate', handleNavigate);
-    return () => { (window as any).electron?.ipcRenderer?.off('navigate', handleNavigate); };
 
     // Check reminders every minute for due notifications
     const reminderInterval = setInterval(() => {
@@ -221,6 +247,9 @@ export default function App() {
       u2();
       u3();
       uExtract?.();
+      // uChat was never unsubscribed, so every remount left another live
+      // 'companion:chat-update' listener behind.
+      uChat?.();
     };
   }, []);
 
@@ -240,7 +269,6 @@ export default function App() {
 
     const injectedKey = `henry:briefing_chat_injected:${getTodayKey()}`;
     if (localStorage.getItem(injectedKey) === 'true') return;
-
     // Delay slightly so the conversation list is loaded first
     const timer = setTimeout(() => { void injectDailyBriefing(injectedKey); }, 3500);
     return () => clearTimeout(timer);
@@ -499,6 +527,9 @@ export default function App() {
           localStorage.setItem('henry:providers', JSON.stringify(lsProviders));
         } catch { /* ignore */ }
 
+      // Ensure Ollama defaults are synced to backend (idempotent)
+      try { await syncOllamaDefaultsToBackendIfNeeded(); } catch { /* non-critical */ }
+
         setProviders(
           providers.map((p: HenryProviderRecord) => ({
             id: p.id,
@@ -655,7 +686,7 @@ export default function App() {
                   </div>
                 </div>
                 <p className="text-sm text-henry-text-muted leading-relaxed">
-                  Henry runs locally. Your data never leaves this computer. He can talk, think, write, automate your computer, generate images and video, study scripture, run your business — all from one place.
+                  Henry runs locally. Your data never leaves this computer. He can talk, think, write, automate your computer, generate images and video, run your business — all from one place.
                 </p>
               </div>
 
@@ -664,7 +695,6 @@ export default function App() {
                 {[
                   { icon: '💬', label: 'Just start typing', desc: 'Henry is in Chat mode — ready now' },
                   { icon: '🖥️', label: 'Computer control', desc: 'Tell Henry to do things on your computer' },
-                  { icon: '📖', label: 'Bible study', desc: 'Deep scripture study with full canon awareness' },
                   { icon: '⚙️', label: 'Add your API keys', desc: 'Settings → AI Providers for image & video gen' },
                 ].map(item => (
                   <div key={item.label} className="flex items-start gap-3">
@@ -717,8 +747,11 @@ export default function App() {
           </div>
         </div>
       )}
-      <div className="flex-1 min-h-0">
-        <Layout />
+      <div className="flex-1 min-h-0 flex flex-col">
+        <StartupFailureBanner />
+        <div className="flex-1 min-h-0">
+          <Layout />
+        </div>
       </div>
 
       {/* Onboarding wizard — first launch + manual relaunch */}

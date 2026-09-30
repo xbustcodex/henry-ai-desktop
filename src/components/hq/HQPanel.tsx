@@ -133,24 +133,19 @@ export default function HQPanel() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatLog]);
 
-  // Get platform-appropriate launch command for an app
-  function getLaunchCommand(app: DiscoveredApp): string {
-    if (isMacOS()) {
-      return `open -a "${app.displayName}"`;
-    } else if (isWindows()) {
-      // Windows: try to use the executable directly or start
-      if (app.executable.endsWith('.exe')) {
-        return `start "" "${app.executable}"`;
-      }
-      return `start "" "${app.name}"`;
-    } else {
-      // Linux: use the executable from desktop file
-      return app.executable;
+  // Launching an app must go through the main process. Building a shell string
+  // here meant the Linux branch interpolated a raw executable and the free-text
+  // box interpolated unquoted user input, so either path could run arbitrary
+  // commands. `computerOpenApp` is platform-aware on the main side.
+  async function launchAppByName(name: string) {
+    const api = getApi();
+    if (!api?.computerOpenApp) return;
+    try {
+      const r = await api.computerOpenApp(name);
+      if (r && r.success === false) console.warn('[HQ] launch failed:', r.error);
+    } catch (e) {
+      console.warn('[HQ] launch failed:', e);
     }
-  }
-
-  async function launchApp(cmd: string) {
-    await getApi()?.computerRunShell({ command: cmd, timeout: 5000 }).catch(() => {});
   }
 
   async function sendChat() {
@@ -315,7 +310,7 @@ export default function HQPanel() {
           <p className="text-[9px] uppercase tracking-widest text-white/20 mb-2 px-1">Quick Launch</p>
           <div className="grid grid-cols-2 gap-1.5">
             {discoveredApps.slice(0, 10).map(app => (
-              <button key={app.id} onClick={() => void launchApp(getLaunchCommand(app))}
+              <button key={app.id} onClick={() => void launchAppByName(app.displayName)}
                 className="flex flex-col items-center gap-1 p-2 rounded-xl bg-white/3 hover:bg-white/8 border border-white/5 hover:border-purple-500/30 transition-all group">
                 <span className="text-xl">{app.icon || (app.isTerminal ? '⌨️' : app.isFileManager ? '📁' : app.isBrowser ? '🌐' : '📦')}</span>
                 <span className="text-[9px] text-white/40 group-hover:text-white/70 transition-all">{app.displayName}</span>
@@ -329,10 +324,9 @@ export default function HQPanel() {
               <input id="app-input" placeholder="App name…" className={inpCls + ' text-xs'} onKeyDown={e => {
                 if (e.key === 'Enter') {
                   const v = (e.target as HTMLInputElement).value.trim();
-                  if (v) { 
-                    const cmd = isMacOS() ? `open -a "${v}"` : isLinux() ? v : isWindows() ? `start "" "${v}"` : v;
-                    launchApp(cmd); 
-                    (e.target as HTMLInputElement).value = ''; 
+                  if (v) {
+                    void launchAppByName(v);
+                    (e.target as HTMLInputElement).value = '';
                   }
                 }
               }} />
@@ -464,7 +458,7 @@ export default function HQPanel() {
                 <p className="text-xs text-white/30 mb-3">Launch any app</p>
                 <div className="grid grid-cols-4 gap-2">
                   {discoveredApps.slice(0, 16).map(app => (
-                    <button key={app.id} onClick={() => void launchApp(getLaunchCommand(app))}
+                    <button key={app.id} onClick={() => void launchAppByName(app.displayName)}
                       className="flex items-center gap-2 p-2.5 rounded-xl bg-white/3 border border-white/5 hover:bg-purple-500/10 hover:border-purple-500/30 transition-all">
                       <span className="text-xl">{app.icon || (app.isTerminal ? '⌨️' : app.isFileManager ? '📁' : app.isBrowser ? '🌐' : '📦')}</span>
                       <span className="text-xs text-white/60">{app.displayName}</span>

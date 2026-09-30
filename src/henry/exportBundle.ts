@@ -15,7 +15,7 @@ export function utf8ByteLength(text: string): number {
 
 export const EXPORT_SMALL_FILE_MAX_BYTES = 48 * 1024;
 
-export type ExportPresetId = 'writer_handoff' | 'design3d_handoff' | 'biblical_study_pack' | 'mixed_workspace';
+export type ExportPresetId = 'writer_handoff' | 'design3d_handoff' | 'mixed_workspace';
 
 export interface ExportPresetMeta {
   id: ExportPresetId;
@@ -36,12 +36,6 @@ export const EXPORT_PRESETS: readonly ExportPresetMeta[] = [
     label: 'Design3D handoff',
     description: 'Design3D reference + workspace selection when set.',
     defaultTitlePrefix: 'Design3D handoff',
-  },
-  {
-    id: 'biblical_study_pack',
-    label: 'Biblical study pack',
-    description: 'Workspace context + scripture store note (paths only).',
-    defaultTitlePrefix: 'Biblical study pack',
   },
   {
     id: 'mixed_workspace',
@@ -82,8 +76,6 @@ export interface ExportBundleModel {
   relatedConversationId: string | null;
   /** Embedded in manifest (always “included” as text). */
   userNotes: string;
-  /** Extra lines (e.g. scripture count). */
-  contextNotes: string[];
 }
 
 export const EXPORT_PATH_HONESTY =
@@ -131,12 +123,6 @@ export function collectArtifactsFromContext(ctx: CollectArtifactsContext): Expor
       if (ctx.activeWorkspaceContext) {
         pushArtifact(out, ctx.activeWorkspaceContext.path, 'Workspace context selection', 'workspace');
       }
-      break;
-    case 'biblical_study_pack':
-      if (ctx.activeWorkspaceContext) {
-        pushArtifact(out, ctx.activeWorkspaceContext.path, 'Workspace context selection', 'workspace');
-      }
-      pushArtifact(out, ctx.writerActiveDraftPath, 'Writer draft (if any)', 'writer');
       break;
     case 'mixed_workspace':
     default:

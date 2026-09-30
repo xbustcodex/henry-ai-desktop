@@ -26,11 +26,12 @@ import {
   runClaudeCode,
 } from './claudeCode';
 import { getLocalCoderStatus, runLocalCoder, LOCAL_CODER_PULL_HINT } from './localCoder';
+import { detectOpencodeCli, runOpencode, type OpencodeCliInfo } from './opencode';
 
 type WindowGetter = () => BrowserWindow | null;
 
-export type CoderEngineSetting = 'auto' | 'claude-code' | 'local';
-export type CoderActiveEngine = 'claude-code' | 'local' | 'none';
+export type CoderEngineSetting = 'auto' | 'claude-code' | 'opencode' | 'local';
+export type CoderActiveEngine = 'claude-code' | 'opencode' | 'local' | 'none';
 
 interface CoderRunParams {
   prompt: string;
@@ -62,7 +63,7 @@ function readSetting(db: Database.Database, key: string): string | null {
 
 function readEngineSetting(db: Database.Database): CoderEngineSetting {
   const raw = readSetting(db, 'coder_engine');
-  return raw === 'claude-code' || raw === 'local' ? raw : 'auto';
+  return raw === 'claude-code' || raw === 'opencode' || raw === 'local' ? raw : 'auto';
 }
 
 export function registerCoderHandlers(db: Database.Database, getWindow: WindowGetter) {
@@ -77,18 +78,24 @@ export function registerCoderHandlers(db: Database.Database, getWindow: WindowGe
   ipcMain.handle('coder:status', async (_e, opts?: { refresh?: boolean }) => {
     const engine = readEngineSetting(db);
     const claude = await detectClaudeCli(Boolean(opts?.refresh));
+    const opencode: OpencodeCliInfo = await detectOpencodeCli(Boolean(opts?.refresh));
     const local = await getLocalCoderStatus(readSetting(db, 'ollama_base_url') ?? undefined);
 
     let active: CoderActiveEngine;
     if (engine === 'claude-code') {
       active = claude.available ? 'claude-code' : 'none';
+    } else if (engine === 'opencode') {
+      active = opencode.available ? 'opencode' : 'none';
     } else if (engine === 'local') {
       active = local.model ? 'local' : 'none';
     } else {
-      active = claude.available ? 'claude-code' : local.model ? 'local' : 'none';
+      // auto: a detected CLI beats a local model, claude-code first.
+      active = claude.available ? 'claude-code'
+        : opencode.available ? 'opencode'
+        : local.model ? 'local' : 'none';
     }
 
-    return { engine, active, claude, local, workspaceDir: CODER_WORKSPACE_DIR };
+    return { engine, active, claude, opencode, local, workspaceDir: CODER_WORKSPACE_DIR };
   });
 
   // ── Run ───────────────────────────────────────────────────────────────
@@ -100,20 +107,25 @@ export function registerCoderHandlers(db: Database.Database, getWindow: WindowGe
 
     const engineSetting = readEngineSetting(db);
     const claude = await detectClaudeCli();
+    const opencode = await detectOpencodeCli();
 
     // Resolve which engine actually runs this task.
     let engine: CoderActiveEngine = 'none';
     if (engineSetting === 'claude-code') {
       engine = claude.available ? 'claude-code' : 'none';
+    } else if (engineSetting === 'opencode') {
+      engine = opencode.available ? 'opencode' : 'none';
     } else if (engineSetting === 'local') {
       engine = 'local'; // availability is verified below with a precise hint
     } else {
-      engine = claude.available ? 'claude-code' : 'local';
+      engine = claude.available ? 'claude-code' : opencode.available ? 'opencode' : 'local';
     }
 
     if (engine === 'none') {
       const message =
-        'Claude Code CLI not found. Install it with: npm install -g @anthropic-ai/claude-code — or switch the coder engine to Local/Auto in Settings.';
+        engineSetting === 'opencode'
+          ? 'opencode CLI not found. Install it (https://opencode.ai) and make sure `opencode` is on PATH — or switch the coder engine in Settings.'
+          : 'No coder CLI found. Install Claude Code (npm i -g @anthropic-ai/claude-code) or opencode (https://opencode.ai) — or switch the coder engine to Local/Auto in Settings.';
       sendEvent(channelId, { kind: 'error', message });
       return { started: false, error: message };
     }
@@ -129,6 +141,20 @@ export function registerCoderHandlers(db: Database.Database, getWindow: WindowGe
       });
       activeRuns.set(channelId, { cancel: () => child.kill('SIGTERM') });
       return { started: true, channelId, engine: 'claude-code' as const };
+    }
+
+    if (engine === 'opencode' && opencode.path) {
+      const child = runOpencode({
+        cliPath: opencode.path,
+        prompt: params.prompt,
+        cwd: params.cwd?.trim() || ensureCoderWorkspace(),
+        sessionId: params.sessionId,
+        model: readSetting(db, 'coder_opencode_model') ?? undefined,
+        agent: readSetting(db, 'coder_opencode_agent') ?? undefined,
+        onEvent: (event) => sendEvent(channelId, event),
+      });
+      activeRuns.set(channelId, { cancel: () => child.kill('SIGTERM') });
+      return { started: true, channelId, engine: 'opencode' as const };
     }
 
     // Local engine — verify Ollama + model, with an actionable hint on failure.

@@ -136,23 +136,6 @@ export function initDatabase(dataDir: string): Database.Database {
       size_bytes INTEGER DEFAULT 0
     );
 
-    -- Local scripture text (imported JSON / bundles)
-    CREATE TABLE IF NOT EXISTS scripture_entries (
-      id TEXT PRIMARY KEY,
-      normalized_reference TEXT NOT NULL UNIQUE,
-      reference TEXT NOT NULL,
-      book TEXT NOT NULL,
-      book_slug TEXT NOT NULL,
-      chapter INTEGER NOT NULL,
-      verse_start INTEGER NOT NULL,
-      verse_end INTEGER NOT NULL,
-      text TEXT NOT NULL,
-      source_profile_id TEXT,
-      source_label TEXT,
-      notes TEXT,
-      created_at TEXT NOT NULL
-    );
-
     -- Initialize default settings if empty
     INSERT OR IGNORE INTO settings (key, value) VALUES
       ('setup_complete', 'false'),
@@ -166,8 +149,35 @@ export function initDatabase(dataDir: string): Database.Database {
   `);
 
   migrateDatabaseSchema(db);
+  migrateAttachmentsSchema(db);
 
   return db;
+}
+
+/**
+ * Chat attachments — files the user attaches to a message.
+ *
+ * Bytes live on disk under <userData>/attachments; this table is only the
+ * index. Additive and idempotent so existing databases upgrade in place.
+ */
+function migrateAttachmentsSchema(db: Database.Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS message_attachments (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT,
+      message_id TEXT,
+      file_name TEXT NOT NULL,
+      mime_type TEXT,
+      byte_size INTEGER DEFAULT 0,
+      stored_name TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_attachments_conversation
+      ON message_attachments(conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_attachments_message
+      ON message_attachments(message_id);
+  `);
 }
 
 /** Additive columns for task → workspace bridge (idempotent). */
@@ -226,7 +236,7 @@ function migrateDatabaseSchema(db: Database.Database) {
 }
 
 /**
- * Lessons / Curriculum (Scripture panel → Lessons tab). Henry as teacher:
+ * Lessons / Curriculum (AI-generated courses and lessons). Henry as teacher:
  * a `courses` row holds the AI-generated syllabus (outline_json), `lessons`
  * hold per-lesson cached content + progression state (locked → available →
  * in_progress → completed), and `lesson_reviews` log every quiz attempt.
@@ -487,6 +497,30 @@ function migrateSchedulerSchema(db: Database.Database) {
 
     CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_enabled
       ON scheduled_tasks (enabled);
+  `);
+
+  // Run history for Routines. Before this, a Routine only remembered
+  // lastRunAt, so there was no record of what it did, whether it failed, or
+  // which results the user had not looked at yet.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS automation_runs (
+      id          TEXT PRIMARY KEY,
+      task_id     TEXT NOT NULL,
+      task_name   TEXT NOT NULL,
+      prompt      TEXT,
+      status      TEXT NOT NULL CHECK(status IN ('running','succeeded','failed','aborted')),
+      trigger     TEXT NOT NULL DEFAULT 'schedule',
+      result      TEXT,
+      error       TEXT,
+      session_id  TEXT,
+      read_at     TEXT,
+      started_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      finished_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_automation_runs_task
+      ON automation_runs (task_id, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_automation_runs_unread
+      ON automation_runs (read_at, started_at DESC);
   `);
 }
 

@@ -4,8 +4,11 @@
  * via real computer IPCs instead of hoping the AI outputs the right pattern.
  */
 
-import { launchApplication, openUrl, launchAppByName, findAppByName } from '../platform/launcher';
+// NOTE: ../platform/launcher is a MAIN-PROCESS module — it imports
+// child_process, which throws in the renderer ("externalized for browser
+// compatibility"). Everything this file needs from the OS goes through IPC.
 import { isMacOS, isLinux, isWindows } from '../utils/platform';
+import { resolveAppLink } from './appLinks';
 
 export interface DelegationTarget {
   appName: string;       // e.g. "Google Chrome"
@@ -109,6 +112,21 @@ const OPEN_AND_RE = /^(?:open|go to|launch)\s+([\w\s]+?)\s+and\s+(.+)$/i;
 // "continue in ChatGPT" / "type X in Chrome"
 const TYPE_IN_RE = /^(?:type|write|send|say|put)\s+(.+?)\s+in(?:\s+the)?\s+([\w\s]+)$/i;
 
+/**
+ * Resolve a request that names a known app into a deep link, so "show me my
+ * inbox" lands in the inbox rather than merely launching the app.
+ *
+ * Returns null when no catalogue entry matches, so plain app launching still
+ * handles everything else.
+ */
+export function parseAppLink(message: string): { url: string; appName: string; description: string } | null {
+  const text = message.trim().replace(/\s+/g, ' ');
+  if (!text) return null;
+  const hit = resolveAppLink(text);
+  if (!hit) return null;
+  return { url: hit.url, appName: hit.app.displayName, description: hit.description };
+}
+
 export function parseDelegation(message: string): DelegationTarget | null {
   // Never fire on questions — if it starts with a question word, bail immediately
   const QUESTION_RE = /^(what|which|how|who|where|when|is|are|do|does|did|can|could|would|will|should|why|tell me about|show me)\b/i;
@@ -172,14 +190,15 @@ export async function executeDelegation(delegation: DelegationTarget): Promise<s
   const results: string[] = [];
 
   try {
-    // 1. Open the app / URL using platform abstraction
+    // 1. Open the app / URL through the main process. The result is checked so a
+    //    failed launch is never reported back to the user as a success.
     if (delegation.url) {
-      // It's a URL to open
-      await openUrl(delegation.url);
+      const opened = await api.computerOpenUrl(delegation.url);
+      if (!opened?.success) throw new Error(opened?.error || `Could not open ${delegation.url}`);
       results.push(`✓ Opened ${delegation.appName}`);
     } else {
-      // It's an application to open
-      await launchApplication(delegation.appName);
+      const opened = await api.computerOpenApp(delegation.appName);
+      if (!opened?.success) throw new Error(opened?.error || `Could not open ${delegation.appName}`);
       results.push(`✓ Opened ${delegation.appName}`);
     }
 

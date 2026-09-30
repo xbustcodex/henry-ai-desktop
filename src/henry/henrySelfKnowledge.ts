@@ -183,42 +183,6 @@ export const PANELS: PanelInfo[] = [
     keywords: ['memory', 'remember', 'facts', 'personal', 'know', 'learn', 'about me'],
   },
   {
-    name: 'Scripture',
-    icon: '✝',
-    shortDesc: 'Bible reading plan, verse of the day, topical search, save to journal.',
-    whatItDoes: 'Daily reading plan keeps you on track. Search by topic or keyword. Save any verse to your journal. Verse of the day shows in Today.',
-    howToUse: [
-      'Look up any verse: "John 3:16" or "Isaiah 53"',
-      'Search by topic: "verses about peace" or "what does the Bible say about forgiveness"',
-      'Save a verse to journal with one tap',
-    ],
-    tips: [
-      'Say "look up [verse]" in chat — Henry shows it directly',
-      'Reading plan tracks your progress automatically',
-      'Works offline — scripture is local',
-    ],
-    phoneAvailable: true,
-    keywords: ['bible', 'scripture', 'verse', 'reading', 'plan', 'faith', 'god', 'prayer verse'],
-  },
-  {
-    name: 'Prayer',
-    icon: '🙏',
-    shortDesc: 'Track prayer requests, sessions, and answered prayers.',
-    whatItDoes: 'Keep a private list of what you\'re praying for — active, answered, or archived. Log prayer sessions with duration. Henry can pull "your active prayers" into conversation context.',
-    howToUse: [
-      'Add a prayer request with a title and description',
-      'Mark as Answered when it happens — these are archived, not deleted',
-      'Log a prayer session to track your streak',
-    ],
-    tips: [
-      'Completely private — never leaves your Mac',
-      'Ask "what am I praying for?" and Henry will tell you your active requests',
-      'Answered prayers are saved so you can look back over time',
-    ],
-    phoneAvailable: false,
-    keywords: ['prayer', 'pray', 'faith', 'spiritual', 'request', 'answered'],
-  },
-  {
     name: 'Quoting',
     icon: '📄',
     shortDesc: 'Create quotes and invoices for clients, with PDF export.',

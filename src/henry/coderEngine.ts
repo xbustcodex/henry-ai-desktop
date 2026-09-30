@@ -14,18 +14,19 @@
  * activity renders as markdown blockquote lines).
  */
 
-export type CoderEngineChoice = 'auto' | 'claude-code' | 'local';
+export type CoderEngineChoice = 'auto' | 'claude-code' | 'opencode' | 'local';
 
 export const CODER_ENGINE_SETTING_KEY = 'coder_engine';
 
 export const CODER_ENGINE_LABELS: Record<CoderEngineChoice, string> = {
   auto: 'Auto',
   'claude-code': 'Claude Code',
+  opencode: 'opencode',
   local: 'Local (free)',
 };
 
 export function isCoderEngineChoice(v: unknown): v is CoderEngineChoice {
-  return v === 'auto' || v === 'claude-code' || v === 'local';
+  return v === 'auto' || v === 'claude-code' || v === 'opencode' || v === 'local';
 }
 
 /** True when the Electron coder bridge exists (false in web/mock mode). */

@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useState, useCallback } from 'react';
+import { isMacOS, isLinux, isWindows } from '../../utils/platform';
 
 interface PairingInfo {
   henryId: string;
@@ -55,15 +56,14 @@ export default function RemoteControlPanel() {
     return () => clearInterval(id);
   }, [refresh]);
 
-  // Get the Mac's LAN IP once for building the pair URL.
+  // LAN IP for the pairing URL. Take it from the sync server, which resolves
+  // it cross-platform — `ipconfig getifaddr en0` is macOS-only and left this
+  // panel showing 127.0.0.1 on Linux, so the scanned QR never worked.
   useEffect(() => {
     let cancelled = false;
-    loopbackFetch<{ output?: string }>('/computer/shell', {
-      command: 'ipconfig getifaddr en0 || ipconfig getifaddr en1 || hostname',
-    }).then((r) => {
+    loopbackFetch<{ localIp?: string }>('/sync/state-internal').then((r) => {
       if (cancelled) return;
-      const ip = (r?.output || '').trim() || '127.0.0.1';
-      setLocalIp(ip);
+      setLocalIp((r?.localIp || '').trim() || '127.0.0.1');
     });
     return () => {
       cancelled = true;
@@ -108,12 +108,13 @@ export default function RemoteControlPanel() {
   if (!info) {
     return (
       <div className="bg-henry-surface rounded-2xl border border-henry-border/20 p-4">
-        <p className="text-sm font-semibold text-henry-text">Remote Control (iPad/iPhone)</p>
+        <p className="text-sm font-semibold text-henry-text">Remote Control (Android / Browser)</p>
         <p className="text-xs text-henry-text-muted mt-1">Loading…</p>
       </div>
     );
   }
 
+  const platform = isMacOS() ? 'Mac' : isLinux() ? 'computer' : isWindows() ? 'computer' : 'device';
   const pairUrl = `http://${localIp || '127.0.0.1'}:4242/companion/pair`;
   // R3-Fix 4: encode credentials in the URL fragment (#id=...&pin=...). The
   // fragment never travels to the server (browsers don't send it in HTTP),
@@ -129,9 +130,9 @@ export default function RemoteControlPanel() {
   return (
     <div className="bg-henry-surface rounded-2xl border border-henry-border/20 p-4 space-y-4">
       <div>
-        <p className="text-sm font-semibold text-henry-text">Remote Control (iPad/iPhone)</p>
+        <p className="text-sm font-semibold text-henry-text">Remote Control (Android / Browser)</p>
         <p className="text-xs text-henry-text-muted mt-0.5">
-          See and control this Mac from an iPad with Apple Pencil, or any phone browser on your LAN.
+          Control this {platform} from an Android phone, tablet, or another browser on your LAN.
         </p>
       </div>
 
@@ -140,7 +141,7 @@ export default function RemoteControlPanel() {
         <div className="rounded-xl bg-red-500/10 border border-red-500/30 px-3 py-2 flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-red-400 animate-pulse" />
           <p className="text-xs text-red-300 flex-1">
-            <span className="font-semibold">{info.activeSession.deviceName}</span> is controlling this Mac
+            <span className="font-semibold">{info.activeSession.deviceName}</span> is controlling this {platform}
           </p>
         </div>
       )}
@@ -209,7 +210,7 @@ export default function RemoteControlPanel() {
           {/* LAN URL */}
           <div>
             <p className="text-[10px] font-medium text-henry-text-muted uppercase tracking-wider mb-1">
-              Pair URL (open this on your iPad)
+              Pair URL (open this on your Android device or browser)
             </p>
             <div className="flex items-center gap-2">
               <code className="text-[11px] font-mono text-henry-text bg-henry-bg px-2 py-1 rounded border border-henry-border/30 flex-1 truncate select-all">
@@ -236,7 +237,7 @@ export default function RemoteControlPanel() {
               (e.currentTarget as HTMLImageElement).style.display = 'none';
             }}
           />
-          <p className="text-[9px] text-henry-text-muted text-center mt-1">Point iPad camera here</p>
+          <p className="text-[9px] text-henry-text-muted text-center mt-1">Scan with your phone camera</p>
         </div>
       </div>
 
@@ -285,10 +286,10 @@ export default function RemoteControlPanel() {
           How to use
         </p>
         <ol className="text-[11px] text-henry-text-muted leading-relaxed space-y-0.5 list-decimal list-inside">
-          <li>On iPad/iPhone, open the Pair URL above (same WiFi as this Mac).</li>
-          <li>Enter the 6-digit PIN. The iPad will remember the pairing.</li>
+          <li>On your Android device or another browser, open the Pair URL above (same WiFi as this {platform}).</li>
+          <li>Enter the 6-digit PIN. The device will remember the pairing.</li>
           <li>Tap "Start Remote Control" — Henry will ask you here for permission.</li>
-          <li>View, click, scroll, and draw with Apple Pencil. End anytime from the red banner.</li>
+          <li>View, click, scroll, and draw with touch/stylus. End anytime from the red banner.</li>
         </ol>
       </div>
     </div>

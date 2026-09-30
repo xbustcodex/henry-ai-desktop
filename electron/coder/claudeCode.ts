@@ -24,6 +24,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { createLineBuffer, parseClaudeStreamJsonLine, type CoderStreamEvent } from './streamJson';
+import { buildCoderChildEnv } from './opencode';
 
 const execFileP = promisify(execFile);
 
@@ -92,24 +93,8 @@ function candidateBinaries(): string[] {
  * PATH) and NO Claude Code session vars, so headless runs never think they're
  * nested inside another Claude Code session.
  */
-export function buildClaudeChildEnv(): NodeJS.ProcessEnv {
-  const home = os.homedir();
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (key === 'CLAUDECODE' || key.startsWith('CLAUDE_CODE_')) delete env[key];
-  }
-  env.HOME = env.HOME || home;
-  env.PATH = [
-    path.join(home, '.local', 'bin'),
-    path.join(home, '.claude', 'local'),
-    '/opt/homebrew/bin',
-    '/usr/local/bin',
-    '/usr/bin',
-    '/bin',
-    env.PATH || '',
-  ].join(':');
-  return env;
-}
+/** Child env for detection + runs. Shared with the opencode engine. */
+export const buildClaudeChildEnv = buildCoderChildEnv;
 
 let cachedCli: ClaudeCliInfo | null = null;
 

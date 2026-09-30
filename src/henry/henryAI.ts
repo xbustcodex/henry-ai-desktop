@@ -1,8 +1,8 @@
 /**
  * Henry AI — the single front door for any panel that needs to call an LLM.
  *
- * Every panel that does AI work (journal reflection, task suggestions, scripture
- * study, etc.) should call `callHenryAI()` instead of hitting providers directly.
+ * Every panel that does AI work (journal reflection, task suggestions, etc.)
+ * should call `callHenryAI()` instead of hitting providers directly.
  *
  * Routing chain (in priority order):
  *   1. User's own Groq key (free, BYOK) — if they have one configured, use it.

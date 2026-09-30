@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { prepareSpeechText } from './_speechText';
+import { prepareSpeechText, MAX_SPEECH_CHARS } from './_speechText';
 
 describe('prepareSpeechText', () => {
   it('returns empty string for empty/undefined-ish input', () => {
@@ -62,5 +62,35 @@ describe('prepareSpeechText', () => {
   it('removes table pipes', () => {
     const out = prepareSpeechText('| a | b |\n| 1 | 2 |');
     expect(out).not.toContain('|');
+  });
+
+  it('leaves text at or under the cap untouched', () => {
+    const exact = 'a'.repeat(MAX_SPEECH_CHARS);
+    expect(prepareSpeechText(exact)).toBe(exact);
+  });
+
+  it('caps output at MAX_SPEECH_CHARS', () => {
+    const out = prepareSpeechText('word '.repeat(2000));
+    expect(out.length).toBeLessThanOrEqual(MAX_SPEECH_CHARS);
+  });
+
+  it('truncates at a sentence boundary, not mid-word', () => {
+    // 300 sentences of ~15 chars: the cap lands inside sentence 140-ish, and
+    // the result must end with the punctuation of a complete sentence.
+    const sentence = 'This is a whole sentence. ';
+    const out = prepareSpeechText(sentence.repeat(400));
+    expect(out.length).toBeLessThanOrEqual(MAX_SPEECH_CHARS);
+    expect(out.endsWith('sentence.')).toBe(true);
+  });
+
+  it('falls back to a word boundary when the budget holds no sentence end', () => {
+    const out = prepareSpeechText('supercalifragilistic '.repeat(500));
+    expect(out.length).toBeLessThanOrEqual(MAX_SPEECH_CHARS);
+    expect(out.endsWith('supercalifragilistic')).toBe(true);
+  });
+
+  it('still returns text when the input is one unbroken token', () => {
+    const out = prepareSpeechText('x'.repeat(MAX_SPEECH_CHARS * 2));
+    expect(out).toBe('x'.repeat(MAX_SPEECH_CHARS));
   });
 });

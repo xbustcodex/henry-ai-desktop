@@ -95,7 +95,11 @@ export async function indexWorkspace(rootPath?: string): Promise<WorkspaceIndex>
     }
   }
 
-  const root = rootPath || '/workspace';
+  // An empty path makes fs:readDirectory resolve to the workspace root the
+  // main process already knows. The previous default of '/workspace' is a
+  // macOS/container path — on Linux it sits outside the sandbox, so indexing
+  // failed and silently produced an empty index.
+  const root = rootPath || '';
   await scanDir(root);
 
   const index: WorkspaceIndex = {

@@ -35,10 +35,11 @@ import MaterialsPanel from '../maker/MaterialsPanel';
 import ProductionRunsPanel from '../maker/ProductionRunsPanel';
 import WastePanel from '../maker/WastePanel';
 import MaintenancePanel from '../maker/MaintenancePanel';
-import ScripturePanel from '../scripture/ScripturePanel';
-import PrayerPanel from '../prayer/PrayerPanel';
 import QuotingPanel from '../quoting/QuotingPanel';
 import RoutinesPanel from '../routines/RoutinesPanel';
+import MediaLibraryPanel from '../media/MediaLibraryPanel';
+import MarketplacePanel from '../marketplace/MarketplacePanel';
+import AboutPanel from '../settings/AboutPanel';
 import AuditLogPanel from '../agent/AuditLogPanel';
 import BookEnginePanel from '../book/BookEnginePanel';
 import SlicerPanel from '../slicer/SlicerPanel';
@@ -71,17 +72,18 @@ function CompanionUrlCard() {
   function openInBrowser(url: string) {
     // Copy to clipboard first (always works)
     navigator.clipboard?.writeText(url).catch(() => {});
-    // Try to open Safari via shell
-    fetch('http://127.0.0.1:4242/computer/shell', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Henry-Internal': 'true' },
-      body: JSON.stringify({ command: `open -a Safari "${url}"` })
-    }).then(r => {
-      if (!r.ok) throw new Error('shell failed');
-    }).catch(() => {
-      // Fallback: open in whatever browser is available
-      window.open(url, '_blank');
-    });
+    // Open through the main process. This used to shell out to
+    // `open -a Safari "<url>"` over the loopback sync API, which is a
+    // macOS-only command and silently did nothing on Linux and Windows.
+    const api = (window as any).henryAPI;
+    const opened = api?.computerOpenUrl ? api.computerOpenUrl(url) : Promise.resolve(null);
+    Promise.resolve(opened)
+      .then((r: { success?: boolean } | null) => {
+        if (r && r.success === false) throw new Error('open failed');
+        // Fallback: open in whatever browser the OS has
+        if (!r) window.open(url, '_blank');
+      })
+      .catch(() => { window.open(url, '_blank'); });
     setCopied(true);
     setTimeout(() => setCopied(false), 3000);
   }
@@ -245,7 +247,7 @@ export default function Layout() {
               <div className="bg-henry-surface/30 border border-henry-border/10 rounded-2xl p-4">
                 <p className="text-xs font-semibold text-henry-text mb-2">What's in the app</p>
                 <div className="grid grid-cols-2 gap-1.5">
-                  {['💬 Chat with Henry','☀️ Today & Habits','✓ Tasks (add/complete)','⏰ Reminders','📔 Journal entries','❤️ Health logging','◎ Goals','💰 Finance','✝ Bible study','⊕ Smart capture'].map(f => (
+                  {['💬 Chat with Henry','☀️ Today & Habits','✓ Tasks (add/complete)','⏰ Reminders','📔 Journal entries','❤️ Health logging','◎ Goals','💰 Finance','⊕ Smart capture'].map(f => (
                     <p key={f} className="text-[11px] text-henry-text-muted">{f}</p>
                   ))}
                 </div>
@@ -263,10 +265,11 @@ export default function Layout() {
           {currentView === 'production' && <PanelBoundary><ProductionRunsPanel /></PanelBoundary>}
           {currentView === 'waste' && <PanelBoundary><WastePanel /></PanelBoundary>}
           {currentView === 'maintenance' && <PanelBoundary><MaintenancePanel /></PanelBoundary>}
-          {currentView === 'scripture' && <PanelBoundary><ScripturePanel /></PanelBoundary>}
-          {currentView === 'prayer' && <PanelBoundary><PrayerPanel /></PanelBoundary>}
           {currentView === 'quoting' && <PanelBoundary><QuotingPanel /></PanelBoundary>}
           {currentView === 'routines' && <PanelBoundary><RoutinesPanel /></PanelBoundary>}
+          {currentView === 'media' && <PanelBoundary><MediaLibraryPanel /></PanelBoundary>}
+          {currentView === 'marketplace' && <PanelBoundary><MarketplacePanel /></PanelBoundary>}
+          {currentView === 'about' && <PanelBoundary><AboutPanel /></PanelBoundary>}
           {currentView === 'audit' && <PanelBoundary><AuditLogPanel /></PanelBoundary>}
           {currentView === 'book' && <PanelBoundary><BookEnginePanel /></PanelBoundary>}
           {currentView === 'slicer' && <PanelBoundary><SlicerPanel /></PanelBoundary>}

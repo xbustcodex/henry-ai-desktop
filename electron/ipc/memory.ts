@@ -124,8 +124,12 @@ export function registerMemoryHandlers(database: Database.Database) {
   });
 
   ipcMain.handle('memory:searchFacts', async (_e, query: {
-    text?: string; category?: string; conversationId?: string; limit?: number;
+    // Accept both spellings: the declared renderer type used `query.query`
+    // while the handler read `query.text`, so one of the two always sent an
+    // empty search.
+    text?: string; query?: string; category?: string; conversationId?: string; limit?: number;
   }) => {
+    const searchText = (query.text ?? query.query ?? '').trim();
     const limit = query.limit || 40;
     // Use FTS5 for full-text queries — falls back to LIKE if FTS table not ready
     if (query.text && query.text.trim()) {
@@ -162,27 +166,6 @@ export function registerMemoryHandlers(database: Database.Database) {
       .all(limit || 50)
   );
 
-  ipcMain.handle('memory:deleteFact', async (_e, factId: string) => {
-    try {
-      db.prepare('DELETE FROM memory_facts WHERE id = ?').run(factId);
-      return { deleted: true };
-    } catch (e: unknown) {
-      console.error('[memory:deleteFact]', e instanceof Error ? e.message : String(e));
-      return null as any;
-    }
-  });
-
-  ipcMain.handle('memory:clearConversation', async (_e, conversationId: string) => {
-    try {
-      db.prepare('DELETE FROM memory_facts WHERE conversation_id = ?').run(conversationId);
-      db.prepare('DELETE FROM conversation_summaries WHERE conversation_id = ?').run(conversationId);
-      return { cleared: true };
-    } catch (e: unknown) {
-      console.error('[memory:clearConversation]', e instanceof Error ? e.message : String(e));
-      return null as any;
-    }
-  });
-
   // ══════════════════════════════════════════════════════════════════════
   // CONVERSATION SUMMARIES
   // ══════════════════════════════════════════════════════════════════════
@@ -208,13 +191,18 @@ export function registerMemoryHandlers(database: Database.Database) {
       return { id };
     } catch (e: unknown) {
       console.error('[memory:saveSummary]', e instanceof Error ? e.message : String(e));
-      return null as any;
+      // Callers destructure `saved.error` / `saved.id`, so the failure path has
+      // to keep the envelope shape — returning bare null threw a TypeError in
+      // MemoryAwarenessPanel instead of surfacing the DB error.
+      return { id: null as string | null, error: e instanceof Error ? e.message : String(e) };
     }
   });
 
   ipcMain.handle('memory:getSummary', async (_e, conversationId: string) =>
+    // better-sqlite3 .get() yields undefined for "no rows"; the renderer
+    // contract types this as `| null`, so normalise rather than leak undefined.
     db.prepare(`SELECT * FROM conversation_summaries WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1`)
-      .get(conversationId)
+      .get(conversationId) ?? null
   );
 
   // ══════════════════════════════════════════════════════════════════════
@@ -1325,44 +1313,6 @@ export function registerMemoryHandlers(database: Database.Database) {
     } catch (e) { return { tasks:[], journal:[], finance:[], focusStats:{mins:0,sessions:0}, reminders:[], memories:[] }; }
   });
 
-  // ── Scripture Saved Verses ────────────────────────────────────────────────
-  db.prepare(`CREATE TABLE IF NOT EXISTS saved_verses (
-    ref TEXT PRIMARY KEY, text TEXT NOT NULL, source TEXT,
-    note TEXT, tags TEXT DEFAULT '[]',
-    saved_at TEXT NOT NULL, updated_at TEXT NOT NULL
-  )`).run();
-
-  ipcMain.handle('scripture:saved-list', () => {
-    try { return db.prepare("SELECT * FROM saved_verses ORDER BY saved_at DESC").all(); }
-    catch { return []; }
-  });
-  ipcMain.handle('scripture:save-verse', (_e, v: Record<string,unknown>) => {
-    try {
-      const now = new Date().toISOString();
-      db.prepare(`INSERT INTO saved_verses (ref,text,source,note,tags,saved_at,updated_at) VALUES (?,?,?,?,?,?,?)
-        ON CONFLICT(ref) DO UPDATE SET text=excluded.text,source=excluded.source,note=excluded.note,tags=excluded.tags,updated_at=excluded.updated_at`)
-        .run(v.ref, v.text, v.source||null, v.note||null, JSON.stringify(v.tags||[]), now, now);
-      return { ok: true };
-    } catch (e) { return { ok: false, error: String(e) }; }
-  });
-  ipcMain.handle('scripture:update-note', (_e, ref: string, note: string) => {
-    try {
-      const now = new Date().toISOString();
-      db.prepare("UPDATE saved_verses SET note=?, updated_at=? WHERE ref=?").run(note, now, ref);
-      return { ok: true };
-    } catch (e) { return { ok: false, error: String(e) }; }
-  });
-  ipcMain.handle('scripture:delete-verse', (_e, ref: string) => {
-    try { db.prepare("DELETE FROM saved_verses WHERE ref=?").run(ref); return { ok: true }; }
-    catch (e) { return { ok: false, error: String(e) }; }
-  });
-  ipcMain.handle('scripture:search-saved', (_e, query: string) => {
-    try {
-      return db.prepare("SELECT * FROM saved_verses WHERE ref LIKE ? OR text LIKE ? OR note LIKE ? ORDER BY saved_at DESC")
-        .all('%'+query+'%', '%'+query+'%', '%'+query+'%');
-    } catch { return []; }
-  });
-
   // ── Meeting Recordings ────────────────────────────────────────────────────
   db.prepare(`CREATE TABLE IF NOT EXISTS recordings (
     id TEXT PRIMARY KEY, title TEXT NOT NULL, duration_secs INTEGER DEFAULT 0,
@@ -1537,22 +1487,47 @@ export function registerMemoryHandlers(database: Database.Database) {
       const nodefs = require('fs') as typeof import('fs');
       const nodepath = require('path') as typeof import('path');
       const { execSync } = require('child_process') as typeof import('child_process');
-      const { randomUUID } = require('crypto') as typeof import('crypto');
 
       const ts = new Date().toISOString().slice(0, 10);
       const desktopDir = nodepath.join(nodeos.homedir(), 'Desktop');
       const backupDir = nodepath.join(desktopDir, `henry-backup-${ts}`);
+      nodefs.rmSync(backupDir, { recursive: true, force: true });
       nodefs.mkdirSync(backupDir, { recursive: true });
 
-      // 1. Copy the SQLite database
-      const dbPath = (db as any).name as string;
-      nodefs.copyFileSync(dbPath, nodepath.join(backupDir, 'henry.db'));
+      // 1. Consistent database snapshot.
+      //    copyFileSync() of a WAL database silently omits every transaction
+      //    that has not been checkpointed yet, so the "backup" was missing
+      //    recent data. db.backup() takes a real, consistent snapshot.
+      const dbPath = (db as unknown as { name: string }).name;
+      const snapshotPath = nodepath.join(backupDir, 'henry.db');
+      await db.backup(snapshotPath);
 
-      // 2. Export all tables as JSON
+      // 2. Strip secrets from the snapshot. The raw database carries the
+      //    `providers` table and `*api_key*` settings; a backup written
+      //    unencrypted to the Desktop leaked live credentials.
+      try {
+        const Database = (await import('better-sqlite3')).default;
+        const snap = new Database(snapshotPath);
+        try {
+          snap.exec("UPDATE providers SET api_key = '' WHERE api_key IS NOT NULL AND api_key != ''");
+          snap.exec("UPDATE settings SET value = '' WHERE key LIKE '%api_key%' AND value != ''");
+          // VACUUM rewrites the file so the redacted values are not still
+          // sitting in freed pages.
+          snap.exec('VACUUM');
+        } finally {
+          snap.close();
+        }
+      } catch (e) {
+        // Never ship an unredacted backup.
+        nodefs.rmSync(backupDir, { recursive: true, force: true });
+        return { ok: false, error: `Backup aborted: could not remove stored API keys (${e instanceof Error ? e.message : String(e)})` };
+      }
+
+      // 3. Export user tables as JSON (no credentials in these).
       const tables = [
         'journal_entries', 'tasks', 'reminders', 'contacts', 'goals',
         'habits', 'habit_logs', 'health_logs', 'transactions',
-        'memory_facts', 'recordings', 'lists', 'list_items', 'saved_verses',
+        'memory_facts', 'recordings', 'lists', 'list_items',
       ];
       const exportData: Record<string, unknown[]> = { _exported_at: [new Date().toISOString() as unknown] };
       for (const table of tables) {
@@ -1565,12 +1540,20 @@ export function registerMemoryHandlers(database: Database.Database) {
         JSON.stringify(exportData, null, 2)
       );
 
-      // 3. Create zip and clean up temp dir
+      // 4. Zip if the `zip` tool exists; otherwise hand back the directory.
+      //    The old code rm'd the staging dir only on success, so a missing
+      //    `zip` binary (common on minimal installs) left the full database
+      //    sitting on the Desktop while reporting failure.
       const zipPath = nodepath.join(desktopDir, `henry-backup-${ts}.zip`);
-      execSync(`cd "${desktopDir}" && zip -r "${zipPath}" "${nodepath.basename(backupDir)}"`, { stdio: 'ignore' });
-      nodefs.rmSync(backupDir, { recursive: true, force: true });
-
-      return { ok: true, path: zipPath };
+      const hasZip = (() => {
+        try { execSync('which zip', { stdio: 'ignore' }); return true; } catch { return false; }
+      })();
+      if (hasZip) {
+        execSync(`cd "${desktopDir}" && zip -r "${zipPath}" "${nodepath.basename(backupDir)}"`, { stdio: 'ignore' });
+        nodefs.rmSync(backupDir, { recursive: true, force: true });
+        return { ok: true, path: zipPath };
+      }
+      return { ok: true, path: backupDir };
     } catch (e) {
       return { ok: false, error: String(e) };
     }

@@ -1,0 +1,366 @@
+/**
+ * opencode coder engine.
+ *
+ * Drives the `opencode` CLI non-interactively (`opencode run --format json`)
+ * and maps its event stream onto the same CoderStreamEvent vocabulary the
+ * Claude Code engine emits, so the renderer needs no per-engine knowledge.
+ *
+ * Runtime resolution matters: opencode is commonly installed by a version
+ * manager (nvm/fnm/volta/bun) into a per-user directory that a packaged GUI
+ * app's minimal PATH does not include, and it needs a `node` on PATH to run.
+ * `buildCoderChildEnv()` therefore assembles the real install locations and
+ * uses `path.delimiter` rather than a hardcoded ':'.
+ */
+
+import { execFile, spawn, type ChildProcess } from 'child_process';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { promisify } from 'util';
+import {
+  type CoderStreamEvent,
+  createLineBuffer,
+  summarizeToolInput,
+} from './streamJson';
+
+/** Default working directory when the caller does not supply one. */
+export const CODER_WORKSPACE_DIR = path.join(os.homedir(), 'HenryAI', 'coder-projects');
+
+const execFileP = promisify(execFile);
+
+export interface OpencodeCliInfo {
+  available: boolean;
+  path?: string;
+  version?: string;
+  error?: string;
+}
+
+let cached: OpencodeCliInfo | undefined;
+
+/**
+ * Environment for detecting and running an external coder CLI.
+ *
+ * A packaged Electron app on Linux/macOS inherits a very small PATH, so the
+ * user-level install directories have to be added explicitly. node version
+ * managers are enumerated from disk because their directory names vary.
+ */
+export function buildCoderChildEnv(): NodeJS.ProcessEnv {
+  const home = os.homedir();
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  // Never let a parent session make a headless run think it is interactive.
+  //
+  // Only session/state markers are stripped. A blanket `OPENCODE_*` delete also
+  // removed OPENCODE_API_KEY — the documented bearer credential for opencode's
+  // zen gateway — which silently reduced the model catalogue from 395 entries
+  // to the unauthenticated subset. Credentials must pass through.
+  for (const key of Object.keys(env)) {
+    if (key === 'CLAUDECODE' || key.startsWith('CLAUDE_CODE_')) delete env[key];
+  }
+  for (const key of ['OPENCODE_SESSION', 'OPENCODE_CLIENT', 'OPENCODE_SERVER']) {
+    if (key in env && !/KEY|TOKEN|AUTH|SECRET|PASSWORD/.test(key)) delete env[key];
+  }
+  env.HOME = env.HOME || home;
+
+  const dirs = [
+    path.join(home, '.local', 'bin'),
+    path.join(home, '.claude', 'local'),
+    path.join(home, '.bun', 'bin'),
+    path.join(home, '.volta', 'bin'),
+    path.join(home, '.deno', 'bin'),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    '/usr/bin',
+    '/bin',
+  ];
+
+  // nvm: ~/.nvm/versions/node/<version>/bin
+  try {
+    const nvmRoot = process.env.NVM_DIR || path.join(home, '.nvm');
+    const versions = path.join(nvmRoot, 'versions', 'node');
+    if (fs.existsSync(versions)) {
+      for (const v of fs.readdirSync(versions).sort().reverse()) {
+        dirs.push(path.join(versions, v, 'bin'));
+      }
+    }
+  } catch {
+    /* enumeration is best effort */
+  }
+  // fnm: ~/.local/share/fnm/node-versions/<version>/installation/bin
+  try {
+    const fnmRoot = path.join(home, '.local', 'share', 'fnm', 'node-versions');
+    if (fs.existsSync(fnmRoot)) {
+      for (const v of fs.readdirSync(fnmRoot).sort().reverse()) {
+        dirs.push(path.join(fnmRoot, v, 'installation', 'bin'));
+      }
+    }
+  } catch {
+    /* best effort */
+  }
+
+  // path.delimiter, not ':' — a hardcoded colon silently produced one
+  // malformed PATH entry on Windows.
+  env.PATH = [...new Set(dirs), env.PATH || ''].filter(Boolean).join(path.delimiter);
+  return env;
+}
+
+/** Every place the `opencode` binary realistically lives. */
+function candidateBinaries(): string[] {
+  const home = os.homedir();
+  return [
+    'opencode', // resolved against the extended PATH
+    path.join(home, '.opencode', 'bin', 'opencode'),
+    path.join(home, '.local', 'bin', 'opencode'),
+    path.join(home, '.bun', 'bin', 'opencode'),
+    path.join(home, '.volta', 'bin', 'opencode'),
+    '/opt/homebrew/bin/opencode',
+    '/usr/local/bin/opencode',
+    '/usr/bin/opencode',
+    ...(process.platform === 'win32'
+      ? [path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'npm', 'opencode.cmd')]
+      : []),
+  ];
+}
+
+export async function detectOpencodeCli(refresh = false): Promise<OpencodeCliInfo> {
+  if (!refresh && cached) return cached;
+  const env = buildCoderChildEnv();
+  for (const bin of candidateBinaries()) {
+    try {
+      const { stdout } = await execFileP(bin, ['--version'], { env, timeout: 8_000 });
+      cached = { available: true, path: bin, version: stdout.trim().split('\n')[0] || undefined };
+      return cached;
+    } catch {
+      /* try the next candidate */
+    }
+  }
+  cached = {
+    available: false,
+    error:
+      'opencode not found. Install it (https://opencode.ai) and make sure `opencode` is on PATH, ' +
+      'or run Henry from a terminal that has your version manager on PATH.',
+  };
+  return cached;
+}
+
+interface OpencodeEvent {
+  type?: string;
+  sessionID?: string;
+  cost?: number;
+  /** opencode reports run failures as a TOP-LEVEL error, not a part. */
+  error?: { name?: string; message?: string; data?: { message?: string; [k: string]: unknown } };
+  part?: {
+    type?: string;
+    text?: string;
+    tool?: string;
+    state?: { input?: unknown; status?: string; title?: string };
+    tokens?: { input?: number; output?: number };
+  };
+}
+
+/** Translate one opencode JSON event into the shared coder vocabulary. */
+export function parseOpencodeEventLine(line: string): CoderStreamEvent[] {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('{')) return [];
+
+  let ev: OpencodeEvent;
+  try {
+    ev = JSON.parse(trimmed) as OpencodeEvent;
+  } catch {
+    return [];
+  }
+
+  // A top-level error means the run itself failed. It arrives with no part, so
+  // the switch below would never see it and the run would look like an empty
+  // success.
+  if (ev.error) {
+    return [{ kind: 'error', message: readOpencodeError(ev.error) }];
+  }
+
+  const part = ev.part ?? {};
+  switch (part.type) {
+    case 'text': {
+      const text = part.text;
+      return text ? [{ kind: 'text', text }] : [];
+    }
+    case 'tool': {
+      const summary = part.state?.title || summarizeToolInput(part.state?.input);
+      return [{ kind: 'tool', name: part.tool || 'tool', summary }];
+    }
+    case 'step-start':
+    case 'step_start': {
+      const out: CoderStreamEvent[] = [];
+      if (ev.sessionID) out.push({ kind: 'init', sessionId: ev.sessionID });
+      return out;
+    }
+    case 'step-finish':
+    case 'step_finish': {
+      return [
+        {
+          kind: 'result',
+          ok: (part as { reason?: string }).reason !== 'error',
+          sessionId: ev.sessionID,
+          costUsd: typeof ev.cost === 'number' ? ev.cost : undefined,
+        },
+      ];
+    }
+    case 'error':
+      return [{ kind: 'error', message: readOpencodeError(part as unknown as Record<string, unknown>) }];
+    default:
+      return [];
+  }
+}
+
+/**
+ * Pull a usable message out of opencode's several error shapes.
+ *
+ * Observed from a real failed run:
+ *   {"type":"error","error":{"name":"UnknownError","data":{"message":"{\"message\":\"Streaming
+ *    response failed: [503] Upstream error from Nvidia: Service temporarily overloaded\"}"}}}
+ * — so the human-readable text can be nested two levels down AND itself be a
+ * JSON string. Without unwrapping, a failed run looked like an empty success.
+ */
+export function readOpencodeError(raw: unknown): string {
+  const pick = (v: unknown): string | null => {
+    if (typeof v === 'string') return v;
+    if (!v || typeof v !== 'object') return null;
+    const o = v as Record<string, unknown>;
+    for (const key of ['message', 'data', 'error']) {
+      const got = pick(o[key]);
+      if (got) return got;
+    }
+    return null;
+  };
+  const text = pick(raw);
+  if (!text) return 'opencode reported an error';
+  // The nested payload is often a JSON string; unwrap it to the inner message.
+  const trimmed = text.trim();
+  if (trimmed.startsWith('{')) {
+    try {
+      const inner = JSON.parse(trimmed) as unknown;
+      const better = pick(inner);
+      if (better && better !== trimmed) return better;
+    } catch { /* not JSON after all — use the raw text */ }
+  }
+  return text;
+}
+
+export interface OpencodeRunOptions {
+  prompt: string;
+  cwd: string;
+  cliPath: string;
+  sessionId?: string;
+  model?: string;
+  agent?: string;
+  onEvent: (event: CoderStreamEvent) => void;
+}
+
+export function runOpencode(opts: OpencodeRunOptions): ChildProcess {
+  const args = ['run', '--format', 'json', '--dir', opts.cwd, opts.prompt];
+  if (opts.model) args.push('--model', opts.model);
+  if (opts.agent) args.push('--agent', opts.agent);
+  if (opts.sessionId) args.push('--session', opts.sessionId);
+
+  const child = spawn(opts.cliPath, args, {
+    cwd: opts.cwd || CODER_WORKSPACE_DIR,
+    env: buildCoderChildEnv(),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  let terminalSent = false;
+  const emit = (event: CoderStreamEvent) => {
+    if (terminalSent) return;
+    if (event.kind === 'result' || event.kind === 'error') terminalSent = true;
+    try {
+      opts.onEvent(event);
+    } catch {
+      /* renderer gone — nothing to do */
+    }
+  };
+
+  const buffer = createLineBuffer((line) => {
+    for (const event of parseOpencodeEventLine(line)) emit(event);
+  });
+
+  child.stdout?.on('data', (d: Buffer) => buffer.push(d.toString()));
+  child.stderr?.on('data', (d: Buffer) => buffer.push(d.toString()));
+
+  child.on('error', (err: Error) => {
+    buffer.flush?.();
+    emit({ kind: 'error', message: `opencode failed to start: ${err.message}` });
+  });
+
+  child.on('close', (code: number | null) => {
+    buffer.flush?.();
+    if (terminalSent) return;
+    if (code === 0) emit({ kind: 'result', ok: true, sessionId: opts.sessionId });
+    else emit({ kind: 'error', message: `opencode exited with code ${code}` });
+  });
+
+  return child;
+}
+
+export interface OpencodeModel {
+  /** `provider/model`, exactly as passed to --model. */
+  id: string;
+  provider: string;
+  name: string;
+  /** True for opencode's own hosted ("zen") models. */
+  isZen: boolean;
+  /** True when the id ends in -free. */
+  isFree: boolean;
+}
+
+function classifyModel(id: string): OpencodeModel {
+  const slash = id.indexOf('/');
+  const provider = slash > 0 ? id.slice(0, slash) : 'unknown';
+  const name = slash > 0 ? id.slice(slash + 1) : id;
+  return {
+    id,
+    provider,
+    name,
+    isZen: provider === 'opencode',
+    isFree: /-free$/.test(name),
+  };
+}
+
+/**
+ * Ask opencode which models it can reach, so Henry offers the real list
+ * instead of a hardcoded one. This is what lets every provider opencode is
+ * configured for — its own zen models, OpenRouter, or anything added later —
+ * work through the same engine without a code change here.
+ *
+ * The timeout is generous on purpose: `opencode models` probes the configured
+ * providers and took ~25s here, and a 20s cap silently truncated the list to
+ * 139 of 395 entries.
+ */
+export async function listOpencodeModels(timeoutMs = 90_000): Promise<{
+  ok: boolean;
+  models: OpencodeModel[];
+  error?: string;
+}> {
+  const cli = await detectOpencodeCli();
+  if (!cli.available || !cli.path) {
+    return { ok: false, models: [], error: cli.error ?? 'opencode is not installed.' };
+  }
+  try {
+    const { stdout } = await execFileP(cli.path, ['models'], {
+      env: buildCoderChildEnv(),
+      timeout: timeoutMs,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    const models = stdout
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.includes('/'))
+      .map(classifyModel)
+      .sort((a, b) => {
+        // zen first, then free, then alphabetical
+        if (a.isZen !== b.isZen) return a.isZen ? -1 : 1;
+        if (a.isFree !== b.isFree) return a.isFree ? -1 : 1;
+        return a.id.localeCompare(b.id);
+      });
+    return { ok: true, models };
+  } catch (e: unknown) {
+    return { ok: false, models: [], error: e instanceof Error ? e.message : String(e) };
+  }
+}

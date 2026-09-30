@@ -1,0 +1,149 @@
+{
+  "manifest": "primetech-marketplace",
+  "version": 1,
+  "items": [
+    {
+      "id": "primetech-terminal",
+      "name": "PrimeTech Terminal",
+      "type": "app",
+      "category": "terminal",
+      "description": "Plugin-based Android terminal with a marketplace, tools and the Buster node bridge. No standalone release APK is published yet; this entry stays unconfigured until a verified build exists.",
+      "version": "1.0",
+      "author": "xbustcodex",
+      "packageName": "com.primetechterminal",
+      "repository": "https://github.com/xbustcodex/PrimeTech_Terminal",
+      "homepage": "https://github.com/xbustcodex/PrimeTech_Terminal",
+      "capabilities": [
+        "terminal",
+        "plugins",
+        "marketplace",
+        "buster-integration"
+      ],
+      "integrations": [
+        "buster",
+        "termux"
+      ],
+      "requirements": {
+        "minSdk": 26
+      },
+      "install": {
+        "type": "none"
+      }
+    },
+    {
+      "id": "buster",
+      "name": "Buster",
+      "type": "app",
+      "category": "assistant",
+      "description": "Buster Android application/product. No standalone APK is published yet; the Buster node integration ships inside PrimeTech Terminal and is managed with the buster command.",
+      "author": "xbustcodex",
+      "capabilities": [
+        "node-api",
+        "service-actions",
+        "runtime-auth"
+      ],
+      "integrations": [
+        "primetech-terminal"
+      ],
+      "install": {
+        "type": "none"
+      }
+    },
+    {
+      "id": "devtoolbox",
+      "name": "Android Dev Toolbox",
+      "type": "app",
+      "category": "developer-tools",
+      "description": "Security and development toolkit: logcat viewer, package viewer, deep-link tester.",
+      "version": "1.0.0",
+      "author": "xbustcodex",
+      "packageName": "com.devtoolbox",
+      "repository": "https://github.com/xbustcodex/android-dev-toolbox",
+      "homepage": "https://github.com/xbustcodex/android-dev-toolbox",
+      "apkUrl": "https://github.com/xbustcodex/android-dev-toolbox/releases/download/v1.0.0/app-release.apk",
+      "capabilities": [
+        "logcat",
+        "packages",
+        "deep-links"
+      ],
+      "requirements": {
+        "minSdk": 26
+      },
+      "install": {
+        "type": "apk-download"
+      }
+    },
+    {
+      "id": "termuxfm",
+      "name": "Termux File Manager",
+      "type": "app",
+      "category": "file-manager",
+      "description": "Termux companion and file manager with script launcher, editor and Termux RUN_COMMAND integration.",
+      "version": "3.0.9",
+      "author": "xbustcodex",
+      "packageName": "com.termuxfm",
+      "repository": "https://github.com/xbustcodex/termux-file-manager",
+      "homepage": "https://github.com/xbustcodex/termux-file-manager",
+      "apkUrl": "https://github.com/xbustcodex/termux-file-manager/releases/download/v3.0.9/app-release.apk",
+      "capabilities": [
+        "file-manager",
+        "script-runner",
+        "termux-run-command"
+      ],
+      "integrations": [
+        "termux"
+      ],
+      "requirements": {
+        "minSdk": 26,
+        "termux": true
+      },
+      "install": {
+        "type": "apk-download"
+      }
+    },
+    {
+      "id": "ohmytermux",
+      "name": "OhMyTermux",
+      "type": "tool",
+      "category": "termux-setup",
+      "description": "Termux customization suite (shell, packages, fonts, XFCE, Debian PRoot) installed via a bash script.",
+      "version": "1.1.0",
+      "author": "devohmycode",
+      "repository": "https://github.com/xbustcodex/OhMyTermux",
+      "homepage": "https://github.com/xbustcodex/OhMyTermux",
+      "capabilities": [
+        "shell",
+        "packages",
+        "xfce",
+        "proot",
+        "i18n"
+      ],
+      "integrations": [
+        "termux"
+      ],
+      "requirements": {
+        "termux": true
+      },
+      "install": {
+        "type": "termux-run",
+        "scriptUrl": "https://raw.githubusercontent.com/devohmycode/OhMyTermux/main/install.sh"
+      }
+    },
+    {
+      "id": "primetech-marketplace",
+      "name": "PrimeTech Marketplace",
+      "type": "app",
+      "category": "marketplace",
+      "description": "Standalone catalogue browser for the PrimeTech ecosystem (apps, tools, plugins, integrations). No release APK is published yet; this entry stays unconfigured until a verified build exists.",
+      "version": "1.0.0",
+      "packageName": "com.primetechmarketplace",
+      "capabilities": [
+        "marketplace",
+        "catalog"
+      ],
+      "install": {
+        "type": "none"
+      }
+    }
+  ]
+}

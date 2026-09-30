@@ -13,7 +13,6 @@ export type HenryCommand =
   | { kind: 'memory' }
   | { kind: 'clear-context' }
   | { kind: 'use-workspace-context' }
-  | { kind: 'start-study-note' }
   | { kind: 'start-design-plan' }
   | { kind: 'start-draft' }
   | { kind: 'export-pack' };
@@ -51,9 +50,6 @@ export function parseUserCommandLine(raw: string): HenryCommand | null {
     case '/use-workspace-context':
     case '/useworkspacecontext':
       return { kind: 'use-workspace-context' };
-    case '/start-study-note':
-    case '/startstudynote':
-      return { kind: 'start-study-note' };
     case '/start-design-plan':
     case '/startdesignplan':
       return { kind: 'start-design-plan' };

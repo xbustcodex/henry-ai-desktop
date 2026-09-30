@@ -74,16 +74,24 @@ export type DownloadProgress = {
   message: string;
 };
 
-function getDownloadUrl(): string {
+/**
+ * Ollama release asset for this platform.
+ *
+ * These asset names are matched against the real release manifest: macOS ships
+ * `Ollama-darwin.zip` (capital O), and Linux ships `ollama-linux-<arch>.tar.zst`.
+ * The previous flat `ollama-darwin` / `ollama-linux-<arch>` names 404, so
+ * auto-install never worked on Linux or macOS.
+ */
+function getDownloadAsset(): { url: string; kind: 'zip' | 'tarzst' } {
   const arch = process.arch === 'arm64' ? 'arm64' : 'amd64';
+  const base = 'https://github.com/ollama/ollama/releases/latest/download';
   if (process.platform === 'darwin') {
-    return `https://github.com/ollama/ollama/releases/latest/download/ollama-darwin`;
+    return { url: `${base}/Ollama-darwin.zip`, kind: 'zip' };
   }
   if (process.platform === 'win32') {
-    return `https://github.com/ollama/ollama/releases/latest/download/ollama-windows-${arch}.zip`;
+    return { url: `${base}/ollama-windows-${arch}.zip`, kind: 'zip' };
   }
-  // Linux
-  return `https://github.com/ollama/ollama/releases/latest/download/ollama-linux-${arch}`;
+  return { url: `${base}/ollama-linux-${arch}.tar.zst`, kind: 'tarzst' };
 }
 
 function httpsGet(url: string): Promise<import('http').IncomingMessage> {
@@ -109,8 +117,8 @@ export async function downloadOllama(
   const binDir = getHenryBinDir();
   if (!fs.existsSync(binDir)) fs.mkdirSync(binDir, { recursive: true });
 
-  const url = getDownloadUrl();
-  const tmpPath = path.join(binDir, 'ollama.tmp');
+  const { url, kind } = getDownloadAsset();
+  const tmpPath = path.join(binDir, `ollama.${kind === 'zip' ? 'zip' : 'tar.zst'}`);
   const ollamaPath = getHenryOllamaPath();
 
   onProgress({ phase: 'downloading', downloaded: 0, total: 0, message: 'Connecting to GitHub…' });
@@ -143,19 +151,58 @@ export async function downloadOllama(
 
   onProgress({ phase: 'extracting', downloaded, total, message: 'Installing…' });
 
-  if (process.platform === 'darwin' || process.platform === 'linux') {
-    // Direct binary (no archive on Mac/Linux since we use the flat binary)
-    fs.renameSync(tmpPath, ollamaPath);
-    fs.chmodSync(ollamaPath, 0o755);
+  // Every Ollama release is an ARCHIVE. The old code rename()'d the download
+  // straight onto the target path, which produced a non-executable file
+  // whenever the URL did resolve.
+  const extractDir = path.join(binDir, 'ollama-extract');
+  const { execFile } = await import('child_process');
+  fs.rmSync(extractDir, { recursive: true, force: true });
+  fs.mkdirSync(extractDir, { recursive: true });
+
+  if (process.platform === 'win32') {
+    await new Promise<void>((resolve, reject) => {
+      execFile('powershell', ['-NoProfile', '-Command',
+        `Expand-Archive -Path '${tmpPath}' -DestinationPath '${extractDir}' -Force`],
+      { timeout: 180_000 }, (err) => err ? reject(new Error(`Extract failed: ${err.message}`)) : resolve());
+    });
+  } else if (kind === 'zip') {
+    await new Promise<void>((resolve, reject) => {
+      execFile('unzip', ['-q', '-o', tmpPath, '-d', extractDir],
+      { timeout: 180_000 }, (err) => err ? reject(new Error(`unzip failed: ${err.message}`)) : resolve());
+    });
   } else {
-    // Windows zip
-    const { execSync } = await import('child_process');
-    execSync(
-      `powershell -Command "Expand-Archive -Path '${tmpPath}' -DestinationPath '${binDir}' -Force"`,
-      { stdio: 'ignore' },
-    );
-    fs.unlinkSync(tmpPath);
+    await new Promise<void>((resolve, reject) => {
+      execFile('tar', ['--zstd', '-xf', tmpPath, '-C', extractDir],
+      { timeout: 180_000 }, (err) => err ? reject(new Error(`tar --zstd failed: ${err.message}`)) : resolve());
+    });
   }
+
+  // Find the `ollama` executable inside the extracted tree and move it into place.
+  const findBinary = (dir: string, depth = 0): string | null => {
+    if (depth > 5) return null;
+    let entries: string[];
+    try { entries = fs.readdirSync(dir); } catch { return null; }
+    for (const e of entries) {
+      const full = path.join(dir, e);
+      let st: fs.Stats;
+      try { st = fs.statSync(full); } catch { continue; }
+      if (st.isFile() && /^ollama(\.exe)?$/.test(e)) return full;
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e);
+      try { if (fs.statSync(full).isDirectory()) { const hit = findBinary(full, depth + 1); if (hit) return hit; } } catch { /* ignore */ }
+    }
+    return null;
+  };
+
+  const found = findBinary(extractDir);
+  if (!found) {
+    throw new Error('Ollama archive did not contain an `ollama` executable. Install it with your package manager and retry.');
+  }
+  fs.copyFileSync(found, ollamaPath);
+  fs.chmodSync(ollamaPath, 0o755);
+  fs.rmSync(extractDir, { recursive: true, force: true });
+  fs.unlinkSync(tmpPath);
 
   onProgress({ phase: 'done', downloaded, total, message: 'Ollama installed.' });
   return ollamaPath;

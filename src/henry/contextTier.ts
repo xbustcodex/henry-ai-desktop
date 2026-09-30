@@ -9,7 +9,7 @@
  *            Core identity + mode + up to 8 recent messages (~1,500 sys tokens).
  *   MEDIUM — multi-turn reasoning, project work, follow-up threads.
  *            Adds top facts + short summary + 16 messages (~3,000 sys tokens).
- *   FULL   — rare: deep research, biblical study, workspace-heavy tasks.
+ *   FULL   — rare: deep research, workspace-heavy tasks.
  *            Full existing system prompt (capped at existing OPTIONAL_BUDGET).
  *
  * TOKEN GUARD:
@@ -121,15 +121,12 @@ export function classifyMessageIntent(message: string): MessageIntent {
  * @param intent - Classified message intent.
  * @param historyLength - Number of messages in the current thread.
  * @param hasWorkspaceContext - True when a workspace file/folder is attached.
- * @param isBiblicalMode - True when mode is 'biblical' (always needs FULL for corpus).
  */
 export function selectContextTier(
   intent: MessageIntent,
   historyLength: number,
-  hasWorkspaceContext: boolean,
-  isBiblicalMode: boolean
+  hasWorkspaceContext: boolean
 ): ContextTier {
-  if (isBiblicalMode) return 'full';
   if (hasWorkspaceContext) return 'medium';
 
   switch (intent) {

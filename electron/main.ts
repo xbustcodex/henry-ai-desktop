@@ -1,18 +1,23 @@
 import { autoUpdater } from 'electron-updater';
-import { app, BrowserWindow, shell, ipcMain, Notification, Tray, Menu, MenuItem, globalShortcut, nativeImage, systemPreferences } from 'electron';
+import { app, BrowserWindow, shell, ipcMain, Notification, Tray, Menu, MenuItem, globalShortcut, nativeImage, systemPreferences, dialog } from 'electron';
 import path from 'path';
 import fs from 'fs';
-import { initDatabase } from './ipc/database';
+import { initDatabase, getDb } from './ipc/database';
 import { registerSettingsHandlers } from './ipc/settings';
 import { registerGoogleAuthHandlers } from './ipc/googleAuth';
 import { registerAIHandlers } from './ipc/ai';
 import { registerFilesystemHandlers } from './ipc/filesystem';
+import { registerAttachmentHandlers } from './ipc/attachments';
+import { registerMediaLibraryHandlers } from './ipc/mediaLibrary';
+import { registerMarketplaceHandlers } from './ipc/marketplace';
+import { registerHenryLocalBrainGatewayIpc } from './ipc/henryLocalBrainGateway';
+import { registerOpencodeBridgeHandlers, stopOpencodeBridge } from './ipc/opencodeBridge';
+import { registerRuntimeHandlers, recordStartupFailure } from './ipc/runtimeDiagnostics';
 import { registerTaskBrokerHandlers } from './ipc/taskBroker';
 import { registerMemoryHandlers } from './ipc/memory';
-import { registerPrayerHandlers } from './ipc/prayer';
+import { registerMemoryGraphHandlers } from './ipc/memoryGraph';
 import { registerQuotingHandlers } from './ipc/quoting';
 import { registerMakerStudioHandlers } from './ipc/makerStudio';
-import { registerScriptureHandlers } from './ipc/scripture';
 import { registerLessonsHandlers } from './ipc/lessons';
 import { registerOllamaHandlers } from './ipc/ollama';
 import { registerOllamaCleanup } from './ipc/ollamaManager';
@@ -36,6 +41,7 @@ import { registerSyncBridgeIpc, setSyncDb, startSyncServer } from './ipc/syncBri
 import { runDiagnostic, saveReport } from './ipc/selfRepair';
 import { decryptKey } from './ipc/_keyStorage';
 import { registerVoiceSttHandlers } from './voice/stt';
+import { registerVoiceGreetingHandlers } from './voice/greeting';
 import { registerVoiceTtsHandlers } from './voice/tts';
 import { log } from './lib/log';
 
@@ -139,49 +145,6 @@ function createWindow() {
           } catch(e) {}
         `;
         mainWindow!.webContents.executeJavaScript(pathScript);
-
-        // ALWAYS inject real computer control via sync server
-        // Don't test for mock first — just override unconditionally
-        // The sync server is already running and works regardless of webMock state
-        const computerOverrideScript = `
-          (function installRealComputer() {
-            const BASE = 'http://127.0.0.1:4242';
-            const H = {'Content-Type':'application/json','X-Henry-Internal':'true'};
-
-            const post = (path, body) =>
-              fetch(BASE + path, {method:'POST', headers:H, body:JSON.stringify(body)})
-                .then(r => r.json())
-                .catch(e => ({ok:false, success:false, error:String(e)}));
-
-            window.henryAPI.computerRunShell   = p => post('/computer/shell',     {command: p.command});
-            window.henryAPI.computerNewFolder  = p => post('/computer/newfolder', {path: p.path});
-            window.henryAPI.computerOpenApp    = n => post('/computer/openapp',   {name: typeof n==='string'?n:n.name||n});
-            window.henryAPI.computerScreenshot = () => post('/computer/screenshot', {});
-            window.henryAPI.computerOsascript  = s => post('/computer/osascript', {script: typeof s==='string'?s:s.script||s});
-
-            // Override sync/companion methods via sync server HTTP API
-            // The preload exposes these but webMock overwrites them with no-ops
-            const syncPost2 = (path, body={}) =>
-              fetch(BASE + path, {method:'POST', headers:H, body:JSON.stringify(body)})
-                .then(r=>r.json()).catch(()=>({ok:false}));
-            const syncGet2 = (path) =>
-              fetch(BASE + path, {headers:H})
-                .then(r=>r.json()).catch(()=>({ok:false}));
-
-            window.henryAPI.syncStart = () => syncPost2('/sync/start-internal');
-            window.henryAPI.syncGetState = () => syncGet2('/sync/state-internal');
-            window.henryAPI.syncGeneratePairToken = () => syncPost2('/sync/generate-pair-internal');
-            window.henryAPI.syncRevokePairToken = () => syncPost2('/sync/revoke-pair-internal');
-            window.henryAPI.syncUnlinkDevice = (id) => syncPost2('/sync/unlink-device-internal', {id});
-            window.henryAPI.syncStartTunnel = () => syncPost2('/sync/start-tunnel');
-            window.henryAPI.syncStopTunnel = () => syncPost2('/sync/stop-tunnel');
-            window.henryAPI.syncGetTunnelUrl = () => syncGet2('/sync/get-tunnel-url');
-          })();
-        `;
-        mainWindow!.webContents.executeJavaScript(computerOverrideScript).catch(() => {});
-
-        // Check permissions and notify renderer so it can show the permission prompt
-                // Check permissions and notify renderer so it can show the permission prompt
         if (process.platform === 'darwin') {
           const { execSync } = await import('child_process');
           let accessibility = false;
@@ -252,7 +215,29 @@ if (app.isPackaged) {
   });
 }
 
+// Single instance: a second launch would start a second sync server on 4242,
+// a second reminder poller and scheduler, duplicate global hotkeys, and two
+// processes writing the same henry.db.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+  process.exit(0);
+}
+
+app.on('second-instance', () => {
+  const win = getMainWindow();
+  if (win) {
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  }
+});
+
+// A throw anywhere in boot (mkdir / initDatabase / createWindow) used to be
+// swallowed by the log-only handlers above, leaving a windowless zombie
+// process. Fail loudly and exit instead.
 app.whenReady().then(() => {
+  try {
+    // Registered before the database so a boot failure is still reportable.
+    registerRuntimeHandlers(() => { try { return getDb(); } catch { return null; } });
   // Check for updates silently on launch
   if (app.isPackaged) { autoUpdater.checkForUpdatesAndNotify().catch(() => {}); }
 
@@ -453,16 +438,21 @@ app.whenReady().then(() => {
 
   registerGoogleAuthHandlers(getMainWindow);
 
-  // After any provider save, re-sync SQLite providers → localStorage so the renderer picks it up
-  const origProvidersSave = ipcMain.listeners('providers:save');
+  // Re-sync SQLite providers → localStorage so the renderer picks up saves.
   ipcMain.handle('providers:resync-localStorage', () => {
     try {
       const providers = db.prepare('SELECT id, name, api_key, enabled, models FROM providers').all() as {id:string;name:string;api_key:string;enabled:number;models:string}[];
-      const providersArr = providers.map(p => ({
-        id: p.id, name: p.name,
-        api_key: p.api_key || '', apiKey: p.api_key || '',
-        enabled: Boolean(p.enabled), models: p.models || '[]',
-      }));
+      // Same rule as the boot path: the renderer sends this value straight to
+      // the provider, so it must be plaintext. Injecting the `enc:v1:`
+      // ciphertext made every provider fail with an auth error.
+      const providersArr = providers.map(p => {
+        const plain = decryptKey(p.api_key || '');
+        return {
+          id: p.id, name: p.name,
+          api_key: plain, apiKey: plain,
+          enabled: Boolean(p.enabled), models: p.models || '[]',
+        };
+      });
       const script = `try { localStorage.setItem('henry:providers', JSON.stringify(${JSON.stringify(providersArr)})); } catch(e) {}`;
       getMainWindow()?.webContents.executeJavaScript(script).catch(() => {});
       return { ok: true, count: providers.length };
@@ -471,8 +461,16 @@ app.whenReady().then(() => {
 
   registerAIHandlers(db, getMainWindow);
   registerFilesystemHandlers(henryDir);
+  registerAttachmentHandlers(db);
+  registerMediaLibraryHandlers(db, getMainWindow);
+  registerMarketplaceHandlers(db, getMainWindow);
+  // Was never registered, so the renderer's optional local-gateway probe always
+  // returned undefined and the gateway URL was never used.
+  registerHenryLocalBrainGatewayIpc(db);
+  registerOpencodeBridgeHandlers(getMainWindow);
   registerTaskBrokerHandlers(db, getMainWindow, henryDir);
   registerMemoryHandlers(db);
+  registerMemoryGraphHandlers(db);
   registerApprovalHandlers(db);
   registerBookHandlers(db);
   registerPrinterDiscoveryHandlers();
@@ -480,10 +478,8 @@ app.whenReady().then(() => {
   registerMachineHandlers(db, getMainWindow);
   registerSlicerHandlers(db);
   registerSlicerProfileHandlers(db);
-  registerPrayerHandlers(db);
   registerQuotingHandlers(db);
   registerMakerStudioHandlers(db);
-  registerScriptureHandlers(db, getMainWindow);
   registerLessonsHandlers(db);
   registerOllamaHandlers(getMainWindow);
   registerOllamaCleanup();
@@ -493,6 +489,7 @@ app.whenReady().then(() => {
   registerSessionStoreHandlers(henryDir);
   registerAgentHandlers(db, getMainWindow);
   registerCoderHandlers(db, getMainWindow);
+  registerVoiceGreetingHandlers(db);
   registerVoiceSttHandlers(getMainWindow);
   registerVoiceTtsHandlers(db);
 
@@ -501,7 +498,7 @@ app.whenReady().then(() => {
   // Routine fires. init() seeds the four default Routines (disabled) on first
   // run and registers every enabled one with node-cron.
   henryScheduler = new HenryScheduler(db, getMainWindow);
-  registerSchedulerHandlers(henryScheduler);
+  registerSchedulerHandlers(henryScheduler, db);
   henryScheduler.init();
 
   // ── Companion Sync Bridge ────────────────────────────────────────────────
@@ -527,7 +524,7 @@ app.whenReady().then(() => {
       const { randomUUID } = require('crypto') as typeof import('crypto');
       [
         [randomUUID(), 'Morning prayer / quiet time', '🙏', '#7c3aed', 1],
-        [randomUUID(), 'Read Bible',                  '✝', '#2563eb', 1],
+        [randomUUID(), 'Read a chapter',             '📖', '#2563eb', 1],
         [randomUUID(), 'Exercise',                    '💪', '#16a34a', 1],
         [randomUUID(), 'Drink water (8 glasses)',      '💧', '#0891b2', 8],
         [randomUUID(), 'Journal',                     '📔', '#d97706', 1],
@@ -683,7 +680,7 @@ app.whenReady().then(() => {
       <span class="icon">⚡</span>
       <div class="info">
         <div class="title">Henry captured</div>
-        <div class="preview">${preview.replace(/</g,'<').replace(/>/g,'>')}</div>
+        <div class="preview">${preview.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}</div>
       </div>
       <span class="badge">${charCount} chars</span>
     </div>
@@ -768,17 +765,8 @@ app.whenReady().then(() => {
     showHUD(text, text.length);
 
     // ── LOCAL pattern matching (FREE, no AI quota) ──────────────────────────
-    const bibleRef = /^(1|2|3)?\s?[A-Z][a-z]+\s+\d+:\d+/.test(text);
     const looksLikeTask = /^(todo|task|remember to|don't forget|fix|build|write|call|email|send|create|update|check|review|finish|complete|buy|get)/i.test(text);
     const hasTime = /(at|by|before|tomorrow|tonight|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d+:\d+\s?(am|pm)|\d+(am|pm))/i.test(text);
-
-    if (bibleRef && text.length < 30) {
-      // Looks like a Bible reference — route to scripture lookup
-      getMainWindow()?.webContents.send('henry:smart-route', {
-        type: 'bible', text, message: '✝ Opening in Scripture…'
-      });
-      return; // skip AI
-    }
 
     if (looksLikeTask && !hasTime && text.length < 120) {
       // Looks like a task — send to renderer to create via IPC (no AI needed)
@@ -886,39 +874,10 @@ app.whenReady().then(() => {
       const autoEnabled = (tunnelSetting?.value ?? 'true') !== 'false';
       if (!autoEnabled) return;
 
-      // Check if cloudflared is installed — if not, install it automatically
-      let cloudflaredPath = '';
-      const _isWin32 = process.platform === 'win32';
-      try {
-        cloudflaredPath = _isWin32
-          ? execSync('where cloudflared', { encoding: 'utf8' }).trim().split('\n')[0].trim()
-          : execSync('which cloudflared', { encoding: 'utf8' }).trim();
-      } catch {
-        // Not found — try to install
-        log.info('[Henry] cloudflared not found — installing...');
-        try {
-          if (_isWin32) {
-            execSync('winget install Cloudflare.cloudflared --silent', { timeout: 120000, stdio: 'ignore' });
-            try { cloudflaredPath = execSync('where cloudflared', { encoding: 'utf8' }).trim().split('\n')[0].trim(); } catch { /* still not found */ }
-          } else {
-            const brewPath = execSync('which brew', { encoding: 'utf8' }).trim();
-            if (brewPath) {
-              execSync(brewPath + ' install cloudflared', {
-                timeout: 120_000, stdio: 'ignore',
-                env: { ...process.env, HOME: process.env.HOME || '/Users/' + process.env.USER },
-              });
-              cloudflaredPath = execSync('which cloudflared', { encoding: 'utf8' }).trim();
-            }
-          }
-          if (cloudflaredPath) log.info('[Henry] cloudflared installed at:', cloudflaredPath);
-        } catch {
-          log.warn('[Henry] Could not auto-install cloudflared — remote companion tunnel disabled');
-          return;
-        }
-      }
-
-      if (!cloudflaredPath) return;
-
+      // Resolve cloudflared through the sync bridge, which knows about the
+      // bundled copy AND validates that a binary can actually run on this
+      // platform. The old path only looked in PATH and auto-installed via
+      // Homebrew, so on Linux/Windows the tunnel never started.
       const { startSyncTunnel } = await import('./ipc/syncBridge');
       const url = await startSyncTunnel(4242);
       if (url) {
@@ -989,7 +948,23 @@ app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+  } catch (bootErr) {
+    // Boot failed — surface it instead of leaving a windowless zombie process.
+    console.error('[Henry:main] Boot failed:', bootErr);
+    recordStartupFailure(bootErr);
+    dialog.showErrorBox(
+      'Henry could not start',
+      `Henry failed during startup:\n\n${bootErr instanceof Error ? bootErr.message : String(bootErr)}\n\n` +
+      `Your data folder was not modified. Please restart Henry, or reinstall if this keeps happening.`
+    );
+    app.exit(1);
+  }
+}).catch((e) => {
+  console.error('[Henry:main] app.whenReady() rejected:', e);
+  app.exit(1);
 });
+
+app.on('will-quit', () => { stopOpencodeBridge(); });
 
 app.on('window-all-closed', () => {
   // All platforms supported — quit on all-windows-closed

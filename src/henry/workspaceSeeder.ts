@@ -66,10 +66,9 @@ He runs on Groq (8B Instant / 70B Versatile), works offline with Ollama, and car
 
 ## Core Capabilities
 - Deep conversational memory (7-layer system: facts, sessions, working memory, personal memory, projects, relationships, narrative)
-- Multiple operating modes: Companion, Writer, Developer, Builder, Biblical, 3D Design, Secretary, Coach, Strategic, Business Builder
+- Multiple operating modes: Companion, Writer, Developer, Builder, 3D Design, Secretary, Coach, Strategic, Business Builder
 - Live transcription and voice interaction
 - Web search and URL reading (DuckDuckGo, Google CSE, Brave)
-- Bible corpus with full KJV/NIV search
 - Ambient intelligence and presence behaviors
 - Electron desktop + Capacitor mobile
 
@@ -93,7 +92,6 @@ function doc_ProductRoadmap(): string {
 - [x] Multi-provider support (OpenAI, Anthropic, Ollama, OpenRouter)
 - [x] Basic chat with streaming
 - [x] Settings and provider management
-- [x] Bible corpus (KJV/NIV) with search
 
 ## Phase 2 — Memory (Complete)
 - [x] 7-layer memory blueprint (12 SQLite tables)
@@ -301,7 +299,6 @@ function doc_StatusUpdate(): string {
 - 10 operating modes fully implemented
 - 7-layer memory system complete
 - All UI panels built (Today, Journal, Reminders, Finance, Print Studio, Image Gen)
-- Bible corpus with search
 - Web tools (DuckDuckGo, Brave, Google CSE, Jina URL reader)
 - Emotion detection wired into system prompt
 - Working memory and commitment tracking
@@ -669,7 +666,6 @@ function doc_PoliciesAndSystemNotes(): string {
 - Memory bandwidth: shallow / normal / deep / maximum (set in settings)
 - Groq is the default provider — hardwired as primary
 - Fallback chain: Groq → Ollama → OpenAI (if configured)
-- Bible corpus: loaded from JSON import, stored in IndexedDB
 
 ## Backup Policy
 Exports available from Finance and other panels.
@@ -727,7 +723,7 @@ const WORKSPACE_FILES: Array<{ path: string; content: () => string }> = [
   { path: '/workspace/03_Marketing_Content/Brand Notes.md', content: doc_BrandNotes },
   { path: '/workspace/03_Marketing_Content/Messaging.md', content: () => header('Messaging', 'Draft', 'Core messages and value propositions for Henry AI.') + '## Core Message\nHenry is a personal AI that actually remembers you.\n\n## Value Props\n- Continuity: picks up where you left off\n- Memory: knows what matters\n- Presence: not a tool, a companion\n- Privacy: your data, your machine\n\n## For Who\nPower users, creators, builders who want depth and continuity — not generic chat.\n' },
   { path: '/workspace/03_Marketing_Content/Content Ideas.md', content: () => header('Content Ideas', 'Draft', 'Content topics worth creating when the time is right.') + '## Ideas\n- How I built my personal AI OS\n- What 7-layer memory actually means\n- Why I stopped using ChatGPT for everything\n- The difference between a tool and a presence\n- Building with Groq: speed that changes the feel\n\n## Formats\nBlog / Twitter thread / Short video / Demo video\n' },
-  { path: '/workspace/03_Marketing_Content/Landing Page Copy.md', content: () => header('Landing Page Copy', 'Draft', 'Draft copy for a Henry AI landing page.') + '## Headline\nYour personal AI. The one that actually knows you.\n\n## Subheadline\nHenry remembers everything. Picks up where you left off. Works the way you work.\n\n## Features Section\n- Deep memory across every session\n- 10 specialized modes for every kind of thinking\n- Works offline with Ollama, blazing fast with Groq\n- Bible study, creative writing, code, strategy — all in one place\n\n## CTA\nGet early access →\n' },
+  { path: '/workspace/03_Marketing_Content/Landing Page Copy.md', content: () => header('Landing Page Copy', 'Draft', 'Draft copy for a Henry AI landing page.') + '## Headline\nYour personal AI. The one that actually knows you.\n\n## Subheadline\nHenry remembers everything. Picks up where you left off. Works the way you work.\n\n## Features Section\n- Deep memory across every session\n- 10 specialized modes for every kind of thinking\n- Works offline with Ollama, blazing fast with Groq\n- Creative writing, code, strategy — all in one place\n\n## CTA\nGet early access →\n' },
   { path: '/workspace/03_Marketing_Content/Social Post Ideas.md', content: () => header('Social Post Ideas', 'Draft', 'Short-form social content ideas.') + '## Post Ideas\n- "I built an AI that tells me where we left off every morning."\n- "Henry has 7 layers of memory. Your AI has none."\n- "Built with Groq. Feels like it\'s thinking before I finish typing."\n- "Personal AI shouldn\'t feel generic. Henry doesn\'t."\n' },
   // 04 Operations Legal
   { path: '/workspace/04_Operations_Legal/Policies.md', content: doc_PoliciesAndSystemNotes },
@@ -747,7 +743,7 @@ const WORKSPACE_FILES: Array<{ path: string; content: () => string }> = [
   { path: '/workspace/06_Memory/Important Patterns.md', content: () => header('Important Patterns', 'Active', 'Recurring patterns Henry has noticed about how you work.') + '## Work Patterns\n(Henry observes and records)\n\n## Thinking Patterns\n(How you approach problems)\n\n## Energy Patterns\n(When you are sharp vs. depleted)\n\n## Notes\nUpdated from working memory and personal memory over time.\n' },
   // 07 Projects
   { path: '/workspace/07_Projects/Henry AI/Project Overview.md', content: () => { const o = getOwnerName(); return header('Henry AI – Project Overview', 'Active', 'Overview of the Henry AI development project.', 'Henry AI Overview; Henry AI Product Roadmap') + `## Summary\nBuilding Henry — a personal AI OS for ${o}. Desktop (Electron) + Mobile (Capacitor).\n\n## Why It Matters\nThe most personalized AI system possible. Not a product for everyone — built for one person.\n\n## Current Stage\nCore complete. Voice and mobile in progress.\n\n## Key Tasks\nSee Tasks.md\n\n## Next Action\nVoice interrupt support and mobile Capacitor build.\n`; } },
-  { path: '/workspace/07_Projects/Henry AI/Tasks.md', content: () => header('Henry AI – Tasks', 'Active', 'Active task list for Henry AI development.') + '## In Progress\n- [ ] Voice interrupt support\n- [ ] Mobile Capacitor build\n- [ ] Workspace automation\n\n## Up Next\n- [ ] Memory repair / audit tools\n- [ ] Project auto-scaffold on creation\n- [ ] Landing page\n\n## Done\n- [x] 7-layer memory system\n- [x] 10 operating modes\n- [x] All UI panels\n- [x] Bible corpus\n- [x] Web tools\n- [x] Workspace seeder\n' },
+  { path: '/workspace/07_Projects/Henry AI/Tasks.md', content: () => header('Henry AI – Tasks', 'Active', 'Active task list for Henry AI development.') + '## In Progress\n- [ ] Voice interrupt support\n- [ ] Mobile Capacitor build\n- [ ] Workspace automation\n\n## Up Next\n- [ ] Memory repair / audit tools\n- [ ] Project auto-scaffold on creation\n- [ ] Landing page\n\n## Done\n- [x] 7-layer memory system\n- [x] 10 operating modes\n- [x] All UI panels\n- [x] Web tools\n- [x] Workspace seeder\n' },
   { path: '/workspace/07_Projects/Henry AI/Notes.md', content: () => header('Henry AI – Notes', 'Active', 'Running notes and observations for the Henry AI project.') + '## Notes\n(Add development notes, decisions, and observations here)\n' },
   { path: '/workspace/07_Projects/Henry AI/Status.md', content: doc_StatusUpdate },
   // 08 Templates
@@ -763,7 +759,7 @@ const WORKSPACE_FILES: Array<{ path: string; content: () => string }> = [
   { path: '/workspace/09_Exports_Backups/backups/.keep', content: () => '# Backups folder\nManual and automated backups stored here.\n' },
   { path: '/workspace/09_Exports_Backups/snapshots/.keep', content: () => '# Snapshots folder\nWorkspace and memory snapshots stored here.\n' },
   // 10 System
-  { path: '/workspace/10_System/config.json', content: () => JSON.stringify({ workspace_version: '1.0.0', owner: getOwnerName(), created_at: new Date().toISOString(), memory_bandwidth_default: 'normal', primary_provider: 'groq', primary_model: 'llama-3.3-70b-versatile', worker_model: 'llama-3.3-70b-versatile', features: { web_tools: true, bible_corpus: true, voice: true, ambient_brain: true } }, null, 2) },
+  { path: '/workspace/10_System/config.json', content: () => JSON.stringify({ workspace_version: '1.0.0', owner: getOwnerName(), created_at: new Date().toISOString(), memory_bandwidth_default: 'normal', primary_provider: 'groq', primary_model: 'llama-3.3-70b-versatile', worker_model: 'llama-3.3-70b-versatile', features: { web_tools: true, voice: true, ambient_brain: true } }, null, 2) },
   { path: '/workspace/10_System/memory_schema.md', content: () => header('Memory Schema Notes', 'Active', 'Human-readable summary of the Henry memory database schema.') + '## Tables\nSee Henry AI Memory Blueprint in 01_Product_Engineering for full schema.\n\n## Quick Reference\n- personal_memory: facts about you (the user)\n- session_memory: per-conversation state\n- working_memory: active commitments and open loops\n- projects: project tracking\n- goals / commitments / milestones: life and work tracking\n- relationship_memory: patterns about people\n- narrative_memory: rolling story arcs\n- memory_summaries: compressed conversation history\n- memory_graph_edges: links between memory nodes\n' },
   { path: '/workspace/10_System/logs/.keep', content: () => '# Logs folder\nSystem logs stored here.\n' },
   { path: '/workspace/10_System/prompts/.keep', content: () => '# Prompts folder\nSystem prompts and prompt templates stored here.\n' },

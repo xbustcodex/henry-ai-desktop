@@ -12,8 +12,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import type { CompanionDeviceCapability, SyncServerState } from '../../sync/types';
 import { buildPairCodePayload } from '../../sync/deviceLink';
-import RemoteControlPanel from './RemoteControlPanel';
 import { toast } from '../ui/Toast';
+import { isMacOS, isLinux, isWindows } from '../../utils/platform';
 
 // Detect Electron by checking if the sync server is reachable
 // (window.__ELECTRON__ and __isElectron are unreliable due to contextBridge sandbox)
@@ -21,6 +21,8 @@ import { toast } from '../ui/Toast';
 const isElectron = true; // Always true in the desktop app
 
 export default function DeviceLinkPanel() {
+  const platformName = isMacOS() ? 'iPhone or iPad' : isLinux() ? 'Android device or browser' : isWindows() ? 'Android device or browser' : 'mobile device or browser';
+
   const [serverState, setServerState] = useState<SyncServerState | null>(null);
   const [pairCode, setPairCode] = useState<string | null>(null);
   const [tunnelUrl, setTunnelUrl] = useState<string | null>(null);
@@ -43,8 +45,11 @@ export default function DeviceLinkPanel() {
       setServerState(state);
       if (state.tunnelUrl) setTunnelUrl(state.tunnelUrl);
       if (state.pairToken && state.pairTokenExpiry) {
-        const localIp = await syncFetch('/computer/shell', {command:'ipconfig getifaddr en0 || ipconfig getifaddr en1'})
-          .then((r: any) => r?.output?.trim() || '192.168.1.1');
+        // Use the LAN IP the sync server already reports. This shelled out to
+        // `ipconfig getifaddr en0`, which is macOS-only — on Linux it failed
+        // and fell back to the literal 192.168.1.1, so the pairing code
+        // pointed the phone at the wrong address.
+        const localIp = (state as { localIp?: string }).localIp || 'localhost';
         const payload = buildPairCodePayload(localIp, state.port, state.pairToken);
         setPairCode(payload);
         setCodeExpiry(state.pairTokenExpiry);
@@ -111,8 +116,8 @@ export default function DeviceLinkPanel() {
       if (!result?.token) return;
       const state = await syncFetch('/sync/state-internal');
       setServerState(state);
-      const localIp = await syncFetch('/computer/shell', {command:'ipconfig getifaddr en0 || ipconfig getifaddr en1'})
-        .then((r: any) => r?.output?.trim() || '192.168.1.1');
+      // Same fix as loadState: take the server-reported LAN IP.
+      const localIp = (state as { localIp?: string } | null)?.localIp || 'localhost';
       const payload = buildPairCodePayload(localIp, state?.port || 4242, result.token);
       setPairCode(payload);
       setCodeExpiry(Date.now() + 5 * 60 * 1000);
@@ -153,9 +158,6 @@ export default function DeviceLinkPanel() {
 
   return (
     <div className="space-y-4">
-      {/* Remote Control (NEW) — surfaces Henry ID + PIN + QR for iPad pairing */}
-      <RemoteControlPanel />
-
       {/* Server status */}
       <div className="bg-henry-surface rounded-2xl border border-henry-border/20 p-4">
         <div className="flex items-center justify-between">
@@ -189,9 +191,9 @@ export default function DeviceLinkPanel() {
       {/* Add device */}
       <div className="bg-henry-surface rounded-2xl border border-henry-border/20 p-4 space-y-4">
         <div>
-          <p className="text-sm font-semibold text-henry-text">Add iPhone or iPad</p>
+          <p className="text-sm font-semibold text-henry-text">Add {platformName}</p>
           <p className="text-xs text-henry-text-muted mt-0.5">
-            Generate a pairing code, then enter it in Henry on your iPhone or iPad.
+            Generate a pairing code, then enter it in Henry on your {platformName.toLowerCase()}.
           </p>
         </div>
 
@@ -232,7 +234,7 @@ export default function DeviceLinkPanel() {
 
             <div className="bg-henry-accent/10 border border-henry-accent/20 rounded-xl px-3 py-2.5">
               <p className="text-xs text-henry-accent leading-relaxed">
-                On your iPhone/iPad: open Henry → use pairing / connect flow → enter the code above (or scan the QR).
+                On your {platformName.toLowerCase()}: open Henry → use pairing / connect flow → enter the code above (or scan the QR).
                 Both devices must be on the same Wi‑Fi network.
               </p>
             </div>
@@ -391,7 +393,7 @@ export default function DeviceLinkPanel() {
       <div className="bg-henry-surface rounded-2xl border border-henry-border/20 p-4 space-y-2">
         <p className="text-sm font-semibold text-henry-text">Cloud Relay (Phase 2)</p>
         <p className="text-xs text-henry-text-muted leading-relaxed">
-          Currently, sync requires your iPhone/iPad and Mac to be on the same WiFi network.
+          Currently, sync requires your {platformName.toLowerCase()} and this {isMacOS() ? 'Mac' : 'computer'} to be on the same WiFi network.
           Cloud relay support (allowing sync from anywhere) is coming in the next update.
         </p>
       </div>

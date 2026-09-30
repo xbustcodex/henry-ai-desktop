@@ -47,7 +47,6 @@ export default function ExportPackBuilder({
   const [title, setTitle] = useState('');
   const [artifacts, setArtifacts] = useState<ExportArtifactItem[]>([]);
   const [userNotes, setUserNotes] = useState('');
-  const [contextNotes, setContextNotes] = useState<string[]>([]);
   const [relatedTaskIdsText, setRelatedTaskIdsText] = useState('');
   const [copySmallFiles, setCopySmallFiles] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -77,26 +76,6 @@ export default function ExportPackBuilder({
     setRelatedTaskIdsText(suggestRelatedTaskIds(context.tasks, paths).join(', '));
     setError(null);
   }, [open, preset, collectCtx, context.tasks]);
-
-  useEffect(() => {
-    if (!open) return;
-    void (async () => {
-      if (preset !== 'biblical_study_pack') {
-        setContextNotes([]);
-        return;
-      }
-      try {
-        const n = await window.henryAPI.scriptureCount();
-        setContextNotes([
-          typeof n === 'number'
-            ? `Local scripture store entries (count): ${n} — verse text is not exported here; paths and notes only.`
-            : 'Local scripture store: count unavailable.',
-        ]);
-      } catch {
-        setContextNotes(['Local scripture store: could not read count.']);
-      }
-    })();
-  }, [open, preset]);
 
   function removeArtifact(id: string) {
     setArtifacts((prev) => prev.filter((a) => a.id !== id));
@@ -164,7 +143,6 @@ export default function ExportPackBuilder({
         relatedTaskIds,
         relatedConversationId: context.activeConversationId,
         userNotes,
-        contextNotes,
       };
 
       const md = buildExportManifestMarkdown(bundle);

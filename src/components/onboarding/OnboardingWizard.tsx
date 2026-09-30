@@ -236,12 +236,13 @@ export default function OnboardingWizard({ onComplete }: Props) {
   }
 
   function openSettings(uri: string, ipcName: 'openPermissions' | 'openScreenRecording') {
-    // Only attempt to open system preferences on macOS
-    if (process.platform !== 'darwin') {
+    // Only attempt to open system preferences on macOS. This must use the
+    // preload-backed helper: the Node global `process` does not exist in this
+    // renderer (nodeIntegration:false, sandbox:true) and threw a ReferenceError
+    // the moment a user clicked the button.
+    if (!isMacOS()) {
       // Show appropriate message for non-macOS platforms
-      if (window.confirm('Permission management is handled automatically on this platform. Please check your system settings manually if needed.')) {
-        // User clicked OK, do nothing
-      }
+      window.confirm('Permission management is handled automatically on this platform. Please check your system settings manually if needed.');
       return;
     }
 
@@ -301,9 +302,7 @@ export default function OnboardingWizard({ onComplete }: Props) {
     { icon: '❤️', name: 'Health',    desc: 'Log water, steps, sleep, exercise, and calories. Quick-tap buttons on your phone too. Charts show trends over time.' },
     { icon: '💰', name: 'Finance',   desc: 'Income, expenses, budgets. Import bank CSV. Henry spots patterns and alerts when you overspend a category.' },
     { icon: '🗓️', name: 'Weekly',    desc: 'Weekly review wizard — what got done, what didn\'t, what needs to move. Takes 5 minutes, keeps you honest.' },
-    { icon: '🙏', name: 'Prayer',    desc: 'Track prayer requests (active, answered, archived) and prayer sessions with streaks. Fully private, never goes to cloud.' },
     { icon: '📄', name: 'Quoting',   desc: 'Create quotes and invoices for clients. Line items, totals, client management, and PDF export.' },
-    { icon: '✝',  name: 'Scripture', desc: 'Daily reading plan, verse of the day, topical search. Save verses to journal. Works offline.' },
     { icon: '🎙', name: 'Recorder',  desc: 'Voice memos with transcription. Transcripts are saved and searchable.' },
     { icon: '🖨', name: 'Print Studio', desc: 'For makers: generate print-ready files, manage print queues and jobs.' },
     { icon: '🏭', name: 'Maker Studio', desc: 'Machines, materials, production runs, waste tracking, maintenance logs. For small manufacturing.' },
@@ -360,7 +359,7 @@ export default function OnboardingWizard({ onComplete }: Props) {
                   <span className="text-white/30 text-base flex-shrink-0">∞</span>
                   <div>
                     <p className="text-white/60 text-sm font-semibold">Some things never cost a request</p>
-                    <p className="text-white/40 text-xs leading-snug">Checking habits, viewing tasks, journal entries, health logs, reading scripture — all free.</p>
+                    <p className="text-white/40 text-xs leading-snug">Checking habits, viewing tasks, journal entries, health logs — all free.</p>
                   </div>
                 </div>
               </div>
@@ -424,7 +423,7 @@ export default function OnboardingWizard({ onComplete }: Props) {
             <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-2">
               <p className="text-white/40 text-[10px] uppercase tracking-wider">The sidebar</p>
               <p className="text-white/70 text-sm leading-relaxed">
-                The left sidebar has 20+ panels — Chat, Today, Tasks, Reminders, Goals, Journal, Health, Finance, Scripture, Memory, and more. We'll tour them in a couple of steps.
+                The left sidebar has 20+ panels — Chat, Today, Tasks, Reminders, Goals, Journal, Health, Finance, Memory, and more. We'll tour them in a couple of steps.
               </p>
             </div>
 
@@ -572,7 +571,7 @@ export default function OnboardingWizard({ onComplete }: Props) {
                     </div>
                     <div className="bg-green-500/8 border border-green-500/20 rounded-xl p-2.5">
                       <p className="text-green-400 text-[10px] font-bold uppercase tracking-wider mb-1.5">Always free</p>
-                      {['Habits & tasks', 'Journal entries', 'Health logging', 'Scripture reading', 'Reminders'].map(i => (
+                      {['Habits & tasks', 'Journal entries', 'Health logging', 'Reminders'].map(i => (
                         <p key={i} className="text-white/60 text-[11px]">• {i}</p>
                       ))}
                     </div>

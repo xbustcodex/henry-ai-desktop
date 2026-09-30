@@ -129,7 +129,7 @@ export const AVAILABLE_MODELS: AIModel[] = [
 
   // ── Groq — ultra-fast inference (LPU) ─────────────
   {
-    id: 'llama-3.3-70b-versatile',
+    id: 'llama-3.1-8b-instant',
     name: 'LLaMA 3.1 8B Instant ⚡',
     provider: 'groq',
     contextWindow: 128000,
@@ -140,7 +140,7 @@ export const AVAILABLE_MODELS: AIModel[] = [
   },
   {
     id: 'llama-3.3-70b-versatile',
-    name: 'LLaMA 3.3 70B',
+    name: 'LLaMA 3.3 70B Versatile',
     provider: 'groq',
     contextWindow: 128000,
     inputPricePer1M: 0.59,
@@ -150,7 +150,7 @@ export const AVAILABLE_MODELS: AIModel[] = [
   },
   {
     id: 'llama-3.1-70b-versatile',
-    name: 'LLaMA 3.1 70B',
+    name: 'LLaMA 3.1 70B Versatile',
     provider: 'groq',
     contextWindow: 128000,
     inputPricePer1M: 0.59,
@@ -411,6 +411,78 @@ export const AVAILABLE_MODELS: AIModel[] = [
     recommended: 'worker',
     local: true,
   },
+
+  // ── OpenRouter — 300+ models via single API ───────────
+  {
+    id: 'openrouter/auto',
+    name: 'OpenRouter Auto (routes to best model)',
+    provider: 'openrouter',
+    contextWindow: 128000,
+    inputPricePer1M: 0,
+    outputPricePer1M: 0,
+    capabilities: ['chat', 'code', 'reasoning'],
+    recommended: 'companion',
+  },
+  {
+    id: 'openrouter/anthropic/claude-3.5-sonnet',
+    name: 'Claude 3.5 Sonnet (via OpenRouter)',
+    provider: 'openrouter',
+    contextWindow: 200000,
+    inputPricePer1M: 3.0,
+    outputPricePer1M: 15.0,
+    capabilities: ['chat', 'code', 'reasoning', 'vision'],
+    recommended: 'worker',
+  },
+  {
+    id: 'openrouter/google/gemini-2.0-flash-001',
+    name: 'Gemini 2.0 Flash (via OpenRouter)',
+    provider: 'openrouter',
+    contextWindow: 1000000,
+    inputPricePer1M: 0.1,
+    outputPricePer1M: 0.4,
+    capabilities: ['chat', 'code', 'vision'],
+    recommended: 'companion',
+  },
+  {
+    id: 'openrouter/meta-llama/llama-3.3-70b-instruct',
+    name: 'Llama 3.3 70B Instruct (via OpenRouter)',
+    provider: 'openrouter',
+    contextWindow: 128000,
+    inputPricePer1M: 0.59,
+    outputPricePer1M: 0.79,
+    capabilities: ['chat', 'code', 'reasoning'],
+    recommended: 'worker',
+  },
+  {
+    id: 'openrouter/mistralai/mistral-large',
+    name: 'Mistral Large (via OpenRouter)',
+    provider: 'openrouter',
+    contextWindow: 128000,
+    inputPricePer1M: 2.0,
+    outputPricePer1M: 6.0,
+    capabilities: ['chat', 'code', 'reasoning'],
+    recommended: 'worker',
+  },
+  {
+    id: 'openrouter/qwen/qwen-2.5-coder-32b-instruct',
+    name: 'Qwen 2.5 Coder 32B (via OpenRouter)',
+    provider: 'openrouter',
+    contextWindow: 32000,
+    inputPricePer1M: 0.15,
+    outputPricePer1M: 0.6,
+    capabilities: ['code'],
+    recommended: 'worker',
+  },
+  {
+    id: 'openrouter/deepseek/deepseek-r1',
+    name: 'DeepSeek R1 (via OpenRouter)',
+    provider: 'openrouter',
+    contextWindow: 128000,
+    inputPricePer1M: 0.55,
+    outputPricePer1M: 2.19,
+    capabilities: ['chat', 'code', 'reasoning'],
+    recommended: 'worker',
+  },
 ];
 
 // Provider metadata
@@ -447,6 +519,14 @@ export const PROVIDERS = {
     keyUrl: 'https://console.groq.com/keys',
     keyPrefix: 'gsk_',
   },
+  openrouter: {
+    id: 'openrouter',
+    name: 'OpenRouter',
+    icon: '🌐',
+    description: 'Access 300+ models through one API. Free tier available. Get a key at openrouter.ai/keys.',
+    keyUrl: 'https://openrouter.ai/keys',
+    keyPrefix: 'sk-or-',
+  },
   runway: {
     id: 'runway',
     name: 'Runway',
@@ -457,6 +537,26 @@ export const PROVIDERS = {
     keyPlaceholder: 'rwa_...',
     description: 'State-of-the-art video generation (Gen-3, Gen-4)',
     models: [] as const,
+  },
+  relay: {
+    id: 'relay',
+    name: 'Hosted Relay (optional)',
+    icon: '🔗',
+    description: 'Route requests through any OpenAI-compatible endpoint you control — a self-hosted gateway, a corporate proxy, or a hosted service. Off unless you configure a relay URL.',
+    keyUrl: '',
+    keyPrefix: '',
+    optional: true,
+  },
+  opencode: {
+    id: 'opencode',
+    name: 'OpenCode',
+    icon: '🧩',
+    description:
+      'Any model the opencode CLI can reach — its own zen service and OpenRouter — ' +
+      'routed through a local loopback bridge. Needs the opencode CLI installed, not an API key here.',
+    keyUrl: 'https://opencode.ai',
+    keyPrefix: '',
+    local: true,
   },
   ollama: {
     id: 'ollama',

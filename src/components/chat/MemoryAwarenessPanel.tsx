@@ -7,7 +7,6 @@ import {
   HENRY_MEMORY_CAPS,
 } from '@/henry/memoryContext';
 import type { HenryOperatingMode } from '@/henry/charter';
-import { getBibleSourceProfile } from '@/henry/biblicalProfiles';
 import { getWriterDocumentType } from '@/henry/documentTypes';
 import { getDesign3DWorkflowType } from '@/henry/design3dTypes';
 import {
@@ -24,7 +23,6 @@ const DISPLAY_FACTS = 6;
 
 interface MemoryAwarenessPanelProps {
   operatingMode: HenryOperatingMode;
-  biblicalSourceProfileId: string;
   writerDocumentTypeId: string;
   design3dWorkflowTypeId: string;
   /** Synced Design3D reference (falls back to localStorage if omitted). */
@@ -44,7 +42,6 @@ function modeLabel(mode: HenryOperatingMode): string {
 
 export default function MemoryAwarenessPanel({
   operatingMode,
-  biblicalSourceProfileId,
   writerDocumentTypeId,
   design3dWorkflowTypeId,
   design3dReferencePath,
@@ -88,7 +85,6 @@ export default function MemoryAwarenessPanel({
     void loadContext();
   }, [loadContext, threadMessages.length]);
 
-  const bibleProfile = getBibleSourceProfile(biblicalSourceProfileId);
   const writerType = getWriterDocumentType(writerDocumentTypeId);
   const design3dType = getDesign3DWorkflowType(design3dWorkflowTypeId);
   const lastFile =
@@ -107,8 +103,6 @@ export default function MemoryAwarenessPanel({
           lean: ctx.lean,
           workspacePathHint: workspacePath,
           conversationTitle: convTitle,
-          biblicalSourceProfileLabel:
-            operatingMode === 'biblical' ? bibleProfile?.label ?? null : null,
           writerDocumentTypeLabel:
             operatingMode === 'writer' ? writerType?.label ?? null : null,
           design3dWorkflowLabel:
@@ -202,11 +196,6 @@ export default function MemoryAwarenessPanel({
                 <li>
                   <span className="text-henry-text-muted">Mode:</span> {modeLabel(operatingMode)}
                 </li>
-                {operatingMode === 'biblical' && bibleProfile && (
-                  <li>
-                    <span className="text-henry-text-muted">Bible source:</span> {bibleProfile.label}
-                  </li>
-                )}
                 {operatingMode === 'writer' && writerType && (
                   <li>
                     <span className="text-henry-text-muted">Document type:</span> {writerType.label}

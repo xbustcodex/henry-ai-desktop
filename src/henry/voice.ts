@@ -250,9 +250,11 @@ export async function speak(text: string, engine?: 'auto' | 'local' | 'elevenlab
     const res = await window.henryAPI.voiceSpeak({ text, engine });
     if (!res.ok) throw new Error(res.error);
 
-    if (res.result.engine === 'elevenlabs' && res.result.audio) {
-      // Renderer-side playback of the mp3 buffer.
-      const blob = new Blob([new Uint8Array(res.result.audio)], { type: 'audio/mpeg' });
+    // ElevenLabs sends mp3; the local eSpeak engine sends WAV. Both are played
+    // here in the renderer — the main process no longer plays to the device.
+    if (res.result.audio) {
+      const mime = res.result.engine === 'elevenlabs' ? 'audio/mpeg' : 'audio/wav';
+      const blob = new Blob([new Uint8Array(res.result.audio)], { type: mime });
       const url = URL.createObjectURL(blob);
       await new Promise<void>((resolve) => {
         const audio = new Audio(url);

@@ -6,9 +6,18 @@ import type {
   MemoryFact,
   MemoryContext,
   DirectoryResult,
-  ScriptureLookupResult,
-  ScriptureImportRow,
-  ScriptureImportResult,
+  MessageAttachment,
+  MemoryGraphNode,
+  MemoryGraphEdge,
+  AutomationRun,
+  MediaItem,
+  MediaKind,
+  RuntimeStatus,
+  StartupFailure,
+  OpencodeModelInfo,
+  CatalogEntry,
+  CatalogEntryState,
+  CatalogListing,
 } from './types';
 
 declare global {
@@ -85,11 +94,12 @@ declare global {
   }
 
   interface HenryCoderStatus {
-    /** The configured setting (coder_engine): auto | claude-code | local. */
-    engine: 'auto' | 'claude-code' | 'local';
+    /** The configured setting (coder_engine): auto | claude-code | opencode | local. */
+    engine: 'auto' | 'claude-code' | 'opencode' | 'local';
     /** Which engine would actually run right now. */
-    active: 'claude-code' | 'local' | 'none';
+    active: 'claude-code' | 'opencode' | 'local' | 'none';
     claude: { available: boolean; path?: string; version?: string };
+    opencode?: { available: boolean; path?: string; version?: string; error?: string };
     local: { ollamaRunning: boolean; model: string | null; hint?: string };
     workspaceDir: string;
   }
@@ -178,6 +188,20 @@ declare global {
     summary: string;
     messageCount?: number;
     tokenCount?: number;
+  }
+
+  /**
+   * A `conversation_summaries` row — what `memory:getSummary` actually returns.
+   * It was previously declared as `string | null`, which never matched the
+   * handler's `SELECT *`; the summary text is the `summary` field.
+   */
+  interface HenryConversationSummary {
+    id: string;
+    conversation_id: string;
+    summary: string;
+    message_count: number;
+    token_count: number;
+    created_at: string;
   }
 
   interface HenryTerminalRequest {
@@ -497,12 +521,69 @@ declare global {
     decided_at?: string | null;
   }
 
+  // ── Quoting (estimates → quotes → production runs) ─────────
+  type HenryQuoteStatus = 'draft' | 'sent' | 'accepted' | 'declined' | 'expired';
+
+  interface HenryQuoteLineItem {
+    id: string;
+    quote_id: string;
+    kind: 'material' | 'labor' | 'machine_time' | 'setup' | 'markup' | 'discount' | 'shipping' | 'other';
+    description: string;
+    quantity: number;
+    unit: string;
+    unit_cost: number;
+    line_total: number | null;
+    taxable: number;
+    machine_id: string | null;
+    material_id: string | null;
+    sort_order: number;
+    created_at: string;
+  }
+
+  /** A `quotes` row. quote:list returns the list columns; quote:get the full row plus `line_items`. */
+  interface HenryQuote {
+    id: string;
+    quote_number: string;
+    project_title: string;
+    customer_id: string | null;
+    customer_name: string | null;
+    customer_email: string | null;
+    customer_phone: string | null;
+    customer_company: string | null;
+    status: HenryQuoteStatus;
+    subtotal: number;
+    tax_rate: number;
+    tax_amount: number;
+    total: number;
+    currency: string;
+    valid_days: number;
+    valid_until: string | null;
+    terms: string | null;
+    notes: string | null;
+    sent_at: string | null;
+    decided_at: string | null;
+    converted_run_id: string | null;
+    created_at: string;
+    updated_at: string;
+    line_items?: HenryQuoteLineItem[];
+  }
+
+  interface HenryQuoteSummary {
+    sinceDays: number;
+    byStatus: Record<HenryQuoteStatus, { count: number; value: number }>;
+    pipelineValue: number;
+    wonValue: number;
+    conversionRate: number;
+  }
+
   interface HenryAPI {
     getSettings: () => Promise<Record<string, string>>;
     saveSetting: (key: string, value: string) => Promise<boolean>;
 
     getProviders: () => Promise<HenryProviderRecord[]>;
-    saveProvider: (provider: Omit<AIProvider, 'models'> & { models: string }) => Promise<boolean>;
+    // The handler returns an { ok } envelope, not a bare boolean. No caller
+    // branches on the value, so this is a declaration fix only.
+    saveProvider: (provider: Omit<AIProvider, 'models'> & { models: string }) => Promise<{ ok: boolean; error?: string }>;
     resyncProvidersToLocalStorage: () => Promise<{ ok: boolean; count?: number }>;
 
     getConversations: () => Promise<Conversation[]>;
@@ -513,6 +594,58 @@ declare global {
 
     getMessages: (conversationId: string) => Promise<Message[]>;
     saveMessage: (message: Message) => Promise<boolean>;
+
+    // ── Chat attachments ──────────────────────────────────────
+    saveAttachment: (input: {
+      fileName: string;
+      mimeType?: string;
+      data: string | Uint8Array;
+      conversationId?: string;
+      messageId?: string;
+    }) => Promise<{ ok: boolean; attachment?: MessageAttachment; error?: string }>;
+    linkAttachmentsToMessage: (ids: string[], messageId: string, conversationId?: string) => Promise<{ ok: boolean; count: number }>;
+    listAttachments: (conversationId: string) => Promise<MessageAttachment[]>;
+    listAttachmentsForMessage: (messageId: string) => Promise<MessageAttachment[]>;
+    getAttachment: (id: string) => Promise<{
+      ok: boolean;
+      mimeType?: string;
+      fileName?: string;
+      byteSize?: number;
+      dataUrl?: string;
+      error?: string;
+    }>;
+    deleteAttachment: (id: string) => Promise<{ ok: boolean; error?: string }>;
+    openAttachment: (id: string) => Promise<{ ok: boolean; error?: string }>;
+
+    // ── Media library ────────────────────────────────────────────
+    mediaImport?: (opts?: { kind?: MediaKind }) => Promise<{
+      ok: boolean;
+      imported: MediaItem[];
+      skipped?: string[];
+      cancelled?: boolean;
+      error?: string;
+    }>;
+    mediaList?: (opts?: { kind?: MediaKind; limit?: number }) => Promise<MediaItem[]>;
+    mediaCounts?: () => Promise<Record<MediaKind, number>>;
+    mediaGet?: (id: string) => Promise<{ ok: boolean; mimeType?: string; fileName?: string; dataUrl?: string; error?: string }>;
+    mediaOpen?: (id: string) => Promise<{ ok: boolean; error?: string }>;
+    mediaReveal?: (id: string) => Promise<{ ok: boolean; error?: string }>;
+    mediaDelete?: (id: string) => Promise<{ ok: boolean; error?: string }>;
+
+    // ── PrimeTech marketplace ────────────────────────────────
+    marketplaceList?: () => Promise<CatalogListing>;
+    marketplaceStates?: () => Promise<Record<string, CatalogEntryState>>;
+    marketplaceFetch?: (entryId: string) => Promise<{ ok: boolean; path?: string; name?: string; byteSize?: number; error?: string }>;
+    marketplaceOpenEntry?: (entryId: string) => Promise<{ ok: boolean; opened?: string; revealed?: string; error?: string }>;
+    marketplaceReveal?: (filePath: string) => Promise<{ ok: boolean; error?: string }>;
+    marketplaceHistory?: () => Promise<Array<Record<string, unknown>>>;
+    marketplaceRemove?: (entryId: string) => Promise<{ ok: boolean; error?: string }>;
+
+    // ── Runtime / startup diagnostics ─────────────────────────
+    runtimeGetStatus?: () => Promise<RuntimeStatus>;
+    startupGetFailure?: () => Promise<StartupFailure | null>;
+    startupClearFailure?: () => Promise<{ ok: boolean }>;
+    runtimeRestart?: () => Promise<{ ok: boolean }>;
 
     sendMessage: (params: HenryAIRequest) => Promise<HenryAIResponse>;
     streamMessage: (params: HenryAIRequest) => HenryAIStreamController;
@@ -534,7 +667,7 @@ declare global {
     getAllFacts: (limit?: number) => Promise<MemoryFact[]>;
     buildContext: (params: HenryBuildContextInput) => Promise<MemoryContext>;
     saveSummary: (summary: HenrySummaryInput) => Promise<{ id: string | null; error?: string }>;
-    getSummary: (conversationId: string) => Promise<string | null>;
+    getSummary: (conversationId: string) => Promise<HenryConversationSummary | null>;
 
     // ── Memory — Layer 2: Session ─────────────────────────────
     saveSessionMemory: (session: Record<string, unknown>) => Promise<{ id: string; created?: boolean; updated?: boolean }>;
@@ -587,18 +720,18 @@ declare global {
     getMemorySummaries: (opts?: Record<string, unknown>) => Promise<Array<Record<string, unknown>>>;
     saveGraphEdge: (edge: Record<string, unknown>) => Promise<{ id: string }>;
     getGraphEdges: (opts?: Record<string, unknown>) => Promise<Array<Record<string, unknown>>>;
+    getMemoryGraph: () => Promise<{
+      ok: boolean;
+      nodes: MemoryGraphNode[];
+      edges: MemoryGraphEdge[];
+      error?: string;
+    }>;
 
     // ── Memory — Deep Context + Where-We-Left-Off ─────────────
     buildDeepContext: (params: Record<string, unknown>) => Promise<Record<string, unknown>>;
     getWhereWeLeftOff: () => Promise<Record<string, unknown>>;
     saveWhereWeLeftOff: (summary: string) => Promise<{ id: string }>;
 
-    scriptureLookup: (reference: string) => Promise<ScriptureLookupResult>;
-    scriptureImport: (entries: ScriptureImportRow[]) => Promise<ScriptureImportResult>;
-    memoryGetAllFacts: () => Promise<unknown[]>;
-    memoryDeleteFact: (id: string) => Promise<void>;
-    memorySaveFact: (fact: Record<string,unknown>) => Promise<unknown>;
-    memoryGetPersonalMemory: () => Promise<unknown[]>;
     recordingsList: () => Promise<unknown[]>;
     recordingsGet: (id: string) => Promise<unknown>;
     recordingsSave: (r: Record<string,unknown>) => Promise<unknown>;
@@ -606,20 +739,26 @@ declare global {
     exportBackup: () => Promise<{ok: boolean; path?: string; error?: string}>;
     captureList: (limit?: number) => Promise<unknown[]>;
     captureSave: (c: Record<string,unknown>) => Promise<{ id: string }>;
-    scriptureCount: () => Promise<number>;
-    scriptureDownloadKJV: (books?: string[]) => Promise<{ imported: number; errors: string[]; books: number }>;
-    scriptureSearch: (q: string) => Promise<unknown[]>;
-    pickScriptureImportJson: () => Promise<
-      | { canceled: true; content: null }
-      | { canceled: false; content: string | null; error?: string }
-    >;
 
     readDirectory: (path?: string) => Promise<DirectoryResult>;
     readFile: (path: string) => Promise<string>;
     pathExists: (path: string) => Promise<boolean>;
     writeFile: (path: string, content: string) => Promise<boolean>;
 
+    // Electron-only: the main process sandboxes these to src/ and electron/,
+    // and there is no browser equivalent, so the web mock leaves them absent.
+    // selfRepairTools guards on isElectron() before calling them.
+    readSourceFile?: (path: string) => Promise<string>;
+    writeSourceFile?: (path: string, content: string) => Promise<boolean>;
+
     ollamaStatus: (baseUrl?: string) => Promise<{ running: boolean; version?: string; url: string; error?: string }>;
+    getLocalGatewayStatus?: () => Promise<{ active: boolean; url: string | null; port?: number; upstream: string }>;
+
+    // ── OpenCode ───────────────────────────────────────────
+    opencodeStatus?: () => Promise<{ available: boolean; version?: string; path?: string; error?: string }>;
+    opencodeModels?: () => Promise<{ ok: boolean; models: OpencodeModelInfo[]; error?: string }>;
+    opencodeBridgeStatus?: () => Promise<{ running: boolean; port: number; baseUrl: string; modelCount: number; error?: string }>;
+    opencodeTest?: (model: string) => Promise<{ ok: boolean; reply?: string; error?: string }>;
     ollamaModels: (baseUrl?: string) => Promise<{ models: Array<{ name: string; [k: string]: any }>; error?: string }>;
     ollamaPull: (model: string, baseUrl?: string) => Promise<{ success: boolean; error?: string }>;
     ollamaDelete: (model: string, baseUrl?: string) => Promise<{ success: boolean; error?: string }>;
@@ -693,7 +832,6 @@ declare global {
     onUpdateDownloaded: (cb: () => void) => () => void;
 
     whisperTranscribe?: (audioBlob: Blob, apiKey: string) => Promise<string>;
-    createTask?: (params: { description: string; type: string; priority?: number; payload?: unknown }) => Promise<{ id: string }>;
 
     // ── Coder Engine (Electron-only — Claude Code CLI default, local fallback) ──
     coderStatus?: (opts?: { refresh?: boolean }) => Promise<HenryCoderStatus>;
@@ -740,6 +878,20 @@ declare global {
     updateBookEntry?: (id: string, patch: Partial<HenryBookEntry>) => Promise<{ ok: boolean; result?: HenryBookEntry; error?: string }>;
     deleteBookEntry?: (id: string) => Promise<{ ok: boolean; result?: { deleted: boolean }; error?: string }>;
 
+    // ── Quoting (estimates → quotes → production runs) ─────────
+    quoteList?: (opts?: { status?: string; query?: string; limit?: number }) => Promise<HenryQuote[]>;
+    quoteGet?: (id: string) => Promise<HenryQuote | null>;
+    quoteSave?: (quote: Record<string, unknown>) => Promise<{ ok: boolean; id?: string; error?: string }>;
+    quoteDelete?: (id: string) => Promise<{ ok: boolean; error?: string }>;
+    quoteSetStatus?: (id: string, status: string) => Promise<{ ok: boolean; error?: string }>;
+    quoteDuplicate?: (id: string) => Promise<{ ok: boolean; id?: string; error?: string }>;
+    quoteLineItemSave?: (item: Record<string, unknown>) => Promise<{ ok: boolean; id?: string; error?: string }>;
+    quoteLineItemDelete?: (id: string) => Promise<{ ok: boolean; error?: string }>;
+    quoteLineItemsReorder?: (quoteId: string, ids: string[]) => Promise<{ ok: boolean; error?: string }>;
+    quoteSummary?: (opts?: { sinceDays?: number }) => Promise<HenryQuoteSummary | null>;
+    quoteConvertToRun?: (quoteId: string, machineId?: string) => Promise<{ ok: boolean; runId?: string; error?: string }>;
+    quoteExportMarkdown?: (quoteId: string) => Promise<string | null>;
+
     // ── Lessons / Curriculum (Henry as teacher) ───────────────
     lessonsCoursesList?: () => Promise<HenryLessonsResult<HenryLessonCourse[]>>;
     lessonsCourseCreate?: (payload: {
@@ -769,6 +921,16 @@ declare global {
     addRoutine?: (task: HenryRoutineInput) => Promise<{ ok: boolean; result?: HenryRoutine; error?: string }>;
     toggleRoutine?: (id: string, enabled: boolean) => Promise<{ ok: boolean; result?: HenryRoutine | null; error?: string }>;
     runRoutineNow?: (id: string) => Promise<{ ok: boolean; result?: { ok: boolean; content?: string; error?: string }; error?: string }>;
+
+    // ── Automation run history ──────────────────────────────────────
+    automationRuns?: (opts?: { taskId?: string; limit?: number; unreadOnly?: boolean }) => Promise<AutomationRun[]>;
+    automationUnreadCount?: () => Promise<{ count: number }>;
+    automationMarkRunRead?: (id: string) => Promise<{ ok: boolean }>;
+    automationMarkAllRunsRead?: () => Promise<{ ok: boolean; count: number }>;
+    automationClearRuns?: (taskId?: string) => Promise<{ ok: boolean }>;
+    automationAbort?: (taskId: string) => Promise<{ ok: boolean; error?: string }>;
+    automationIsRunning?: (taskId: string) => Promise<{ running: boolean }>;
+    onAutomationRunChanged?: (cb: (data: unknown) => void) => () => void;
     deleteRoutine?: (id: string) => Promise<{ ok: boolean; result?: boolean; error?: string }>;
     onSchedulerTaskStarted?: (cb: (data: { id: string; name: string }) => void) => () => void;
     onSchedulerTaskCompleted?: (cb: (data: { id: string; name: string; ok: boolean; sessionId?: string; content?: string; error?: string }) => void) => () => void;
@@ -782,9 +944,16 @@ declare global {
     voiceSpeak?: (params: { text: string; engine?: 'auto' | 'local' | 'elevenlabs' }) => Promise<HenryVoiceResult<HenryVoiceSpeakResult>>;
     voiceStopSpeaking?: () => Promise<HenryVoiceResult<{ stopped: boolean }>>;
     voiceTtsStatus?: () => Promise<HenryVoiceResult<HenryVoiceTtsStatus>>;
+  voiceGreeting?: (opts?: { speak?: boolean }) => Promise<HenryVoiceResult<{
+    text: string;
+    period: 'morning' | 'afternoon' | 'evening' | 'lateNight';
+    speak: boolean;
+    mimeType: string;
+    audio: Uint8Array;
+  }>>;
+  voiceGreetingClearCache?: () => Promise<{ ok: boolean; error?: string }>;
 
     // ── Companion Sync Bridge ─────────────────────────────────────────────
-    getLocalGatewayStatus?: () => Promise<{ active: boolean; url?: string } | null>;
     syncStart?: (port?: number) => Promise<import('./sync/types').SyncServerState>;
     syncStop?: () => Promise<{ ok: boolean }>;
     syncGetState?: () => Promise<import('./sync/types').SyncServerState>;

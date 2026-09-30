@@ -1,5 +1,8 @@
 import { buildCompanionHtml } from './companionHtml';
 import { startProxy, stopProxy, getProxyPort, isProxyRunning } from './proxyServer';
+import { launchApplication } from '../../src/platform/launcher';
+import { classifyCommand } from './_commandSafety';
+import { isInsideRoot } from './_pathSafety';
 import { log } from '../lib/log';
 
 // ── Per-session conversation memory (last 6 turns per device) ────────────────
@@ -32,7 +35,7 @@ function getCtx(sessionId: string): {role:string;content:string}[] {
 
 import http from 'http';
 import path from 'path';
-import { IS_MAC, IS_WIN, IS_LINUX, tryExec, desktopPath, downloadPath, revealFile, setVolumeCmd, getVolumeCmd, muteCmd, unmuteCmd, setBrightnessCmd, getBrightnessCmd, sleepCmd, lockScreenCmd, restartCmd, shutdownCmd, getBatteryInfo, getDiskInfo, listPrintersCmd, getDefaultPrinterCmd, printFileCmd, screenshotCmd, listAppsCmd, quitAppCmd, getOsVersion, getChipInfo, getHostname, getStartupItemsCmd, getCloudflaredPath } from './platformCommands';
+import { IS_MAC, IS_WIN, IS_LINUX, tryExec, desktopPath, downloadPath, revealFile, setVolumeCmd, getVolumeCmd, muteCmd, unmuteCmd, setBrightnessCmd, getBrightnessCmd, sleepCmd, lockScreenCmd, restartCmd, shutdownCmd, getBatteryInfo, getDiskInfo, listPrintersCmd, getDefaultPrinterCmd, printFileCmd, screenshotCmd, listAppsCmd, quitAppCmd, getOsVersion, getChipInfo, getHostname, getStartupItemsCmd } from './platformCommands';
 import crypto from 'crypto';
 import os from 'os';
 import fs from 'fs';
@@ -96,68 +99,13 @@ interface SSEClient {
 // ── Cloudflare Tunnel (remote access from outside home network) ──────────
 
 export async function startSyncTunnel(port: number): Promise<string | null> {
-  try {
-    const { spawn, execSync } = await import('child_process') as typeof import('child_process');
-    const isMac = process.platform === 'darwin';
-    const cfPath = isMac ? '/opt/homebrew/bin/cloudflared' : undefined;
-    try { execSync(isMac ? `which cloudflared || test -f ${cfPath}` : 'which cloudflared', { stdio: 'ignore' }); }
-    catch {
-      log.debug('[SyncBridge] cloudflared not found');
-      return null;
-    }
-
-    // Try named tunnel first (same URL every time)
-    // Named tunnel config at ~/.cloudflared/henry.yml
-    let namedHostname: string | null = null;
-    const tunnelArgs = (() => {
-      try {
-        const configPath = require('os').homedir() + '/.cloudflared/henry.yml';
-        const fs = require('fs');
-        if (fs.existsSync(configPath)) {
-          log.debug('[SyncBridge] Using named tunnel config:', configPath);
-          // The public URL is deterministic — read it from the ingress hostname.
-          const m = fs.readFileSync(configPath, 'utf8').match(/hostname:\s*(\S+)/);
-          if (m) namedHostname = m[1];
-          return ['tunnel', '--no-autoupdate', '--config', configPath, 'run'];
-        }
-      } catch { /* fall through */ }
-      // Quick tunnel — random URL each restart
-      return ['tunnel', '--url', `http://localhost:${port}`, '--no-autoupdate'];
-    })();
-
-    return new Promise((resolve) => {
-      tunnelProcess = spawn('cloudflared', tunnelArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
-
-      let resolved = false;
-      const tryResolve = (data: Buffer) => {
-        const text = data.toString();
-        // Named tunnel: cloudflared never prints a URL — resolve the configured
-        // hostname once a connection registers. Quick tunnel: parse the URL.
-        const match = namedHostname
-          ? (/Registered tunnel connection|INF Connection [a-f0-9-]+ registered/.test(text)
-              ? [`https://${namedHostname}`]
-              : null)
-          : text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
-        if (match && !resolved) {
-          resolved = true;
-          tunnelUrl = match[0];
-          console.log(`[SyncBridge] Tunnel active: ${tunnelUrl}`);
-          // Push tunnel URL to all connected devices so they can switch to it
-          setTimeout(() => {
-            pushToAll({ type: 'tunnel_active', payload: { url: tunnelUrl }, id: '', timestamp: 0 } as any);
-          }, 1000);
-          resolve(tunnelUrl);
-        }
-      };
-      tunnelProcess!.stdout?.on('data', tryResolve);
-      tunnelProcess!.stderr?.on('data', tryResolve);
-      tunnelProcess!.on('exit', () => { tunnelUrl = null; tunnelProcess = null; });
-      setTimeout(() => { if (!resolved) resolve(null); }, 15000);
-    });
-  } catch (e) {
-    console.error('[SyncBridge] Tunnel error:', e);
-    return null;
-  }
+  // Kept as a thin wrapper: there used to be a SECOND, independent cloudflared
+  // implementation here with its own process/URL state. Two of them meant
+  // stopTunnel() only killed one, the URL getters read different variables, and
+  // this copy ignored the resolved binary — it spawned the bare name
+  // `cloudflared`, which threw an unhandled ENOENT on Linux.
+  await startTunnel(port);
+  return getTunnelUrl();
 }
 
 let server: http.Server | null = null;
@@ -198,6 +146,17 @@ function extractAndSaveFacts(userText: string, aiText: string): void {
   } catch { /* ignore fact extraction errors */ }
 }
 const companionTokens: Map<string, string> = new Map(); // token → deviceId
+
+/**
+ * True when `token` is the credential of a device already paired with this
+ * Henry. Reused by the SOCKS5 proxy so the VPN relay is gated on the SAME
+ * trust boundary as the rest of the companion surface (QR/PIN pairing →
+ * remembered device token), rather than a separate API key.
+ */
+function isPairedCompanionToken(token: string): boolean {
+  if (!token) return false;
+  return companionTokens.has(token);
+}
 
 // Per-device context memory — tracks last action for "do it again" / "open that"
 interface DeviceContext {
@@ -783,10 +742,21 @@ async function handleRequest(
       if (!body) { jsonResponse(res, 400, {ok: false, error: 'Bad request'}); return; }
       try {
         const home = os.homedir();
-        const target = (body.path || '')
+        const requested = (body.path || '')
           .replace(/^~/, home)
           .replace(/\/Users\/yourusername\//g, home + '/')
           .replace(/\/Users\/your_username\//g, home + '/');
+        // Containment: this used to mkdir -p whatever path arrived, so a paired
+        // device (or any local caller) could create directories anywhere the
+        // user can write — /etc/cron.d, ~/.config autostart, and so on. Folder
+        // creation is scoped to the user's home directory.
+        const target = isInsideRoot(requested, home)
+          ? path.resolve(requested)
+          : null;
+        if (!target) {
+          jsonResponse(res, 403, { ok: false, error: 'Folders can only be created inside your home directory.' });
+          return;
+        }
         fs.mkdirSync(target, {recursive: true});
         jsonResponse(res, 200, {ok: true, path: target});
       } catch(e) {
@@ -798,12 +768,19 @@ async function handleRequest(
       const body = await readBody<{name: string}>(req);
       if (!body) { jsonResponse(res, 400, {ok: false, error: 'Bad request'}); return; }
       try {
-        const { exec } = await import('child_process');
-        // Henry no longer auto-opens apps
-        res.writeHead(200).end('{"ok":false,"reason":"Henry does not open apps"}');
-        jsonResponse(res, 200, {ok: true});
+        // Opening apps is a core Henry capability — use the shared cross-platform
+        // launcher (open -a on macOS, desktop-file/Exec on Linux, start on Windows)
+        // rather than a shell string built here. This route used to write the
+        // response twice (end() then jsonResponse) and never opened anything.
+        const result = await launchApplication(body.name || '');
+        jsonResponse(res, 200, {
+          ok: !!result.success,
+          success: !!result.success,
+          output: result.output || '',
+          error: result.error,
+        });
       } catch(e) {
-        jsonResponse(res, 200, {ok: false, error: e instanceof Error ? e.message : String(e)});
+        jsonResponse(res, 200, {ok: false, success: false, error: e instanceof Error ? e.message : String(e)});
       }
       return;
     }
@@ -896,6 +873,9 @@ async function handleRequest(
   // ── Health ────────────────────────────────────────────────────────────
   // Tunnel URL endpoint — returns current tunnel URL if active
   if (urlPath === '/sync/tunnel-url' && req.method === 'GET') {
+    // Loopback only: the public hostname is the aiming point for every other
+    // unauthenticated route, so it must never be handed to a remote caller.
+    if (_denyDangerous(req, res, 'loopback')) return;
     jsonResponse(res, 200, { url: tunnelUrl || null });
     return;
   }
@@ -1308,14 +1288,42 @@ self.addEventListener('fetch', (event) => {
         return;
       }
 
-      // Validate HMAC — device signs its UUID with the shared secret
-      const { createHmac } = await import('crypto') as typeof import('crypto');
+      // Validate HMAC — the device signs its UUID with the shared secret.
+      //
+      // Two problems fixed here:
+      //  1. The secret fell back to the hardcoded constant
+      //     'henry-default-secret', which is published in this source file, so
+      //     anyone who knew a paired device's UUID could mint a valid signature
+      //     and have the server issue them a fresh session token. It now fails
+      //     CLOSED when no secret is stored.
+      //  2. The comparison used !==, which is not constant time. It now uses
+      //     crypto.timingSafeEqual on equal-length buffers.
+      const { createHmac, timingSafeEqual } = await import('crypto') as typeof import('crypto');
       const secret = dbGetOne<{value: string}>('SELECT value FROM settings WHERE key = ?', 'companion_hmac_secret_v1');
-      const expectedHmac = createHmac('sha256', secret?.value || 'henry-default-secret')
+      if (!secret?.value) {
+        console.error('[SyncBridge] /sync/rejoin: no companion_hmac_secret_v1 stored — refusing');
+        jsonResponse(res, 401, { error: 'Rejoin unavailable: this Henry has no device secret. Re-pair the device.' });
+        return;
+      }
+
+      // Rate limit this endpoint: it is the credential-minting path, so an
+      // attacker must not be able to grind signatures without bound.
+      const rateIp = (req.socket.remoteAddress || 'unknown').replace('::ffff:', '');
+      if (!checkRate(`rejoin:${rateIp}`)) {
+        jsonResponse(res, 429, { error: 'Too many attempts. Try again shortly.' });
+        return;
+      }
+
+      const expectedHmac = createHmac('sha256', secret.value)
         .update(body.deviceUuid)
         .digest('hex');
 
-      if (body.hmac !== expectedHmac) {
+      const presented = Buffer.from(String(body.hmac || ''), 'utf8');
+      const expected = Buffer.from(expectedHmac, 'utf8');
+      // timingSafeEqual throws on length mismatch, so guard first.
+      const signatureOk = presented.length === expected.length && timingSafeEqual(presented, expected);
+
+      if (!signatureOk) {
         jsonResponse(res, 401, { error: 'Invalid device signature.' });
         return;
       }
@@ -1348,75 +1356,11 @@ self.addEventListener('fetch', (event) => {
     }
     return;
   }
-
-  // Auto-pair: generates token + pairs in one request, no code needed
-  // Only works on local network (no external auth needed)
-  if (urlPath === '/sync/auto-pair' && req.method === 'POST') {
-    const body = await readBody<PairRequest>(req);
-    if (!body) { jsonResponse(res, 400, { error: 'Bad request' }); return; }
-
-    // Generate a fresh token and immediately pair
-    const autoToken = Math.floor(100000 + Math.random() * 900000).toString();
-    pairToken = autoToken;
-    pairTokenExpiry = Date.now() + 30_000; // 30 seconds
-
-    const deviceId2 = generateToken(12);
-    const companionToken2 = generateToken(32);
-    companionTokens.set(companionToken2, deviceId2);
-
-    const ap2 = body.appleProduct;
-    const appleProduct2: DeviceInfo['appleProduct'] =
-      ap2 === 'ipad' ? 'ipad' : ap2 === 'iphone' ? 'iphone' : 'unknown';
-
-    const device2: DeviceInfo = {
-      id: deviceId2,
-      name: body.deviceName ?? 'Device',
-      platform: (body.platform as DeviceInfo['platform']) ?? 'web',
-      linkedAt: new Date().toISOString(),
-      lastSeen: new Date().toISOString(),
-      lastSyncAt: new Date().toISOString(),
-      pushToken: body.pushToken,
-      linkStatus: 'linked',
-      capabilities: [...COMPANION_DEFAULT_DEVICE_CAPABILITIES],
-      appleProduct: appleProduct2,
-    };
-    linkedDevices.set(deviceId2, device2);
-    pairToken = null; // consumed
-
-    notifyRenderer('henry:companion:device-linked', { device: device2 });
-    saveCompanionTokens();
-
-    // Persist to SQLite for permanent re-auth
-    try {
-      const { createHmac } = await import('crypto') as typeof import('crypto');
-      let secret = dbGetOne<{value:string}>('SELECT value FROM settings WHERE key = ?', 'companion_hmac_secret_v1');
-      if (!secret) {
-        const newSecret = generateToken(32);
-        dbRun("INSERT OR IGNORE INTO settings(key,value) VALUES('companion_hmac_secret_v1',?)", newSecret);
-        secret = { value: newSecret };
-      }
-      const hmac = createHmac('sha256', secret.value).update(deviceId2).digest('hex');
-      dbRun(`INSERT OR REPLACE INTO companion_linked_devices
-        (device_id,device_name,platform,apple_product,capabilities_json,link_status,linked_at,last_seen,last_sync_at,token_hmac)
-        VALUES(?,?,?,?,?,?,?,?,?,?)`,
-        deviceId2, body?.deviceName ?? 'Device',
-        body?.platform ?? 'web', body?.appleProduct ?? 'unknown',
-        JSON.stringify(COMPANION_DEFAULT_DEVICE_CAPABILITIES),
-        'linked', new Date().toISOString(), new Date().toISOString(), new Date().toISOString(), hmac
-      );
-      // Return the HMAC secret so device can rejoin later without pairing
-      jsonResponse(res, 200, {
-        companionToken: companionToken2,
-        deviceId: deviceId2,
-        deviceHmac: hmac,
-        hmacSecret: secret.value,
-        desktopName: os.hostname(),
-      });
-    } catch {
-      jsonResponse(res, 200, { companionToken: companionToken2, deviceId: deviceId2, desktopName: os.hostname() });
-    }
-    return;
-  }
+  // Removed: POST /sync/auto-pair. It minted a permanent, full-scope
+  // companionToken and returned the HMAC secret with no token check and no
+  // loopback guard, so anyone who could reach the server (including through
+  // the cloudflared tunnel) got a durable, unrevoked device credential.
+  // It had zero callers in src/ or the preload.
 
   // R2-Fix 10: previously a second POST /sync/pair handler lived here, doing
   // pairToken-based pairing for the legacy OnboardingWizard QR flow. It was
@@ -1432,25 +1376,22 @@ self.addEventListener('fetch', (event) => {
   // They only work on the local network (same WiFi) — not internet-exposed.
   const companionWebPaths = [
     '/sync/prompt', '/sync/chat/history', '/sync/chat/save', '/sync/chat/conversation_id', '/sync/mac/today', '/sync/mac/screen',
-    '/sync/mac/habit-toggle', '/sync/mac/run', '/sync/mac/open-app', '/sync/mac/health', '/sync/mac/bible', '/sync/learn',
+    '/sync/mac/habit-toggle', '/sync/mac/run', '/sync/mac/open-app', '/sync/mac/health', '/sync/learn',
     '/sync/capture-and-process', '/sync/capture', '/sync/mac/finance',
     '/sync/mac/reminders', '/sync/mac/tasks', '/sync/mac/tasks/create',
     '/sync/mac/goals', '/sync/mac/tasks/complete',
     '/sync/mac/reminders/create', '/sync/mac/reminders/done',
     '/sync/mac/journal/create', '/sync/mac/health/log',
   ];
-  if (companionWebPaths.some(p => urlPath === p) && req.method !== undefined) {
-    // Allow through — companion web page handles these without a paired token
-    // Fall through to the route handlers below with a synthetic deviceId
-    const syntheticDeviceId = 'companion-web';
-    // Run the handlers inline — skip the auth check
-    // (routes are defined further below and handle the request normally)
-  }
+  const isCompanionWebPath = companionWebPaths.includes(urlPath);
+  // The companion web page is only ever served over the LAN (or loopback when
+  // opened on this machine). Without this guard the whole allow-list below was
+  // also reachable through the cloudflared tunnel — unauthenticated internet
+  // RCE via /sync/prompt, plus conversation and memory exfiltration.
+  if (isCompanionWebPath && _denyDangerous(req, res, 'lan')) return;
 
-  // All routes below require a valid token
-  const deviceId = validateToken(req) || (
-    companionWebPaths.some(p => urlPath === p) ? 'companion-web' : null
-  );
+  // All routes below require a valid token, except the LAN-gated companion page.
+  const deviceId = validateToken(req) || (isCompanionWebPath ? 'companion-web' : null);
   if (!deviceId) {
     jsonResponse(res, 401, { error: 'Unauthorized' });
     return;
@@ -1701,33 +1642,6 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (urlPath === '/sync/prompt' && req.method === 'POST') {
-    // ── Bible shortcut: BIBLE_LOOKUP:ref → fast DB query, no AI ─────────────
-    if (req.method === 'POST') {
-      try {
-        // Peek at body without consuming (clone via Buffer)
-        const rawPeek = await new Promise<string>((resolve) => {
-          let data = '';
-          req.on('data', (chunk: Buffer) => data += chunk.toString());
-          req.on('end', () => resolve(data));
-        });
-        const peekBody = JSON.parse(rawPeek || '{}') as {text?: string};
-        if (peekBody.text?.startsWith('BIBLE_LOOKUP:')) {
-          const ref = peekBody.text.slice('BIBLE_LOOKUP:'.length).trim();
-          const rows = dbGet(
-            "SELECT text, normalized_reference FROM scripture_entries WHERE LOWER(normalized_reference) LIKE LOWER(?) LIMIT 1",
-            ref + '%'
-          ) as {text:string; normalized_reference:string}[];
-          if (rows.length) {
-            jsonResponse(res, 200, { reply: rows[0].text, ref: rows[0].normalized_reference });
-          } else {
-            jsonResponse(res, 200, { reply: 'Verse not found in your Bible. Go to ✝ Scripture → Import to download the KJV.' });
-          }
-          return;
-        }
-        // Not a Bible lookup — reconstruct req body for normal handler
-        (req as any)._rawBody = rawPeek;
-      } catch { /* continue normally */ }
-    }
     const body = await readBody<{
       text: string;
       conversationId?: string;
@@ -1770,7 +1684,7 @@ self.addEventListener('fetch', (event) => {
     // Understands free-form business talk without requiring special syntax
     {
       // "finished/completed the X job" or "done with X for Y"
-      const _nlDoneM = !lowerText.match(/^(?:habit|exercise|bible|journal|prayer|water|meditat|cold shower|stretch|read|run|walk)/i)
+      const _nlDoneM = !lowerText.match(/^(?:habit|exercise|journal|prayer|water|meditat|cold shower|stretch|read|run|walk)/i)
         && !lowerText.match(/jobs?(?: this year| this month| completed|\s+for)/i)
         && lowerText.match(/^(?:i(?:'ve)?\s+)?(?:finished|completed|done with|wrapped up)(?: the)?(?: (?:job|work|project))?(?: (?:for|on|with)\s+)?(.{3,60})(?:\s+(?:today|just now|already|this morning|this afternoon))?$/i);
       if (_nlDoneM) {
@@ -2602,10 +2516,20 @@ self.addEventListener('fetch', (event) => {
       if (_psh) {
         const _pshCmd = _psh[1].trim();
         try {
+          // This route runs arbitrary shell text, so it must go through the
+          // same catastrophic-command classifier the desktop shell path uses.
+          const _verdict = classifyCommand(_pshCmd);
+          if (_verdict.blocked) {
+            sendReply(`\u26D4 Refused to run that — blocked as ${_verdict.reason}.`);
+            return;
+          }
           const { execSync: _pshX } = await import('child_process') as typeof import('child_process');
           const _pshOut = _pshX(_pshCmd, { encoding: 'utf8', timeout: 10000, shell: '/bin/bash' }).trim();
           sendReply('```\n$ ' + _pshCmd + '\n\n' + (_pshOut || '(no output)') + '\n```');
-        } catch(e: any) { sendReply('```\n$ ' + _pshCmd + '\n\nError: ' + (e.message||e) + '\n```'); }
+        } catch (e: unknown) {
+          const _msg = e instanceof Error ? e.message : String(e);
+          sendReply('```\n$ ' + _pshCmd + '\n\nError: ' + _msg + '\n```');
+        }
         return;
       }
     }
@@ -2724,7 +2648,7 @@ self.addEventListener('fetch', (event) => {
     const implicitTaskMatch = implicitTaskRx && !implicitTaskGuard ? implicitTaskRx : null;
     if (implicitTaskMatch && implicitTaskMatch[1] && implicitTaskMatch[1].length > 3) {
       const title = implicitTaskMatch[1].trim();
-      const habitWords = ['prayer','pray','bible','exercise','water','journal'];
+      const habitWords = ['prayer','pray','exercise','water','journal'];
       if (!habitWords.some(h => title.toLowerCase().includes(h))) {
         try {
           const id = Date.now().toString(36) + Math.random().toString(36).slice(2);
@@ -3065,8 +2989,6 @@ self.addEventListener('fetch', (event) => {
           `❤️ **Health** — Log water, steps, sleep, calories, exercise\n` +
           `💰 **Finance** — Income, expenses, budgets, CSV import\n` +
           `🧠 **Memory** — Everything I know about you — view, edit, add\n` +
-          `✝ **Scripture** — Bible verse lookup, reading plan\n` +
-          `🙏 **Prayer** — Prayer requests and answers\n` +
           `🎯 **Focus** — Pomodoro timer with weekly chart\n` +
           `📄 **Quoting** — Quotes and invoices with PDF export\n` +
           `⚙️ **Settings** — AI keys, appearance, backup\n` +
@@ -3119,7 +3041,7 @@ self.addEventListener('fetch', (event) => {
           `• **📌 pin button** — Save any response to Memory\n` +
           `• **Pull down** — Refresh data in the phone companion`;
       }
-      if (/how do i use (journal|today|tasks|reminders|goals|health|finance|scripture|prayer|memory|settings|recorder|quoting)/.test(lowerText)) {
+      if (/how do i use (journal|today|tasks|reminders|goals|health|finance|memory|settings|recorder|quoting)/.test(lowerText)) {
         const m = lowerText.match(/how do i use (\w+)/);
         const panel = m ? m[1] : '';
         const help: Record<string,(()=>string)> = {
@@ -3173,11 +3095,11 @@ self.addEventListener('fetch', (event) => {
 
     // ── Habit fast-path: intercept "mark X done" before task handler ──────────
     {
-      const hkws = ['prayer','praying','bible','exercise','gym','journal','water','run','jog','walk','stretch','cold shower','gratitude','meditation','meditat','reading','read'];
+      const hkws = ['prayer','praying','exercise','gym','journal','water','run','jog','walk','stretch','cold shower','gratitude','meditation','meditat','read'];
       const hasHKW = hkws.some((k: string) => lowerText.includes(k));
-      const naturalHabitDone = /^(?:went for a?|did (?:my|the|a)|drank|finished|completed)(?: (?:my|a|the))? (?:run|jog|walk|bible|reading|journal|water|prayer|exercise|meditation)/i.test(lowerText)
-                             || /^(?:i (?:prayed|exercised|ran|jogged|walked|meditated|journaled|drank|read (?:my )?bible))/i.test(lowerText);
-      const habitWordDone = /^(?:prayer(?:ed)?|bible|exercise(?:d)?|journal(?:ed)?|water|run|jog|walk)(?: done| today)?$/i.test(lowerText);
+      const naturalHabitDone = /^(?:went for a?|did (?:my|the|a)|drank|finished|completed)(?: (?:my|a|the))? (?:run|jog|walk|reading|journal|water|prayer|exercise|meditation)/i.test(lowerText)
+                             || /^(?:i (?:prayed|exercised|ran|jogged|walked|meditated|journaled|drank|read))/i.test(lowerText);
+      const habitWordDone = /^(?:prayer(?:ed)?|exercise(?:d)?|journal(?:ed)?|water|run|jog|walk)(?: done| today)?$/i.test(lowerText);
       const _hasDoneWord = /(?:done|complete[d]?|check(?:ed)?|finish(?:ed)?|logg?(?:ed)?)$/.test(lowerText.trim());
       if (!lowerText.match(/^(?:add|create|new)(?: a)? habit/i) && !lowerText.match(/^(?:run:|python run:|shell:|exec:)/i) && (hasHKW || naturalHabitDone) && (/^(?:mark|done|check|finish|complete|log)/.test(lowerText) || naturalHabitDone || habitWordDone || _hasDoneWord)) {
         let hk = hkws.find((k: string) => lowerText.includes(k)) || '';
@@ -3186,7 +3108,7 @@ self.addEventListener('fetch', (event) => {
         if (hk === 'meditat') hk = 'meditation';
         // naturalHabitDone - extract keyword from text if no hkw matched
         if (!hk) {
-          const nMap: Record<string,string> = {run:'exercise',jog:'exercise',walk:'exercise',bible:'bible',reading:'bible',journal:'journal',water:'water',prayer:'prayer',prayed:'prayer'};
+          const nMap: Record<string,string> = {run:'exercise',jog:'exercise',walk:'exercise',journal:'journal',water:'water',prayer:'prayer',prayed:'prayer'};
           for (const word of Object.keys(nMap)) { if (lowerText.includes(word)) { hk = nMap[word]; break; } }
         }
         const fh = hk ? dbGetOne<{id:string;name:string}>(
@@ -3542,7 +3464,7 @@ self.addEventListener('fetch', (event) => {
     const HENRY_PANELS: Record<string,string> = {
       today:'today', journal:'journal', tasks:'tasks', goals:'goals', habits:'health',
       health:'health', finance:'finance', focus:'focus', notes:'memory', memory:'memory',
-      settings:'settings', scripture:'scripture', prayer:'prayer', chat:'chat',
+      settings:'settings', chat:'chat',
       companion:'companion', 'today panel':'today', 'health panel':'health',
       'task panel':'tasks', 'goal panel':'goals', 'journal panel':'journal',
     };
@@ -3609,7 +3531,7 @@ self.addEventListener('fetch', (event) => {
     }
 
     // completeTaskMatch - only if 'task' keyword is present, or starts with done/complete + non-habit text
-    const _habitWords = ['prayer','bible','exercise','journal','water','run','walk','stretch','meditat','cold shower','gratitude','read','gym'];
+    const _habitWords = ['prayer','exercise','journal','water','run','walk','stretch','meditat','cold shower','gratitude','read','gym'];
     const _looksLikeHabit = _habitWords.some(hw => lowerText.includes(hw));
     const completeTaskMatch = !_looksLikeHabit && (
       xDoneResult
@@ -4272,14 +4194,14 @@ self.addEventListener('fetch', (event) => {
 
     // ── Toggle habit done ─────────────────────────────────────────────────────
     // Check for explicit habit keywords FIRST to prevent task handler stealing them
-    const knownHabitKeywords = ['prayer','praying','bible','exercise','exercised','water','journal','journaled'];
+    const knownHabitKeywords = ['prayer','praying','exercise','exercised','water','journal','journaled'];
     const hasHabitKeyword = knownHabitKeywords.some(k => lowerText.includes(k));
     const habitDoneMatch = lowerText.match(/^(?:done|completed?|finished?|mark(?:ed)? done|checked?)(?: my)?(?: habit[:\s]+)?(.+)/i)
                         || lowerText.match(/^(.+)(?: habit)? (?:done|completed|finished)$/i)
                         || lowerText.match(/^i (?:just |already |finally )?(?:finished|completed|did) (?:my )?(.+?)(?:\s+today)?$/i)
-                        || lowerText.match(/^i (?:prayed|exercised|worked out|read(?:\s+my bible)?|journaled|drank)(?: my)?(?: water)?(?:\s+(?:today|this morning|this evening|earlier|already))?$/i)
-                        || lowerText.match(/^i (?:just|already|finally) (?:finished|completed|did|done|prayed|exercised|journaled|read)(?: my )?(?:journal(?:ing|ed)?|pray(?:ing|ed|er)?|exercis(?:ing|ed)?|bible|reading)?(?: today)?$/i)
-                        || (hasHabitKeyword && lowerText.match(/^(?:mark|mark done)(?: my)?(?: (?:read|morning|daily))? ?(?:bible|prayer|exercise|water|journal)(?: done)?$/i));
+                        || lowerText.match(/^i (?:prayed|exercised|worked out|read|journaled|drank)(?: my)?(?: water)?(?:\s+(?:today|this morning|this evening|earlier|already))?$/i)
+                        || lowerText.match(/^i (?:just|already|finally) (?:finished|completed|did|done|prayed|exercised|journaled|read)(?: my )?(?:journal(?:ing|ed)?|pray(?:ing|ed|er)?|exercis(?:ing|ed)?|reading)?(?: today)?$/i)
+                        || (hasHabitKeyword && lowerText.match(/^(?:mark|mark done)(?: my)?(?: (?:read|morning|daily))? ?(?:prayer|exercise|water|journal)(?: done)?$/i));
     if (habitDoneMatch) {
       // Extract hint from whichever capture group matched, strip "with " prefix
       let hint = (habitDoneMatch[1] || habitDoneMatch[2] || habitDoneMatch[3] || '').trim().toLowerCase();
@@ -4287,7 +4209,7 @@ self.addEventListener('fetch', (event) => {
       // Map natural words to habit name fragments
       const activityMap: Record<string,string> = {
         'praying': 'prayer', 'prayed': 'prayer', 'prayer': 'prayer',
-        'bible': 'bible', 'read': 'bible',
+        'read': 'reading',
         'exercising': 'exercise', 'exercised': 'exercise', 'exercise': 'exercise',
         'water': 'water', 'drank': 'water', 'drunk': 'water', 'drinking': 'water',
         'journaled': 'journal', 'journaling': 'journal', 'journal': 'journal',
@@ -4299,7 +4221,6 @@ self.addEventListener('fetch', (event) => {
         if (lowerText.includes('water') || lowerText.includes('drank') || lowerText.includes('drunk')) hint = 'water';
         else if (lowerText.includes('journaling') || (lowerText.includes('journal') && /finished|completed|done|just/.test(lowerText))) hint = 'journal';
         else if (lowerText.includes('prayer') || lowerText.includes('pray')) hint = 'prayer';
-        else if (lowerText.includes('bible') || lowerText.includes('scripture') || lowerText.includes('read bible') || (lowerText.includes('reading') && lowerText.includes('bible'))) hint = 'bible';
         else if (lowerText.includes('journal') || lowerText.includes('journaling') || lowerText.includes('journaled')) hint = 'journal';
         else if (lowerText.includes('exercis') || lowerText.includes('work out') || lowerText.includes('ran')) hint = 'exercise';
       }
@@ -5309,14 +5230,7 @@ self.addEventListener('fetch', (event) => {
             '%' + keyword + '%'
           ) as {title:string}[];
           if (goals.length) results.push("◎ Goals (" + goals.length + "):\n" + goals.map((g,i) => (i+1) + ". " + g.title).join("\n"));
-          // Search prayer requests
-          const prayers = dbGet<{body:string}>(
-            "SELECT body FROM prayer_requests WHERE LOWER(body) LIKE ? AND status='active' LIMIT 3",
-            '%' + keyword + '%'
-          ) as {body:string}[];
-          if (prayers.length) results.push("🙏 Prayers (" + prayers.length + "):\n" + prayers.map((p,i) => (i+1) + ". " + p.body).join("\n"));
-
-          if (!results.length) sendReply('Nothing found for "' + keyword + '" in your notes, tasks, goals, or prayers.');
+          if (!results.length) sendReply('Nothing found for "' + keyword + '" in your notes, tasks, or goals.');
           else sendReply('Search results for "' + keyword + '":\n\n' + results.join("\n\n"));
         } catch { sendReply("Could not complete search."); }
         return;
@@ -5556,7 +5470,6 @@ self.addEventListener('fetch', (event) => {
         const jnlEntries = (dbGetOne<{n:number}>("SELECT COUNT(*) as n FROM journal_entries WHERE date >= ?", weekAgoStr) as {n:number}|null)?.n || 0;
         const goalsActive = (dbGetOne<{n:number}>("SELECT COUNT(*) as n FROM goals WHERE status='active'") as {n:number}|null)?.n || 0;
         const revenue = (dbGetOne<{n:number}>("SELECT COALESCE(SUM(amount),0) as n FROM transactions WHERE type='income' AND date >= ?", weekAgoStr) as {n:number}|null)?.n || 0;
-        const prayerCount = (dbGetOne<{n:number}>("SELECT COUNT(*) as n FROM prayer_requests WHERE status='active'") as {n:number}|null)?.n || 0;
 
         const lines = ['Your week (last 7 days):\n'];
         lines.push('✓ Tasks done:    ' + tasksDone + (tasksOpen > 0 ? '  (' + tasksOpen + ' still open)' : ''));
@@ -5564,7 +5477,6 @@ self.addEventListener('fetch', (event) => {
         lines.push('📔 Journal:      ' + jnlEntries + ' entr' + (jnlEntries === 1 ? 'y' : 'ies'));
         lines.push('◎ Active goals:  ' + goalsActive);
         if (revenue > 0) lines.push('💰 Revenue:      $' + revenue.toFixed(2));
-        if (prayerCount > 0) lines.push('🙏 Prayers:      ' + prayerCount + ' active request' + (prayerCount === 1 ? '' : 's'));
 
         // Encouragement based on habit rate
         if (habitPct >= 80) lines.push('\n🎉 Excellent week — ' + habitPct + '% habit consistency!');
@@ -5631,76 +5543,6 @@ self.addEventListener('fetch', (event) => {
         sendReply(lines.join("\n"));
       } catch { sendReply("Could not load schedule."); }
       return;
-    }
-
-    // ── Direct verse reference: "John 3:16" / "lookup John 3:16" / "what is John 3:16"
-    // ── Scripture: save verse voice command ─────────────────────────────────
-    const _ssM = /\d/.test(lowerText) && lowerText.match(/^(?:save|bookmark)(?: this)?(?: verse)?[:\s]+(.{3,30})$/i)
-              || (lowerText.startsWith('save ') && /\d/.test(lowerText) && lowerText.length < 30);
-    if (_ssM) {
-      const _ssRef = (typeof _ssM === 'object' && _ssM[1]) ? _ssM[1].trim() : lowerText.replace(/^save\s+/i,'').trim();
-      if (/[0-9]/.test(_ssRef)) {
-        try {
-          const _ssLookup = await (window as any).henryAPI?.scriptureLookup?.(_ssRef);
-          if (_ssLookup?.found) {
-            await (window as any).henryAPI?.scriptureSaveVerse?.({ ref: _ssLookup.normalizedReference || _ssRef, text: _ssLookup.text, source: 'KJV' });
-            sendReply('\u2726 Saved **' + (_ssLookup.normalizedReference || _ssRef) + '** to your saved verses.');
-            return;
-          }
-        } catch { /* fall through */ }
-      }
-    }
-
-    const directVerseMatch = lowerText.match(/^(?:lookup|look up|what(?:'s| is)(?: the)?(?: verse)?|show me|read|get)\s+([1-3]?\s*[a-z]+\s+\d+:\d+)/i)
-                         || lowerText.match(/^([1-3]?\s*(?:genesis|exodus|leviticus|numbers|deuteronomy|joshua|judges|ruth|samuel|kings|chronicles|ezra|nehemiah|esther|job|psalms?|proverbs?|ecclesiastes|isaiah|jeremiah|lamentations|ezekiel|daniel|hosea|joel|amos|obadiah|jonah|micah|nahum|habakkuk|zephaniah|haggai|zechariah|malachi|matthew|mark|luke|john|acts|romans|corinthians|galatians|ephesians|philippians|colossians|thessalonians|timothy|titus|philemon|hebrews|james|peter|jude|revelation))\s+\d+(?::\d+)?/i)
-                          || lowerText.match(/^([1-3]?\s*[a-z]+\s+\d+:\d+)$/i);
-    if (directVerseMatch) {
-      const ref = (directVerseMatch[1] || '').trim();
-      try {
-        const r2 = await require('node-fetch').default || { default: null };
-        // Use the bible endpoint directly
-        const count = (dbGetOne<{n:number}>("SELECT COUNT(*) as n FROM scripture_entries") as {n:number}|null)?.n || 0;
-        if (count === 0) {
-          sendReply("Bible not downloaded yet. Open the Scripture panel and tap Download KJV Free.");
-        } else {
-          const parts = ref.match(/^([1-3]?\s*[a-z]+)\s+(\d+):(\d+)$/i);
-          if (parts) {
-            const book = parts[1].trim(), ch = parseInt(parts[2]), vs = parseInt(parts[3]);
-            const verse = dbGetOne<{text:string;book:string;chapter:number;verse:number}>(
-              "SELECT text, book, chapter, verse FROM scripture_entries WHERE LOWER(book)=LOWER(?) AND chapter=? AND verse=? LIMIT 1",
-              book, ch, vs
-            ) as {text:string;book:string;chapter:number;verse:number}|null;
-            if (verse) sendReply(verse.book + ' ' + verse.chapter + ':' + verse.verse + ' (KJV)\n\n"' + verse.text + '"');
-            else sendReply('Verse not found: ' + ref + '. Check the reference format.');
-          } else sendReply('Could not parse verse reference: ' + ref);
-        }
-      } catch { sendReply('Could not look up verse.'); }
-      return;
-    }
-
-    // ── Bible verse search ─────────────────────────────────────────────────────
-    const bibleSearchMatch = lowerText.match(/^(?:find|show|search)(?: a| me)?(?: bible| scripture)?(?: verse| verses?)?(?: about| on| for)\s+(.+)/i)
-                          || lowerText.match(/^(?:verse|scripture)(?: about| on| for)\s+(.+)/i)
-                          || lowerText.match(/^what does the (?:bible|scripture|word)(?: say)? about\s+(.+)/i)
-                          || lowerText.match(/^(?:bible|scripture) (?:verse|passage)s? about\s+(.+)/i);
-    if (bibleSearchMatch) {
-      const topic = (bibleSearchMatch[1] || '').trim();
-      if (topic.length > 2) {
-        try {
-          const count = (dbGetOne<{n:number}>("SELECT COUNT(*) as n FROM scripture_entries") as {n:number}|null)?.n || 0;
-          if (count === 0) {
-            sendReply("Bible not downloaded yet. Open the Scripture panel and tap Download KJV Free to get all 31,000 verses.");
-          } else {
-            const results = dbGet<{book:string;chapter:number;verse:number;text:string}>(
-              "SELECT book, chapter, verse, text FROM scripture_entries WHERE LOWER(text) LIKE ? LIMIT 3",
-              "%" + topic.toLowerCase() + "%"
-            ) as {book:string;chapter:number;verse:number;text:string}[];
-            if (!results.length) { sendReply("No verses found about \"" + topic + "\". Try different keywords."); }
-            else { sendReply("Verses about \"" + topic + "\":\n\n" + results.map(v => v.book + " " + v.chapter + ":" + v.verse + " — " + v.text).join("\n\n")); }
-          }
-        } catch { sendReply("Could not search scripture."); }
-        return;
-      }
     }
 
     // ── Finance summary ────────────────────────────────────────────────────────
@@ -6540,46 +6382,6 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
       return;
     }
 
-    // ── Prayer requests ───────────────────────────────────────────────────────
-    const addPrayerMatch = lowerText.match(/^(?:add|log|create|save)(?: a)? prayer(?: request)?[:\s]+(.+)/i)
-                       || lowerText.match(/^prayer[:\s]+(.+)/i);
-    if (addPrayerMatch) {
-      const req = addPrayerMatch[1].trim();
-      if (req.length > 1) {
-        try {
-          const id = Date.now().toString(36)+Math.random().toString(36).slice(2);
-          dbRun("INSERT INTO prayer_requests (id,title,body,status,created_at) VALUES (?,?,?,?,?)",
-            id, req.slice(0,80), req, 'active', new Date().toISOString());
-          sendReply('Prayer request saved: "' + req + '"');
-        } catch (e) { sendReply('Could not save prayer request: ' + e); }
-        return;
-      }
-    }
-
-    const prayerCountMatch = /^how many (?:prayer requests?|prayers?)(?: do i have)?$/.test(lowerText) || lowerText === 'prayer count';
-    if (prayerCountMatch) {
-      try {
-        const n = (dbGetOne<{n:number}>("SELECT COUNT(*) as n FROM prayer_requests WHERE status='active'") as {n:number}|null)?.n || 0;
-        sendReply(n + " active prayer request" + (n !== 1 ? "s" : "") + "." + (n > 0 ? " Say 'show prayer requests' to see them." : ""));
-      } catch { sendReply("Could not count prayer requests."); }
-      return;
-    }
-
-    const showPrayerMatch = /^(?:show|list|what are|get|read)(?: me)?(?: my)? prayer(?: requests?| list)?/.test(lowerText)
-                         || /^what should i (?:pray for|be praying for)/.test(lowerText)
-                         || lowerText === "what should i pray for"
-                         || lowerText === 'prayer requests' || lowerText === 'my prayers' || lowerText === 'prayer list';
-    if (showPrayerMatch) {
-      try {
-        const reqs = dbGet<{title:string;body:string;status:string}>(
-          "SELECT title, body, status FROM prayer_requests WHERE status='active' ORDER BY created_at DESC LIMIT 10"
-        ) as {title:string;body:string;status:string}[];
-        if (!reqs.length) sendReply("No active prayer requests. Say \"add prayer request: [your request]\" to add one.");
-        else sendReply(reqs.length + ' prayer request' + (reqs.length > 1 ? 's' : '') + ':\n\n' + reqs.map((r,i) => (i+1) + '. ' + r.body).join('\n'));
-      } catch { sendReply('Could not load prayer requests.'); }
-      return;
-    }
-
     // ── Delete goal ───────────────────────────────────────────────────────────
     const deleteGoalMatch = !lowerText.includes('task') && !lowerText.includes('habit') && lowerText.match(/^(?:delete|remove|archive)(?: (?:a |my )?goal)?[:\s]+(.+)/i);
     if (deleteGoalMatch) {
@@ -6644,8 +6446,8 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
       return;
     }
 
-    // ── Hashtag power shortcuts: #task, #note, #goal, #habit ────────────────
-    const hashtagMatch = resolvedText.match(/^#(task|note|goal|habit|prayer|reminder)[:\s]+(.+)/i);
+    // ── Hashtag power shortcuts: #task, #note, #goal, #habit, #reminder ──────
+    const hashtagMatch = resolvedText.match(/^#(task|note|goal|habit|reminder)[:\s]+(.+)/i);
     if (hashtagMatch) {
       const tag = hashtagMatch[1].toLowerCase();
       const content = hashtagMatch[2].trim();
@@ -6665,9 +6467,6 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
           } else if (tag === 'habit') {
             dbRun("INSERT INTO habits (id,name,icon,color,target_per_day,active,created_at) VALUES (?,?,?,?,?,?,?)", id, content, '⭐', '#7c3aed', 1, 1, now4);
             sendReply('🔄 Habit: "' + content + '"');
-          } else if (tag === 'prayer') {
-            dbRun("INSERT INTO prayer_requests (id,title,body,status,created_at) VALUES (?,?,?,?,?)", id, content.slice(0,80), content, 'active', now4);
-            sendReply('🙏 Prayer: "' + content + '"');
           } else if (tag === 'reminder') {
             dbRun("INSERT INTO reminders (id,title,done,created_at) VALUES (?,?,?,?)", id, content, 0, now4);
             sendReply('⏰ Reminder: "' + content + '"');
@@ -6688,7 +6487,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
           // Auto-detect category from content
           const _cat = /dpi|watt|laser|material|wood|cherry|walnut|maple|engrav/i.test(fact) ? 'laser' :
                        /client|customer|paid|owes|job|order/i.test(fact) ? 'client' :
-                       /habit|exercise|prayer|bible|water|run/i.test(fact) ? 'habit' :
+                       /habit|exercise|prayer|water|run/i.test(fact) ? 'habit' :
                        /price|cost|rate|dollar|revenue|income/i.test(fact) ? 'business' : 'general';
           dbRun("INSERT INTO memory_facts (id,fact,category,importance,created_at) VALUES (?,?,?,?,?)",
             id5, fact, _cat, 3, new Date().toISOString());
@@ -6707,7 +6506,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
         const _rid = Date.now().toString(36)+Math.random().toString(36).slice(2);
         const _rcat = /dpi|watt|laser|material|wood|cherry|walnut|maple|engrav/i.test(_rfact) ? 'laser' :
                       /client|customer|paid|owes|job|order/i.test(_rfact) ? 'client' :
-                      /habit|exercise|prayer|bible|water|run/i.test(_rfact) ? 'habit' :
+                      /habit|exercise|prayer|water|run/i.test(_rfact) ? 'habit' :
                       /price|cost|rate|dollar|revenue|income/i.test(_rfact) ? 'business' : 'general';
         try { dbRun("INSERT INTO memory_facts (id,fact,category,importance,created_at) VALUES (?,?,?,?,?)", _rid, _rfact, _rcat, 3, new Date().toISOString()); }
         catch { sendReply('Could not save to memory.'); return; }
@@ -6869,20 +6668,6 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
       return;
     }
 
-    // ── Bible download trigger ────────────────────────────────────────────────
-    const bibleDownloadMatch = /^(?:download|install|get|import)(?: the)?(?: kjv| bible| scripture| kjv bible)/.test(lowerText)
-                             || lowerText === 'download bible' || lowerText === 'install bible' || lowerText === 'get the bible';
-    if (bibleDownloadMatch) {
-      const count = (dbGetOne<{n:number}>("SELECT COUNT(*) as n FROM scripture_entries") as {n:number}|null)?.n || 0;
-      if (count > 0) {
-        sendReply('The KJV Bible is already downloaded — ' + count.toLocaleString() + ' verses ready. Try "find a verse about hope" or "John 3:16".');
-      } else {
-        sendReply('To download the KJV Bible:\n\n1. Open Henry on your Mac\n2. Click **Scripture** in the left sidebar\n3. Click **⬇ Download KJV Free** (about 3MB)\n4. All 31,102 verses will be available instantly in Henry and on your phone.\n\nThe download takes about 10 seconds on a normal connection.');
-      }
-      return;
-    }
-
-
     // ── Memory / DB cleanup ──────────────────────────────────────────────────
     const cleanMemoryMatch = /^(?:clean up|deduplicate|dedup|remove duplicates from)(?: my)? (?:memory|notes|facts|goals|tasks)/.test(lowerText)
                            || lowerText === 'dedup memory' || lowerText === 'clean memory';
@@ -7009,7 +6794,11 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
       const _tu = getTunnelUrl();
       const _proxyOk = isProxyRunning();
       if (!_proxyOk) {
-        startProxy(1080).then(pp => {
+        startProxy(1080, {
+          isPairedToken: isPairedCompanionToken,
+          onDenied: (reason, from) =>
+            console.warn(`[Proxy] refused SOCKS5 client from ${from}: ${reason}`),
+        }).then(pp => {
           const _tu2 = getTunnelUrl();
           sendReply(_buildVpnInstructions(pp, _tu2));
         }).catch(() => sendReply('Could not start proxy. Restart Henry and try again.'));
@@ -7834,7 +7623,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
     const missedHabitMatch = lowerText.match(/^i (?:missed|skipped|didn'?t do|forgot)(?: my)? (.+?)(?:\s+today)?$/i);
     if (missedHabitMatch) {
       const what = (missedHabitMatch[1] || '').trim().toLowerCase();
-      const habitWords = ['prayer','pray','bible','exercise','water','journal','habit'];
+      const habitWords = ['prayer','pray','exercise','water','journal','habit'];
       if (habitWords.some(h => what.includes(h))) {
         sendReply("That's okay — grace for today. Tomorrow is a fresh start. 🙏\n\nIf you want to mark it done anyway, say \"mark " + what + " done\".");
         return;
@@ -8038,7 +7827,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
     }
 
     // "export my tasks to word" / "create a word doc with my goals"
-    const exportToOfficeMatch = lowerText.match(/^(?:export|copy|put|add|create)(?: (?:my|a))?(?: (?:tasks?|goals?|notes?|habits?|reminders?|prayer requests?|revenue|health))+(?:\s+(?:to|in|as|into))?(?: (?:a|an?))? (?:word|excel|spreadsheet|doc(?:ument)?|csv|file)?/i)
+    const exportToOfficeMatch = lowerText.match(/^(?:export|copy|put|add|create)(?: (?:my|a))?(?: (?:tasks?|goals?|notes?|habits?|reminders?|revenue|health))+(?:\s+(?:to|in|as|into))?(?: (?:a|an?))? (?:word|excel|spreadsheet|doc(?:ument)?|csv|file)?/i)
                              || lowerText.match(/^create(?: a)? (?:word|excel)(?: (?:doc|sheet|file))? (?:with|of|for) (?:my|all)(?: (?:tasks?|goals?|habits?|notes?|revenue|health))/i);
     if (exportToOfficeMatch) {
       const toExcel = /excel|spreadsheet/.test(lowerText);
@@ -9287,29 +9076,6 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
     return;
   }
 
-
-  if (urlPath === '/sync/mac/bible' && req.method === 'GET') {
-    try {
-      const url = new URL('http://x' + req.url!);
-      const ref = url.searchParams.get('ref') || '';
-      if (!ref) { jsonResponse(res, 400, { error: 'ref required' }); return; }
-      const entry = dbGetOne<{book:string;chapter:number;verse:number;text:string}>(
-        `SELECT book, chapter, verse, text FROM scripture_entries
-         WHERE LOWER(book || ' ' || chapter || ':' || verse) = LOWER(?) LIMIT 1`,
-        ref.trim()
-      );
-      if (entry) {
-        const label = `${entry.book} ${entry.chapter}:${entry.verse}`;
-        res.writeHead(200, {'Content-Type':'application/json','Access-Control-Allow-Origin':'*'});
-        res.end(JSON.stringify({ found: true, reference: label, text: entry.text }));
-      } else {
-        res.writeHead(200, {'Content-Type':'application/json','Access-Control-Allow-Origin':'*'});
-        res.end(JSON.stringify({ found: false, error: 'Bible not downloaded. Open Scripture panel in Henry and tap Download KJV.' }));
-      }
-    } catch (e) { jsonResponse(res, 500, { error: String(e) }); }
-    return;
-  }
-
   if (urlPath === '/sync/mac/health/log' && req.method === 'POST') {
     if (_denyDangerous(req, res, 'lan')) return; // R2-Fix 3
     const body = await readBody<Record<string,unknown>>(req);
@@ -9415,14 +9181,19 @@ function notifyRenderer(channel: string, data: unknown): void {
 
 async function getDesktopStatus(): Promise<DesktopStatus> {
   return new Promise((resolve) => {
-    const wins = BrowserWindow.getAllWindows();
+    const wins = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed());
     if (!wins.length) {
-      resolve({ online: true, companionStatus: 'idle', workerStatus: 'idle', tasksRunning: 0, tasksQueued: 0 });
+      // No window at all: Henry is up but the UI cannot tell us anything.
+      resolve({ online: true, companionStatus: 'unknown', workerStatus: 'unknown', tasksRunning: 0, tasksQueued: 0 });
       return;
     }
     const channel = `henry:sync:status-reply-${Date.now()}`;
     const timer = setTimeout(() => {
-      resolve({ online: true, companionStatus: 'idle', workerStatus: 'idle', tasksRunning: 0, tasksQueued: 0 });
+      // No renderer answered, so we do NOT know the real state. Reporting
+      // "idle" here told the phone Henry was free when it might have been
+      // mid-task — a fabricated answer presented as truth.
+      console.warn('[SyncBridge] /sync/snapshot: no renderer replied — reporting status as unknown');
+      resolve({ online: true, companionStatus: 'unknown', workerStatus: 'unknown', tasksRunning: 0, tasksQueued: 0 });
     }, 500);
     ipcMain.once(channel, (_e, status: DesktopStatus) => {
       clearTimeout(timer);
@@ -9435,34 +9206,68 @@ async function getDesktopStatus(): Promise<DesktopStatus> {
 // ── Public API (called from main.ts) ──────────────────────────────────────
 
 // ── Bundled binary resolver ──────────────────────────────────────────────────
+/**
+ * True when `file` is a native executable this platform can actually run.
+ *
+ * resources/bin ships a single blob via extraResources, but the binaries in it
+ * are macOS Mach-O builds. On Linux/Windows `existsSync` was true for a file
+ * that could never exec, so the tunnel/slicer silently failed. Check the magic
+ * bytes before preferring a bundled copy.
+ */
+function _isRunnableHere(file: string): boolean {
+  const { existsSync, openSync, readSync, closeSync } = require('fs') as typeof import('fs');
+  try {
+    if (!existsSync(file)) return false;
+    const fd = openSync(file, 'r');
+    const buf = Buffer.alloc(4);
+    readSync(fd, buf, 0, 4, 0);
+    closeSync(fd);
+    const platform = process.platform;
+    const isElf = buf[0] === 0x7f && buf[1] === 0x45 && buf[2] === 0x4c && buf[3] === 0x46; // \x7fELF
+    const isMachO = buf.readUInt32BE(0) === 0xfeedface || buf.readUInt32BE(0) === 0xfeedfacf;
+    const isPe = buf[0] === 0x4d && buf[1] === 0x5a; // MZ
+    if (platform === 'darwin') return isMachO;
+    if (platform === 'win32') return isPe;
+    return isElf;
+  } catch {
+    return false;
+  }
+}
+
 function getBundledBin(name: string, fallbacks: string[] = []): string {
-  const { existsSync } = require('fs') as typeof import('fs');
   const { app } = require('electron') as typeof import('electron');
-  // 1. Check inside the installed Electron app's Resources/bin/
+  // 1. Check inside the installed Electron app's Resources/bin/ — but only if
+  //    the binary is actually runnable here (see _isRunnableHere).
   try {
     const resourcePath = app.isPackaged
       ? require('path').join(process.resourcesPath, 'bin', name)
       : require('path').join(__dirname, '../../resources/bin', name);
-    if (existsSync(resourcePath)) return resourcePath;
+    if (_isRunnableHere(resourcePath)) return resourcePath;
   } catch {}
-  // 2. Check common fallback paths
+  // 2. Check common fallback paths (same runnability requirement)
   for (const fb of fallbacks) {
-    if (existsSync(fb)) return fb;
+    if (_isRunnableHere(fb)) return fb;
   }
   // 3. Return the name and hope it's on PATH
   return name;
 }
 
-// Resolve bundled binaries once at startup
+// Resolve bundled binaries once at startup. The extraResources blob ships macOS
+// Mach-O builds, so getBundledBin only prefers a copy that is runnable here.
+const OPENSCAD_FALLBACKS = [
+  ...(process.platform === 'darwin'
+    ? ['/Applications/OpenSCAD.app/Contents/MacOS/OpenSCAD', '/opt/homebrew/bin/openscad']
+    : []),
+  ...(process.platform === 'linux' ? ['/usr/bin/openscad', '/usr/local/bin/openscad'] : []),
+  '/usr/local/bin/openscad',
+];
+
 const CLOUDFLARED_BIN = getBundledBin('cloudflared', [
   ...(process.platform === 'darwin' ? ['/opt/homebrew/bin/cloudflared', '/usr/local/bin/cloudflared'] : []),
   ...(process.platform === 'linux' ? ['/usr/bin/cloudflared', '/usr/local/bin/cloudflared'] : []),
   ...(process.platform === 'win32' ? ['cloudflared.exe'] : []),
 ]);
-const OPENSCAD_BIN = getBundledBin('openscad', [
-  '/Applications/OpenSCAD.app/Contents/MacOS/OpenSCAD',
-  '/usr/local/bin/openscad'
-]);
+const OPENSCAD_BIN = getBundledBin('openscad', OPENSCAD_FALLBACKS);
 
 log.debug('[Henry] cloudflared:', CLOUDFLARED_BIN);
 log.debug('[Henry] openscad:', OPENSCAD_BIN);
@@ -9510,17 +9315,28 @@ async function startTunnel(port: number): Promise<void> {
   if (_tunnelProc || _tunnelStarting) return;
   _tunnelStarting = true;
   try {
-    const { spawn } = await import('child_process') as typeof import('child_process');
+    const { spawn, execFileSync } = await import('child_process') as typeof import('child_process');
     const { existsSync, readFileSync } = await import('fs') as typeof import('fs');
-    // Find cloudflared
-    const cf = CLOUDFLARED_BIN;
+    // Resolve cloudflared: prefer a bundled/installed copy that can actually
+    // run here, otherwise fall back to whatever is on PATH.
+    let cf = CLOUDFLARED_BIN;
+    if (!_isRunnableHere(cf)) {
+      try { cf = execFileSync('which', ['cloudflared'], { encoding: 'utf8' }).trim(); }
+      catch {
+        log.info('[SyncBridge] cloudflared not found — remote tunnel disabled (LAN pairing still works)');
+        _tunnelStarting = false;
+        return;
+      }
+    }
 
     // Named tunnel (permanent URL) when ~/.cloudflared/henry.yml exists;
     // quick tunnel (random trycloudflare URL) otherwise.
     const os = await import('os') as typeof import('os');
     const configPath = os.homedir() + '/.cloudflared/henry.yml';
     let namedHostname: string | null = null;
-    let args = ['tunnel', '--url', `http://localhost:${port}`, '--no-autoupdate'];
+    // --no-autoupdate must precede the operand group, matching the named-tunnel
+    // branch below. cloudflared rejects it after --url.
+    let args = ['tunnel', '--no-autoupdate', '--url', `http://localhost:${port}`];
     if (existsSync(configPath)) {
       const m = readFileSync(configPath, 'utf8').match(/hostname:\s*(\S+)/);
       if (m) {
@@ -9552,6 +9368,12 @@ async function startTunnel(port: number): Promise<void> {
 
     _tunnelProc.stdout?.on('data', parseUrl);
     _tunnelProc.stderr?.on('data', parseUrl);
+    // Without this, a missing binary raised an unhandled 'error' event that
+    // bubbled to the process-level handler and aborted the tunnel start.
+    _tunnelProc.on('error', (err: Error) => {
+      log.warn('[SyncBridge] cloudflared failed to start:', err.message);
+      _tunnelProc = null; _tunnelUrl = null; _tunnelStarting = false;
+    });
     _tunnelProc.on('exit', () => {
       _tunnelProc = null; _tunnelUrl = null; _tunnelStarting = false;
       // Restart after 10s if Henry is still running
@@ -9605,7 +9427,11 @@ export function startSyncServer(port = 4242, host?: string): SyncServerState {
     // Auto-start cloudflare tunnel for remote companion access
     startTunnel(port).catch(() => {});
     // Auto-start SOCKS5 proxy for VPN/routing
-    startProxy(1080).then(pp => {
+    startProxy(1080, {
+      isPairedToken: isPairedCompanionToken,
+      onDenied: (reason, from) =>
+        console.warn(`[Proxy] refused SOCKS5 client from ${from}: ${reason}`),
+    }).then(pp => {
       log.debug(`[Henry] SOCKS5 proxy on port ${pp}`); // proxyServer already logs the listening line
       pushToAll({ type: 'proxy', payload: { port: pp }, id: '', timestamp: Date.now() } as any);
     }).catch(() => {});

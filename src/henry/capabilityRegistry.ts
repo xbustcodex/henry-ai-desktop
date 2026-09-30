@@ -79,11 +79,54 @@ export const COMPUTER_CAPABILITIES = {
 
 // ── System Prompt Block ───────────────────────────────────────────────────────
 
+
+// ── Measured capability snapshot ─────────────────────────────────────────────
+
+interface CapabilityDetail {
+  status: 'ready' | 'degraded' | 'dependency-missing' | 'unsupported-session' | 'unavailable';
+  backend?: string;
+  details?: string;
+}
+interface CapabilitySnapshot {
+  clipboard: CapabilityDetail;
+  selectedText: CapabilityDetail;
+  screenCapture: CapabilityDetail;
+  inputAutomation: CapabilityDetail;
+}
+
+let capabilitySnapshot: CapabilitySnapshot | null = null;
+
+/**
+ * Record the result of computer:checkCapabilities so the prompt block tells the
+ * model what is genuinely available instead of assuming everything is.
+ * Call this once the probe resolves at startup.
+ */
+export function updateCapabilitySnapshot(result: CapabilitySnapshot | null): void {
+  capabilitySnapshot = result;
+}
+
 /**
  * Returns a compact capability truth block for injection into the system prompt.
  * Henry reads this to know what is real right now — not what could theoretically exist.
  */
 export function buildCapabilityRegistryBlock(): string {
+  // This block used to hardcode YES for typing, clicking, screenshots and app
+  // launching on every platform, so Henry told the model it could drive the
+  // machine even when xdotool/scrot were not installed — and then failed at
+  // the moment it tried. It now reports what computer:checkCapabilities
+  // actually measured, and says "unknown" until that probe has run.
+  const cap = capabilitySnapshot;
+  const status = (kind: 'clipboard' | 'selectedText' | 'screenCapture' | 'inputAutomation') => {
+    if (!cap) return 'unknown (not probed yet)';
+    const c = cap[kind];
+    if (c.status === 'ready') return `YES (${c.backend ?? 'default'})`;
+    if (c.status === 'degraded') return `PARTIAL (${c.backend ?? 'default'})`;
+    return `NO (${c.status})`;
+  };
+  const typing = platform === 'darwin' ? 'YES (osascript, needs Accessibility)' : status('inputAutomation');
+  const clicking = platform === 'darwin' ? 'YES (osascript, needs Accessibility)' : status('inputAutomation');
+  const shot = platform === 'darwin' ? 'YES (screencapture)' : status('screenCapture');
+
   // Computer layer — reflects what electron/ipc/computer.ts actually implements
   const computerLines: string[] = [
     `  Workspace file access (read/write text files in workspace): YES`,
@@ -91,15 +134,11 @@ export function buildCapabilityRegistryBlock(): string {
     platform === 'darwin'
       ? `  AppleScript / app UI control (computer:osascript — macOS only): YES`
       : `  AppleScript / app UI control: NO (macOS only)`,
-    platform === 'darwin'
-      ? `  Keyboard input / typing (computer:typeText — macOS, needs Accessibility permission): YES`
-      : platform === 'linux'
-        ? `  Keyboard input / typing (computer:typeText via xdotool): YES`
-        : `  Keyboard input / typing: YES`,
-    platform === 'darwin'
-      ? `  Mouse click at coordinates (computer:click — macOS, needs Accessibility permission): YES`
-      : `  Mouse click at coordinates: YES`,
-    `  Screenshot capture (computer:screenshot — ${platform === 'darwin' ? 'screencapture' : platform === 'linux' ? 'scrot/import' : 'PowerShell'}): YES`,
+    `  Keyboard input / typing (computer:typeText): ${typing}`,
+    `  Mouse click at coordinates (computer:click): ${clicking}`,
+    `  Clipboard read/write: ${status('clipboard')}`,
+    `  Selected-text capture: ${status('selectedText')}`,
+    `  Screenshot capture (computer:screenshot): ${shot}`,
     `  Open app by name (computer:openApp): YES`,
     `  Open URL in browser (computer:openUrl): YES`,
     `  List apps and processes (computer:listApps, computer:listProcesses): YES`,

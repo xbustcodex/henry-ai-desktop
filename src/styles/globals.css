@@ -188,7 +188,6 @@ button, [role="button"] {
 /* cursor color variants per engine / mode */
 .henry-cursor-companion { --henry-cursor-color: #6366f1; }
 .henry-cursor-worker    { --henry-cursor-color: #f59e0b; }
-.henry-cursor-biblical  { --henry-cursor-color: #60a5fa; }
 .henry-cursor-writer    { --henry-cursor-color: #34d399; }
 .henry-cursor-code      { --henry-cursor-color: #a78bfa; }
 .henry-cursor-error     { --henry-cursor-color: #ef4444; }

@@ -55,7 +55,6 @@ export default function TodayPanel() {
   const [showReport, setShowReport] = useState(false);
   const [reportBusy, setReportBusy] = useState(false);
   const [reportText, setReportText] = useState('');
-  const [verseOfDay, setVerseOfDay] = useState<{ref: string; text: string} | null>(null);
   const [nudge, setNudge] = useState<string | null>(null);
   const [henryWord, setHenryWord] = useState<string | null>(null);
   const [plannerResult, setPlannerResult] = useState('');
@@ -109,7 +108,7 @@ export default function TodayPanel() {
       await api.captureSave?.({ id, text, routedTo: route });
       setCapture('');
       // R3-Fix 2: refresh the daily enrichments. The blocks of code below
-      // used to live inline here — which meant habits/verse/nudge/word
+      // used to live inline here — which meant habits/nudge/word
       // only loaded if the user submitted a capture first, and the panel
       // showed an "Add habits" placeholder on first visit. Extracted into
       // a single function called from both here and a mount useEffect.
@@ -119,7 +118,7 @@ export default function TodayPanel() {
     setCaptureSaving(false);
   }
 
-  // R3-Fix 2: daily enrichments — habits / verse / nudge / henry-word /
+  // R3-Fix 2: daily enrichments — habits / nudge / henry-word /
   // calendar. Previously buried inside the handleCapture submit handler,
   // which meant they NEVER loaded for users who didn't capture anything.
   function loadDailyEnrichments() {
@@ -134,18 +133,6 @@ export default function TodayPanel() {
           habit: h,
           done: (logs2 || []).some((l: any) => l.habit_id === h.id && l.count >= h.target_per_day),
         })));
-      }).catch(() => {});
-    }
-
-    // Verse of the day from local KJV DB
-    const api4 = (window as any).henryAPI;
-    if (api4?.scriptureSearch) {
-      const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000);
-      const classicVerses = ['John 3:16','Psalm 23:1','Romans 8:28','Proverbs 3:5','Jeremiah 29:11',
-        'Philippians 4:13','Isaiah 40:31','Joshua 1:9','Matthew 6:33','Psalm 46:1'];
-      const todayVerse = classicVerses[dayOfYear % classicVerses.length];
-      api4.scriptureLookup?.(todayVerse).then((r: any) => {
-        if (r?.text) setVerseOfDay({ ref: r.normalizedReference || todayVerse, text: r.text });
       }).catch(() => {});
     }
 
@@ -733,15 +720,6 @@ Keep it brief and encouraging.`;
           </div>
         )}
 
-        {/* Verse of the day */}
-        {verseOfDay && (
-          <div className="w-full mb-3 p-3 bg-henry-accent/5 border border-henry-accent/15 rounded-xl">
-            <p className="text-[9px] uppercase tracking-widest text-henry-accent/70 mb-1.5 font-semibold">✝ Verse of the Day</p>
-            <p className="text-xs text-henry-text leading-relaxed italic">"{verseOfDay.text.slice(0, 120)}{verseOfDay.text.length > 120 ? '…' : ''}"</p>
-            <p className="text-[10px] text-henry-text-muted mt-1 font-medium">— {verseOfDay.ref}</p>
-          </div>
-        )}
-
         {/* Henry focus nudge */}
         <div className="w-full mb-2">
           <button onClick={() => void askFocusNow()} disabled={henryFocusBusy}
@@ -827,7 +805,6 @@ Keep it brief and encouraging.`;
         <div className="w-full flex flex-wrap gap-2 mb-8 justify-center">
           {[
             { label: 'What to focus on?', fn: () => PANEL_QUICK_ASK.focus() },
-            { label: 'Bible study', fn: () => PANEL_QUICK_ASK.bible() },
             { label: 'Catch me up', fn: () => PANEL_QUICK_ASK.today() },
             { label: 'Finance check', fn: () => PANEL_QUICK_ASK.finance() },
           ].map(chip => (

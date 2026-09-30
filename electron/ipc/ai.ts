@@ -136,6 +136,132 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = 2, baseDelayMs = 
 
 // ── Provider Call Functions ────────────────────────────────────
 
+/**
+ * Optional hosted relay.
+ *
+ * The upstream product routes every request through its own paid backend. This
+ * is the same capability made pluggable and OFF by default: if no relay URL is
+ * configured, the provider reports itself unavailable and nothing else changes.
+ * Any OpenAI-compatible endpoint works, so it can point at a self-hosted
+ * gateway, a corporate proxy, or a hosted service you already pay for.
+ */
+function resolveRelayBaseUrl(explicit?: string): string | null {
+  const raw = (explicit ?? readSettingSafe('relay_base_url') ?? '').trim();
+  if (!raw) return null;
+  const trimmed = raw.replace(/\/+$/, '');
+  if (!/^https?:\/\//i.test(trimmed)) {
+    throw new Error('Relay URL must start with http:// or https://');
+  }
+  return `${trimmed}/chat/completions`;
+}
+
+function readSettingSafe(key: string): string | null {
+  try {
+    const { getDb } = require('./database') as typeof import('./database');
+    const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+    return row?.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function callRelay(params: AiRequest, relayUrl?: string): Promise<{
+  content: string;
+  usage?: { input: number; output: number };
+}> {
+  const url = resolveRelayBaseUrl(relayUrl ?? (params as { relayUrl?: string }).relayUrl);
+  if (!url) {
+    throw new Error(
+      'Hosted relay is not configured. Add a relay URL in Settings → Engines, or pick another provider.',
+    );
+  }
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(params.apiKey ? { Authorization: `Bearer ${params.apiKey}` } : {}),
+    },
+    body: JSON.stringify({
+      model: params.model,
+      messages: params.messages,
+      temperature: params.temperature ?? 0.7,
+      max_tokens: params.maxTokens ?? 4096,
+    }),
+    signal: params.signal,
+  });
+
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
+    throw new Error(body.error?.message || `Relay error: HTTP ${response.status}`);
+  }
+
+  const data = (await response.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
+  };
+  return {
+    content: data.choices?.[0]?.message?.content || '',
+    usage: data.usage
+      ? { input: data.usage.prompt_tokens ?? 0, output: data.usage.completion_tokens ?? 0 }
+      : undefined,
+  };
+}
+
+
+/**
+ * OpenCode provider — routes through the loopback OpenCode bridge, which
+ * forwards to the `opencode` CLI. This is what makes every model opencode can
+ * reach (its own zen service, OpenRouter, and anything added later)
+ * selectable in Settings and usable by chat, because the bridge speaks the
+ * same OpenAI-compatible shape as the other providers.
+ */
+async function callOpencode(params: AiRequest): Promise<{
+  content: string;
+  usage?: { input: number; output: number };
+}> {
+  const { ensureOpencodeBridge, opencodeBridgeToken } =
+    await import('./opencodeBridge') as typeof import('./opencodeBridge');
+
+  const bridge = await ensureOpencodeBridge();
+  if (!bridge.running) {
+    throw new Error(`The OpenCode bridge could not start: ${bridge.error ?? 'unknown error'}`);
+  }
+  if (!params.model) {
+    throw new Error('No opencode model selected. Pick one in Settings → Engines.');
+  }
+
+  const response = await fetch(`${bridge.baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${opencodeBridgeToken()}`,
+    },
+    body: JSON.stringify({
+      model: params.model,
+      messages: params.messages,
+      temperature: params.temperature ?? 0.7,
+      max_tokens: params.maxTokens ?? 4096,
+    }),
+    signal: params.signal,
+  });
+
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
+    throw new Error(body.error?.message || `OpenCode bridge error: HTTP ${response.status}`);
+  }
+
+  const data = (await response.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
+  };
+  return {
+    content: data.choices?.[0]?.message?.content ?? '',
+    usage: data.usage
+      ? { input: data.usage.prompt_tokens ?? 0, output: data.usage.completion_tokens ?? 0 }
+      : undefined,
+  };
+}
+
 async function callOpenAI(params: AiRequest): Promise<{
   content: string;
   usage?: { input: number; output: number };
@@ -311,10 +437,17 @@ async function callOllamaProvider(params: AiRequest): Promise<{
   };
 }
 
-async function callGroq(params: AiRequest): Promise<{
+interface GroqResponse {
   content: string;
   usage?: { input: number; output: number };
-}> {
+}
+
+async function callGroq(params: AiRequest): Promise<GroqResponse> {
+  // A single attempt against the model the user actually selected. An earlier
+  // version walked a hard-coded fallback chain on 404, which (a) answered with
+  // a different model than the one in Settings, (b) recursed once per fallback
+  // (up to ~64 requests, all sharing one AbortSignal), and (c) swallowed the
+  // real error behind "no fallback models are available".
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -331,11 +464,26 @@ async function callGroq(params: AiRequest): Promise<{
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error((error as { error?: { message?: string } }).error?.message || `Groq API error: ${response.status}`);
+    const error = (await response.json().catch(() => ({}))) as {
+      error?: { message?: string; code?: string };
+    };
+    const errorMessage = error.error?.message || '';
+    const errorCode = error.error?.code || '';
+
+    if (response.status === 404 || errorCode === 'model_not_found') {
+      throw new Error(
+        `Groq does not have a model called "${params.model}". ` +
+        'Pick a current model in Settings → Engines.',
+      );
+    }
+    if (response.status === 401 || response.status === 403) {
+      // Never masked this before — a bad key must not look like a model problem.
+      throw new Error('Groq rejected the API key. Check it in Settings → Engines.');
+    }
+    throw new Error(errorMessage || `Groq API error: ${response.status}`);
   }
 
-  const data = await response.json() as {
+  const data = (await response.json()) as {
     choices?: Array<{ message?: { content?: string } }>;
     usage?: { prompt_tokens?: number; completion_tokens?: number };
   };
@@ -380,6 +528,8 @@ export async function callAI(params: {
       case 'google':    return callGoogle(params);
       case 'ollama':    return callOllamaProvider(params);
       case 'groq':      return callGroq(params);
+      case 'relay':     return callRelay(params);
+      case 'opencode':  return callOpencode(params);
       default:          throw new Error(`Unknown provider: ${params.provider}`);
     }
   };

@@ -68,7 +68,7 @@ export function registerTerminalHandlers(winGetter: WindowGetter, workspacePath:
       const execId = randomUUID();
       // Guard against path traversal in cwd
       const cwd = safeCwd(params.cwd, workspacePath);
-      const timeout = params.timeout || 30000; // Default 30s timeout
+      const timeout = params.timeout || 600000; // Default 10 minutes timeout (600000ms)
 
       return new Promise((resolve) => {
         const child = spawn(process.platform === 'win32' ? 'cmd' : 'sh', process.platform === 'win32' ? ['/c', params.command] : ['-c', params.command], {

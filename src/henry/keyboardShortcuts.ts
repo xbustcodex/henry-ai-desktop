@@ -75,16 +75,6 @@ export function buildShortcuts(): HenryShortcut[] {
     },
     // Mode shortcuts
     { key: 'w', meta: true, shift: true, description: 'Go to Workspace', action: navigate('workspace') },
-    {
-      key: 'b', meta: true, shift: true, description: 'Biblical mode quick start',
-      action: () => {
-        useStore.getState().setCurrentView('chat' as any);
-        setTimeout(() => {
-          try { localStorage.setItem('henry_operating_mode', 'biblical'); } catch { /* ignore */ }
-          window.dispatchEvent(new CustomEvent('henry_mode_launch', { detail: { mode: 'biblical', prompt: '' } }));
-        }, 50);
-      },
-    },
   ];
 }
 

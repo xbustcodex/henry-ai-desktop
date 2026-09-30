@@ -314,8 +314,12 @@ export function registerGoogleAuthHandlers(getMainWindow: () => BrowserWindow | 
    */
   ipcMain.handle('google:getToken', async (
     _e,
-    { clientId, clientSecret }: { clientId: string; clientSecret: string }
+    auth?: { clientId?: string; clientSecret?: string },
   ) => {
+    // The app's OAuth client credentials, supplied by the caller. Previously
+    // the preload invoked this with no argument, so this destructuring threw.
+    const clientId = auth?.clientId ?? '';
+    const clientSecret = auth?.clientSecret ?? '';
     const creds = retrieveCredentials();
     if (!creds) return null;
 
@@ -346,8 +350,12 @@ export function registerGoogleAuthHandlers(getMainWindow: () => BrowserWindow | 
    */
   ipcMain.handle('google:refreshToken', async (
     _e,
-    { clientId, clientSecret }: { clientId: string; clientSecret: string }
+    auth?: { clientId?: string; clientSecret?: string },
   ) => {
+    // The app's OAuth client credentials, supplied by the caller. Previously
+    // the preload invoked this with no argument, so this destructuring threw.
+    const clientId = auth?.clientId ?? '';
+    const clientSecret = auth?.clientSecret ?? '';
     const creds = retrieveCredentials();
     if (!creds?.refreshToken) {
       throw new Error('No refresh token stored. Please reconnect Google.');

@@ -101,11 +101,6 @@ export function registerSettingsHandlers(db: Database.Database, getMainWindow?: 
     }
   );
 
-  ipcMain.handle('providers:delete', (_, id: string) => {
-    db.prepare('DELETE FROM providers WHERE id = ?').run(id);
-    return true;
-  });
-
   // ── Conversations ───────────────────────────────────────────
 
   ipcMain.handle('conversations:getAll', () => {
@@ -129,8 +124,22 @@ export function registerSettingsHandlers(db: Database.Database, getMainWindow?: 
   });
 
   ipcMain.handle('conversations:delete', (_, id: string) => {
-    db.prepare('DELETE FROM messages WHERE conversation_id = ?').run(id);
-    db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
+    // memory_facts and conversation_summaries reference conversations WITHOUT
+    // ON DELETE CASCADE, so the DELETE threw FOREIGN KEY constraint failed —
+    // and because the message delete had already run outside a transaction, the
+    // thread was left half-deleted and permanently undeletable. Clear the
+    // dependents explicitly and make it all-or-nothing.
+    const clear = db.transaction((convId: string) => {
+      for (const table of ['messages', 'memory_facts', 'conversation_summaries', 'message_attachments']) {
+        try {
+          db.prepare(`DELETE FROM "${table}" WHERE conversation_id = ?`).run(convId);
+        } catch {
+          // Table absent in this database — nothing to clean up.
+        }
+      }
+      db.prepare('DELETE FROM conversations WHERE id = ?').run(convId);
+    });
+    clear(id);
     return true;
   });
 

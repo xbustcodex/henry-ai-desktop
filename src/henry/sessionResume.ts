@@ -4,8 +4,6 @@
 
 import type { HenryOperatingMode } from './charter';
 import { isHenryOperatingMode } from './charter';
-import type { BibleSourceProfileId } from './biblicalProfiles';
-import { DEFAULT_BIBLICAL_SOURCE_PROFILE_ID, isBibleSourceProfileId } from './biblicalProfiles';
 import type { WriterDocumentTypeId } from './documentTypes';
 import { DEFAULT_WRITER_DOCUMENT_TYPE_ID, isWriterDocumentTypeId } from './documentTypes';
 import type { Design3DWorkflowTypeId } from './design3dTypes';
@@ -21,7 +19,6 @@ export interface SavedSessionStateV1 {
   savedAt: string;
   lastConversationId: string | null;
   operatingMode: HenryOperatingMode;
-  biblicalSourceProfileId: BibleSourceProfileId;
   writerDocumentTypeId: WriterDocumentTypeId;
   design3dWorkflowTypeId: Design3DWorkflowTypeId;
   writerActiveDraftPath: string | null;
@@ -33,7 +30,6 @@ export interface SavedSessionStateV1 {
 export interface SessionSnapshotInput {
   lastConversationId: string | null;
   operatingMode: HenryOperatingMode;
-  biblicalSourceProfileId: BibleSourceProfileId;
   writerDocumentTypeId: WriterDocumentTypeId;
   design3dWorkflowTypeId: Design3DWorkflowTypeId;
   writerActiveDraftPath: string | null;
@@ -44,12 +40,6 @@ export interface SessionSnapshotInput {
 
 function normalizeMode(raw: unknown): HenryOperatingMode {
   return raw && isHenryOperatingMode(String(raw)) ? (raw as HenryOperatingMode) : 'companion';
-}
-
-function normalizeBible(raw: unknown): BibleSourceProfileId {
-  return raw && isBibleSourceProfileId(String(raw))
-    ? (raw as BibleSourceProfileId)
-    : DEFAULT_BIBLICAL_SOURCE_PROFILE_ID;
 }
 
 function normalizeWriterDoc(raw: unknown): WriterDocumentTypeId {
@@ -97,7 +87,6 @@ export function readSavedSessionResume(): SavedSessionStateV1 | null {
       savedAt,
       lastConversationId,
       operatingMode: normalizeMode(o.operatingMode),
-      biblicalSourceProfileId: normalizeBible(o.biblicalSourceProfileId),
       writerDocumentTypeId: normalizeWriterDoc(o.writerDocumentTypeId),
       design3dWorkflowTypeId: normalizeDesign3d(o.design3dWorkflowTypeId),
       writerActiveDraftPath:
@@ -124,7 +113,6 @@ export function saveSessionResumeSnapshot(input: SessionSnapshotInput): void {
     savedAt: new Date().toISOString(),
     lastConversationId: input.lastConversationId,
     operatingMode: input.operatingMode,
-    biblicalSourceProfileId: input.biblicalSourceProfileId,
     writerDocumentTypeId: input.writerDocumentTypeId,
     design3dWorkflowTypeId: input.design3dWorkflowTypeId,
     writerActiveDraftPath: input.writerActiveDraftPath,

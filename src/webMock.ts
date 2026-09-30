@@ -36,6 +36,14 @@ function on<T>(event: string, cb: Listener<T>): () => void {
 
 const now = () => new Date().toISOString();
 
+// ── Chat attachments (web mode) ──────────────────────────────────────────────
+// The desktop build stores bytes on disk via attachments:* IPC. A browser has
+// no equivalent, so bytes are held in memory for the session and the index
+// lives in localStorage. Reloading the page drops the bytes — the desktop app
+// is the supported path for persistent attachments.
+const webAttachmentBytes = new Map<string, string>(); // id -> data URL
+
+
 import { tryCerebrasFallback, isGroqRateLimit } from './henry/providers/cerebras';
 import { log } from './henry/log';
 
@@ -93,7 +101,7 @@ async function runWorkerAI(params: {
 
   updateTask({ status: 'running', started_at: now() });
 
-  const modeName = (['companion','writer','developer','builder','biblical','design3d','computer','secretary'] as const).includes(currentMode as any)
+  const modeName = (['companion','writer','developer','builder','design3d','computer','secretary'] as const).includes(currentMode as any)
     ? (currentMode as import('./henry/charter').HenryOperatingMode)
     : 'developer';
 
@@ -271,7 +279,9 @@ const henryAPI: Window['henryAPI'] = {
       providers.push(record);
     }
     setStore('henry:providers', providers);
-    return true;
+    // Matches the providers:save handler's { ok } envelope (it never returns a
+    // bare boolean, and no caller branches on the value).
+    return { ok: true };
   },
 
   platform: () => platformString,
@@ -316,6 +326,83 @@ const henryAPI: Window['henryAPI'] = {
     }
     setStore('henry:messages', allMsgs);
     return true;
+  },
+
+  saveAttachment: async (input) => {
+    try {
+      const id = uuidv4();
+      const bytes =
+        // Chunked: `String.fromCharCode(...bytes)` spreads the whole array as
+        // arguments and throws RangeError on any real file.
+        typeof input.data === 'string'
+          ? input.data
+          : (() => {
+              let bin = '';
+              const CHUNK = 0x8000;
+              for (let i = 0; i < input.data.length; i += CHUNK) {
+                bin += String.fromCharCode.apply(null, Array.from(input.data.subarray(i, i + CHUNK)) as number[]);
+              }
+              return btoa(bin);
+            })();
+      webAttachmentBytes.set(id, bytes);
+      const rows = getStore<import('./types').MessageAttachment[]>('henry:attachments', []);
+      const record: import('./types').MessageAttachment = {
+        id,
+        conversation_id: input.conversationId ?? null,
+        message_id: input.messageId ?? null,
+        file_name: input.fileName,
+        mime_type: input.mimeType ?? null,
+        byte_size: Math.floor((bytes.length * 3) / 4),
+        created_at: now(),
+      };
+      rows.push(record);
+      setStore('henry:attachments', rows);
+      return { ok: true, attachment: record };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  },
+  linkAttachmentsToMessage: async (ids, messageId, conversationId) => {
+    const rows = getStore<import('./types').MessageAttachment[]>('henry:attachments', []);
+    let count = 0;
+    for (const r of rows) {
+      if (ids.includes(r.id)) {
+        r.message_id = messageId;
+        if (conversationId) r.conversation_id = conversationId;
+        count++;
+      }
+    }
+    setStore('henry:attachments', rows);
+    return { ok: true, count };
+  },
+  listAttachments: async (conversationId) =>
+    getStore<import('./types').MessageAttachment[]>('henry:attachments', [])
+      .filter((a) => a.conversation_id === conversationId),
+  listAttachmentsForMessage: async (messageId) =>
+    getStore<import('./types').MessageAttachment[]>('henry:attachments', [])
+      .filter((a) => a.message_id === messageId),
+  getAttachment: async (id) => {
+    const row = getStore<import('./types').MessageAttachment[]>('henry:attachments', [])
+      .find((a) => a.id === id);
+    if (!row) return { ok: false, error: 'Attachment not found.' };
+    const dataUrl = webAttachmentBytes.get(id);
+    if (!dataUrl) {
+      return { ok: false, error: 'Attachment bytes are no longer in memory — this only persists in the desktop app.' };
+    }
+    return { ok: true, mimeType: row.mime_type ?? undefined, fileName: row.file_name, byteSize: row.byte_size, dataUrl };
+  },
+  deleteAttachment: async (id) => {
+    const rows = getStore<import('./types').MessageAttachment[]>('henry:attachments', []);
+    setStore('henry:attachments', rows.filter((a) => a.id !== id));
+    webAttachmentBytes.delete(id);
+    return { ok: true };
+  },
+  openAttachment: async (id) => {
+    const res = await (henryAPI as { getAttachment: (i: string) => Promise<{ ok: boolean; dataUrl?: string; error?: string }> })
+      .getAttachment(id);
+    if (!res.ok || !res.dataUrl) return { ok: false, error: res.error ?? 'Could not open attachment.' };
+    window.open(res.dataUrl, '_blank');
+    return { ok: true };
   },
 
   sendMessage: async (params) => {
@@ -895,13 +982,23 @@ const henryAPI: Window['henryAPI'] = {
     };
   },
   saveSummary: async (summary) => {
-    const summaries = getStore<Record<string, string>>('henry:summaries', {});
-    summaries[summary.conversationId] = summary.summary;
+    // Store the same row shape the main process returns so getSummary's type
+    // holds in both the Electron and web builds.
+    const summaries = getStore<Record<string, HenryConversationSummary>>('henry:summaries', {});
+    const row: HenryConversationSummary = {
+      id: summary.conversationId,
+      conversation_id: summary.conversationId,
+      summary: summary.summary,
+      message_count: summary.messageCount ?? 0,
+      token_count: summary.tokenCount ?? Math.ceil(summary.summary.length / 4),
+      created_at: new Date().toISOString(),
+    };
+    summaries[summary.conversationId] = row;
     setStore('henry:summaries', summaries);
-    return { id: summary.conversationId };
+    return { id: row.id };
   },
   getSummary: async (conversationId) => {
-    const summaries = getStore<Record<string, string>>('henry:summaries', {});
+    const summaries = getStore<Record<string, HenryConversationSummary>>('henry:summaries', {});
     return summaries[conversationId] || null;
   },
 
@@ -1117,6 +1214,74 @@ const henryAPI: Window['henryAPI'] = {
     if (opts?.from_id) return edges.filter((e) => e.from_id === opts.from_id || e.to_id === opts.from_id);
     return edges;
   },
+  // ── Automation run history (web mode: localStorage-backed) ─────────
+  automationRuns: async (opts) => {
+    let runs = getStore<import('./types').AutomationRun[]>('henry:automation_runs', []);
+    if (opts?.taskId) runs = runs.filter((r) => r.task_id === opts.taskId);
+    if (opts?.unreadOnly) runs = runs.filter((r) => !r.read_at);
+    return runs.slice(0, opts?.limit ?? 100);
+  },
+  automationUnreadCount: async () => ({
+    count: getStore<import('./types').AutomationRun[]>('henry:automation_runs', [])
+      .filter((r) => !r.read_at && r.status !== 'running').length,
+  }),
+  automationMarkRunRead: async (id) => {
+    const runs = getStore<import('./types').AutomationRun[]>('henry:automation_runs', []);
+    const r = runs.find((x) => x.id === id);
+    if (r) { r.read_at = new Date().toISOString(); setStore('henry:automation_runs', runs); }
+    return { ok: true };
+  },
+  automationMarkAllRunsRead: async () => {
+    const runs = getStore<import('./types').AutomationRun[]>('henry:automation_runs', []);
+    const at = new Date().toISOString();
+    let count = 0;
+    for (const r of runs) if (!r.read_at) { r.read_at = at; count++; }
+    setStore('henry:automation_runs', runs);
+    return { ok: true, count };
+  },
+  automationClearRuns: async () => {
+    setStore('henry:automation_runs', []);
+    return { ok: true };
+  },
+  automationAbort: async () => ({ ok: false, error: 'Routines require the Henry desktop app.' }),
+  automationIsRunning: async () => ({ running: false }),
+  onAutomationRunChanged: () => () => {},
+
+  // ── PrimeTech marketplace (web: catalogue only, no filesystem) ──
+  marketplaceList: async () => ({ manifest: 'web', version: 0, entries: [], problems: ['The marketplace catalogue is only available in the desktop app.'], fetchedAt: new Date().toISOString() }),
+  marketplaceStates: async () => ({}),
+  marketplaceFetch: async () => ({ ok: false, error: 'Marketplace downloads require the Henry desktop app.' }),
+  marketplaceOpenEntry: async () => ({ ok: false, error: 'Marketplace requires the Henry desktop app.' }),
+  marketplaceReveal: async () => ({ ok: false, error: 'Marketplace requires the Henry desktop app.' }),
+  marketplaceHistory: async () => [],
+  marketplaceRemove: async () => ({ ok: true }),
+  getMemoryGraph: async () => {
+    // Web mode has the same layer data in localStorage; reuse the same shape.
+    const nodes: import('./types').MemoryGraphNode[] = [];
+    const edges: import('./types').MemoryGraphEdge[] = [];
+    const add = (type: import('./types').MemoryNodeType, id: string, label: string, detail: string) => {
+      if (label) nodes.push({ id: `${type}:${id}`, type, label, detail, weight: 0.5, updatedAt: null });
+    };
+    for (const p of getStore<Record<string, unknown>[]>('henry:projects', [])) {
+      add('project', String(p.id), String(p.name ?? ''), String(p.status ?? 'project'));
+    }
+    for (const g of getStore<Record<string, unknown>[]>('henry:goals', [])) {
+      add('goal', String(g.id), String(g.title ?? ''), String(g.status ?? 'goal'));
+    }
+    for (const c of getStore<Record<string, unknown>[]>('henry:commitments', [])) {
+      add('commitment', String(c.id), String(c.description ?? ''), String(c.status ?? 'commitment'));
+      if (c.project_id) {
+        edges.push({ from: `commitment:${String(c.id)}`, to: `project:${String(c.project_id)}`, type: 'commitment_in_project', weight: 0.8 });
+      }
+    }
+    for (const m of getStore<Record<string, unknown>[]>('henry:milestones', [])) {
+      add('milestone', String(m.id), String(m.title ?? ''), String(m.milestone_type ?? 'milestone'));
+      if (m.project_id) {
+        edges.push({ from: `milestone:${String(m.id)}`, to: `project:${String(m.project_id)}`, type: 'milestone_in_project', weight: 0.75 });
+      }
+    }
+    return { ok: true, nodes, edges };
+  },
 
   // ── Memory — Deep Context + Where-We-Left-Off ──────────────────────────────
   buildDeepContext: async (params) => {
@@ -1145,63 +1310,6 @@ const henryAPI: Window['henryAPI'] = {
     return { id };
   },
 
-  scriptureLookup: async (reference) => {
-    const scriptureStore = getStore<Record<string, import('./henry/scriptureStore').ScriptureEntry>>('henry:scripture', {});
-    const key = reference.toLowerCase().trim();
-    const entry = scriptureStore[key];
-    const { parseScriptureReference } = await import('./henry/scriptureReference');
-    const parseResult = parseScriptureReference(reference);
-    if (entry) {
-      return {
-        found: true,
-        parsed: parseResult.ok ? parseResult.value : null,
-        normalizedReference: parseResult.ok ? parseResult.value.normalizedReference : undefined,
-        text: entry.text,
-        sourceProfileId: entry.sourceProfileId,
-        sourceLabel: entry.sourceLabel,
-        notes: entry.notes,
-        entry,
-      };
-    }
-    return {
-      found: false,
-      parsed: parseResult.ok ? parseResult.value : null,
-      parseError: parseResult.ok ? undefined : parseResult.error,
-    };
-  },
-  scriptureImport: async (entries) => {
-    const scriptureStore = getStore<Record<string, import('./henry/scriptureStore').ScriptureEntry>>('henry:scripture', {});
-    let imported = 0;
-    for (const entry of entries) {
-      const key = entry.reference.toLowerCase().trim();
-      scriptureStore[key] = {
-        id: uuidv4(),
-        reference: entry.reference,
-        normalizedReference: entry.reference,
-        book: '',
-        bookSlug: '',
-        chapter: 0,
-        verseStart: 0,
-        verseEnd: 0,
-        text: entry.text,
-        sourceProfileId: entry.sourceProfileId ?? null,
-        sourceLabel: entry.sourceLabel ?? null,
-        notes: entry.notes ?? null,
-        createdAt: now(),
-      };
-      imported++;
-    }
-    setStore('henry:scripture', scriptureStore);
-    return { imported, skipped: 0, errors: [] };
-  },
-  scriptureCount: async () => {
-    const scriptureStore = getStore<Record<string, unknown>>('henry:scripture', {});
-    return Object.keys(scriptureStore).length;
-  },
-  memoryGetAllFacts: async () => [],
-  memoryDeleteFact: async (_id: string) => {},
-  memorySaveFact: async (_f: unknown) => {},
-  memoryGetPersonalMemory: async () => [],
   recordingsList: async () => [],
   recordingsGet: async (_id: string) => null,
   recordingsSave: async (_r: unknown) => {},
@@ -1209,11 +1317,6 @@ const henryAPI: Window['henryAPI'] = {
   exportBackup: async () => ({ ok: false, error: 'Not available in browser' }),
   captureList: async (_limit?: number) => [],
   captureSave: async (_c: unknown) => ({ id: '' }),
-  scriptureDownloadKJV: async (_books?: string[]) => ({ imported: 0, errors: [] as string[], books: 0 }),
-  scriptureSearch: async (_q: string) => ([] as unknown[]),
-  pickScriptureImportJson: async () => {
-    return { canceled: true, content: null };
-  },
 
   readDirectory: async (dirPath) => {
     const path = dirPath || '/workspace';
@@ -1470,24 +1573,6 @@ const henryAPI: Window['henryAPI'] = {
   onUpdateAvailable: () => () => {},
   onUpdateDownloaded: () => () => {},
 
-  createTask: async (params: { description: string; type: string; priority?: number; payload?: unknown }) => {
-    const { v4: uuid } = await import('uuid');
-    const task = {
-      id: uuid(),
-      description: params.description,
-      type: params.type,
-      priority: params.priority ?? 5,
-      status: 'pending' as const,
-      payload: params.payload ? JSON.stringify(params.payload) : undefined,
-      created_at: new Date().toISOString(),
-    };
-    const tasks = getStore<any[]>('henry:tasks', []);
-    tasks.unshift(task);
-    setStore('henry:tasks', tasks);
-    emit('task:update', task);
-    return { id: task.id };
-  },
-
   whisperTranscribe: async (audioBlob: Blob, apiKey: string): Promise<string> => {
     // Groq Whisper validates by file extension — derive correct one from MIME type
     const MIME_TO_EXT: Record<string, string> = {
@@ -1527,6 +1612,7 @@ const syncMock = {
   syncGetState: async () => ({
     running: false,
     port: 4242,
+    localIp: '127.0.0.1',
     tunnelUrl: null,
     pairToken: null,
     pairTokenExpiry: 0,
@@ -1554,8 +1640,18 @@ const syncMock = {
 // The preload sets window.henryAPI synchronously via contextBridge before
 // any renderer JS runs. If it exists here, it IS the real Electron IPC.
 // No flag detection needed — presence of henryAPI = real Electron.
+// The sync/companion stubs are part of the web-mode surface. They were
+// declared but never merged, so syncStart/syncGetState and friends were simply
+// undefined in the PWA build.
+// The stubs are deliberately narrower than the real IPC types (web mode has
+// no sync server), so this is an explicit widening at the merge point.
+const mergedWebApi: Window['henryAPI'] = {
+  ...(henryAPI as Window['henryAPI']),
+  ...(syncMock as unknown as Partial<Window['henryAPI']>),
+};
+
 if (!window.henryAPI) {
-  window.henryAPI = henryAPI;
+  window.henryAPI = mergedWebApi;
   log.debug('[webMock] Installed — no preload detected (web/dev mode)');
 } else {
   log.debug('[webMock] Skipped — real Electron IPC active (preload set henryAPI)');

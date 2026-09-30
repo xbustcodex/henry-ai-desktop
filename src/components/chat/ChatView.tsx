@@ -1,13 +1,12 @@
 import { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { incrementUsage, getTodayUsage, getRemainingRequests, isNearLimit, canUseHenryProxy } from '../../henry/proxyUsage';
-import { hasUsableBackend } from '../../henry/backendStatus';
+import { hasUsableBackend, getBackendStatus } from '../../henry/backendStatus';
 import { toast, promptDialog } from '../ui/Toast';
 import { useStore } from '../../store';
 import { useAmbientStore } from '../../henry/ambientStateStore';
 import type { HenryLeanMemoryParts, Message } from '../../types';
 import ChatInput from './ChatInput';
 import EngineSelector from './EngineSelector';
-import ScriptureToolsPanel from './ScriptureToolsPanel';
 import MemoryAwarenessPanel from './MemoryAwarenessPanel';
 import Design3DReferencePanel from './Design3DReferencePanel';
 import WriterDraftLibrary from './WriterDraftLibrary';
@@ -15,6 +14,7 @@ import CreateTaskFromMessageModal from './CreateTaskFromMessageModal';
 import WorkspaceContextStrip from './WorkspaceContextStrip';
 import ExportPackBuilder from './ExportPackBuilder';
 import MessageBubble from './MessageBubble';
+import { isMacOS, isLinux, isWindows } from '../../utils/platform';
 import {
   buildCompanionStreamSystemPrompt,
   buildLightSystemPrompt,
@@ -70,13 +70,6 @@ import {
   sliceRecentThreadMessages,
 } from '@/henry/memoryContext';
 import {
-  BIBLE_SOURCE_PROFILES,
-  DEFAULT_BIBLICAL_SOURCE_PROFILE_ID,
-  type BibleSourceProfileId,
-  getBibleSourceProfile,
-  isBibleSourceProfileId,
-} from '@/henry/biblicalProfiles';
-import {
   DEFAULT_WRITER_DOCUMENT_TYPE_ID,
   WRITER_DOCUMENT_TYPES,
   type WriterDocumentTypeId,
@@ -105,10 +98,6 @@ import {
   HENRY_DESIGN3D_REF_CHANGED_EVENT,
   readLastWorkspaceFilePath,
 } from '@/henry/design3dReferenceContext';
-import {
-  formatScriptureLookupForPrompt,
-  lookupScriptureFromUserMessage,
-} from '@/henry/scriptureLookup';
 import {
   buildSuggestedTaskFromMessage,
   resolveWorkspaceLinkageForTask,
@@ -156,13 +145,6 @@ import {
 } from '@/henry/webTools';
 import { shouldUseSelfTools, runSelfTools } from '@/henry/selfRepairTools';
 import { logError } from '@/henry/selfRepairStore';
-import {
-  absorbBible,
-  getBibleCorpusStatus,
-  getBibleContextForPrompt,
-  type BibleCorpusStatus,
-  type LoadProgress,
-} from '@/henry/bibleCorpus';
 import { logAction } from '@/henry/auditLog';
 import { extractHtmlFromMessage } from '@/henry/builderPreview';
 import { detectEmotionalState, buildEmotionBlock } from '@/henry/emotionDetector';
@@ -178,7 +160,7 @@ import { formatDeepContext } from '@/henry/memoryRetrieval';
 import BuilderPreviewPanel from './BuilderPreviewPanel';
 import { useSharedBrainState } from '../../brain/sharedState';
 import { hasAnythingToSurface, evaluateInitiative } from '../../core/initiative/initiativeEngine';
-import { parseDelegation, executeDelegation } from '@/henry/delegationInterceptor';
+import { parseDelegation, executeDelegation, parseAppLink } from '@/henry/delegationInterceptor';
 import { logFeatureGap, learnPref } from '@/henry/selfAssessment';
 import {
   CODER_ENGINE_SETTING_KEY,
@@ -195,7 +177,6 @@ import {
 } from '@/henry/coderEngine';
 
 const HENRY_OPERATING_MODE_KEY = 'henry_operating_mode';
-const HENRY_BIBLICAL_PROFILE_KEY = 'henry_biblical_source_profile';
 const HENRY_WRITER_DOCUMENT_TYPE_KEY = 'henry_writer_document_type';
 const HENRY_DESIGN3D_WORKFLOW_KEY = 'henry_design3d_workflow_type';
 
@@ -209,15 +190,6 @@ function readStoredOperatingMode(): HenryOperatingMode {
   return 'companion';
 }
 
-function readStoredBiblicalProfile(): BibleSourceProfileId {
-  try {
-    const raw = localStorage.getItem(HENRY_BIBLICAL_PROFILE_KEY);
-    if (raw && isBibleSourceProfileId(raw)) return raw;
-  } catch {
-    /* ignore */
-  }
-  return DEFAULT_BIBLICAL_SOURCE_PROFILE_ID;
-}
 
 function readStoredWriterDocumentType(): WriterDocumentTypeId {
   try {
@@ -242,7 +214,6 @@ function readStoredDesign3dWorkflow(): Design3DWorkflowTypeId {
 const MODE_HUMAN_LABELS: Record<HenryOperatingMode, string> = {
   companion: 'Chat',
   writer: 'Writing',
-  biblical: 'Bible Study',
   developer: 'Code',
   builder: 'App Builder',
   design3d: '3D / Design',
@@ -253,26 +224,8 @@ const MODE_HUMAN_LABELS: Record<HenryOperatingMode, string> = {
   business: 'Business',
 };
 
-const BIBLICAL_BOOKS = [
-  'genesis','exodus','leviticus','numbers','deuteronomy','joshua','judges','ruth',
-  'samuel','kings','chronicles','ezra','nehemiah','esther','job','psalm','psalms',
-  'proverbs','ecclesiastes','isaiah','jeremiah','lamentations','ezekiel','daniel',
-  'hosea','joel','amos','obadiah','jonah','micah','nahum','habakkuk','zephaniah',
-  'haggai','zechariah','malachi','matthew','mark','luke','john','acts','romans',
-  'corinthians','galatians','ephesians','philippians','colossians','thessalonians',
-  'timothy','titus','philemon','hebrews','james','peter','jude','revelation',
-  'tobit','judith','maccabees','sirach','wisdom','baruch',
-];
-
-const BIBLE_ABBR_PATTERN = /\b(gen|exo|lev|num|deu|jos|jdg|rut|sam|kgs|chr|ezr|neh|est|job|psa|pro|ecc|isa|jer|lam|eze|dan|hos|joe|amo|oba|jon|mic|nah|hab|zep|hag|zec|mal|mat|mar|luk|joh|act|rom|cor|gal|eph|phi|col|the|tim|tit|phm|heb|jam|pet|jud|rev)\w*\.?\s+\d+/i;
-
 function detectModeFromMessage(text: string, currentMode: HenryOperatingMode): HenryOperatingMode {
   const lower = text.toLowerCase();
-
-  const biblicalWords = ['verse','scripture','bible','biblical','gospel','sermon','prayer',
-    'theology','orthodox','ethiopian orthodox','fasting','liturgy','lent','holy spirit',
-    'trinity','resurrection','baptism','saint','saints','prophet','epistle','testament',
-    'covenant','church fathers','apostle','disciple','amen','hallelujah'];
 
   const devKeywords = ['debug','bug','error','function','programming','python','javascript',
     'typescript','html','css','react','api','database','algorithm','variable','syntax',
@@ -306,10 +259,6 @@ function detectModeFromMessage(text: string, currentMode: HenryOperatingMode): H
     'build a portfolio','build me a portfolio','design a website','design a web app',
     'build a todo','build a task','build a budget','build a habit tracker'];
 
-  if (BIBLE_ABBR_PATTERN.test(text)) return 'biblical';
-  if (BIBLICAL_BOOKS.some((b) => lower.includes(b))) return 'biblical';
-  if (biblicalWords.some((w) => lower.includes(w))) return 'biblical';
-
   if (builderPhrases.some((p) => lower.includes(p))) return 'builder';
 
   if (designKeywords.some((k) => lower.includes(k))) return 'design3d';
@@ -330,7 +279,6 @@ function detectModeFromMessage(text: string, currentMode: HenryOperatingMode): H
 function exportPresetForOperatingMode(mode: HenryOperatingMode): ExportPresetId {
   if (mode === 'writer') return 'writer_handoff';
   if (mode === 'design3d') return 'design3d_handoff';
-  if (mode === 'biblical') return 'biblical_study_pack';
   if (mode === 'builder') return 'mixed_workspace';
   return 'mixed_workspace';
 }
@@ -348,6 +296,35 @@ function resumeModeLabel(m: HenryOperatingMode): string {
 const HENRY_PROXY_URL = (import.meta as any).env?.VITE_HENRY_PROXY_URL || 'https://henry-proxy.henryai.workers.dev';
 const HENRY_PROXY_ENABLED = true; // proxy code path is enabled — but every call is still gated by canUseHenryProxy()
 const HENRY_PROXY_MAX_RETRIES = 1;
+
+/**
+ * True when a speech rejection is the user's own doing rather than a failure:
+ * the stop button, a new outgoing message, or switching TTS off all tear the
+ * current utterance down mid-flight. Interrupting Henry is a normal outcome
+ * and must never surface as an error.
+ */
+function isSpeechStop(err: unknown): boolean {
+  if (err instanceof Error && err.name === 'AbortError') return true;
+  const msg = err instanceof Error ? err.message : String(err ?? '');
+  return /abort|cancel|stopped|stopping|interrupted|killed|sigterm/i.test(msg);
+}
+
+/**
+ * Speak a finished reply, swallowing the rejection. Stops are silent; a real
+ * engine failure (no key, no engine, a spawn error) earns one toast so the
+ * user knows voice replies are broken instead of wondering why it went quiet.
+ */
+function speakReplySafely(
+  text: string,
+  settings: Record<string, string>,
+  providers: unknown[],
+): void {
+  void speakAssistantReply(text, settings, providers).catch((err: unknown) => {
+    if (isSpeechStop(err)) return;
+    console.warn('[Henry voice] reply speech failed:', err);
+    toast.error(`Voice reply failed: ${err instanceof Error ? err.message : String(err)}`);
+  });
+}
 
 export default function ChatView() {
   const {
@@ -376,8 +353,6 @@ export default function ChatView() {
     // Never restore design3d or writer mode on startup — always start in companion
     return (m === 'design3d' || m === 'writer') ? 'companion' : m;
   });
-  const [biblicalSourceProfileId, setBiblicalSourceProfileId] =
-    useState<BibleSourceProfileId>(readStoredBiblicalProfile);
   const [writerDocumentTypeId, setWriterDocumentTypeId] = useState<WriterDocumentTypeId>(
     readStoredWriterDocumentType
   );
@@ -397,11 +372,10 @@ export default function ChatView() {
     return null;
   });
   const [isSearching, setIsSearching] = useState(false);
+  const [pendingAttachments, setPendingAttachments] = useState<import('../../types').MessageAttachment[]>([]);
   const [lastWebSources, setLastWebSources] = useState<WebSource[]>([]);
   // Coder engine (developer mode): Claude Code CLI default, local qwen fallback
   const [coderStatus, setCoderStatus] = useState<HenryCoderStatus | null>(null);
-  const [bibleStatus, setBibleStatus] = useState<BibleCorpusStatus>({ loaded: false, bookCount: 0, verseCount: 0, sizeBytes: 0 });
-  const [bibleLoadProgress, setBibleLoadProgress] = useState<LoadProgress | null>(null);
   const [currentWeather, setCurrentWeather] = useState<WeatherSnapshot | null>(null);
   // Voice replies — persisted as the `voice_replies` setting (legacy key kept in sync).
   const [ttsEnabled, setTtsEnabled] = useState(() => useVoiceStore.getState().voiceReplies);
@@ -619,10 +593,10 @@ export default function ChatView() {
     lastSpokenMsgIdRef.current = lastMsg.id;
     if (useVoiceStore.getState().userTypedSinceReply) return; // user moved on — stay quiet
     const s = useStore.getState().settings;
-    window.henryAPI?.getProviders?.().then((providers: any[]) => {
-      void speakAssistantReply(lastMsg.content, s, providers);
+    window.henryAPI?.getProviders?.().then((providers) => {
+      speakReplySafely(lastMsg.content, s, providers);
     }).catch(() => {
-      void speakAssistantReply(lastMsg.content, s, []);
+      speakReplySafely(lastMsg.content, s, []);
     });
   }, [isStreaming, ttsEnabled, handsFreeVoice, messages]);
 
@@ -652,7 +626,6 @@ export default function ChatView() {
     saveSessionResumeSnapshot({
       lastConversationId: activeConversationId,
       operatingMode,
-      biblicalSourceProfileId,
       writerDocumentTypeId,
       design3dWorkflowTypeId,
       writerActiveDraftPath,
@@ -662,7 +635,6 @@ export default function ChatView() {
   }, [
     activeConversationId,
     operatingMode,
-    biblicalSourceProfileId,
     writerDocumentTypeId,
     design3dWorkflowTypeId,
     writerActiveDraftPath,
@@ -738,14 +710,6 @@ export default function ChatView() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(HENRY_BIBLICAL_PROFILE_KEY, biblicalSourceProfileId);
-    } catch {
-      /* ignore */
-    }
-  }, [biblicalSourceProfileId]);
-
-  useEffect(() => {
-    try {
       localStorage.setItem(HENRY_WRITER_DOCUMENT_TYPE_KEY, writerDocumentTypeId);
     } catch {
       /* ignore */
@@ -773,11 +737,6 @@ export default function ChatView() {
   // Fetch live weather once on mount (cached 30 min)
   useEffect(() => {
     getWeather().then((w) => { if (w) setCurrentWeather(w); }).catch(() => {});
-  }, []);
-
-  // Check Bible corpus status on mount (non-blocking)
-  useEffect(() => {
-    getBibleCorpusStatus().then(setBibleStatus).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -846,7 +805,6 @@ export default function ChatView() {
     setActiveConversation(null);
     setMessages([]);
     setOperatingMode('companion');
-    setBiblicalSourceProfileId(DEFAULT_BIBLICAL_SOURCE_PROFILE_ID);
     setWriterDocumentTypeId(DEFAULT_WRITER_DOCUMENT_TYPE_ID);
     setDesign3dWorkflowTypeId(DEFAULT_DESIGN3D_WORKFLOW_TYPE_ID);
     clearActiveWorkspaceContext();
@@ -868,8 +826,6 @@ export default function ChatView() {
     (recoverySnapshot?.lastConversationId &&
       conversations.find((c) => c.id === recoverySnapshot.lastConversationId)?.title) ||
     null;
-
-  const bibleProfileRecovery = getBibleSourceProfile(biblicalSourceProfileId);
 
   async function handleSaveWriterDraft(markdown: string) {
     const root = settings.workspace_path?.trim();
@@ -1033,10 +989,12 @@ export default function ChatView() {
         const result = await api.isFirstLaunch?.();
         if (!result?.isFirst) return;
         localStorage.setItem(GREETED_KEY, 'true');
+        const platform = isMacOS() ? 'Mac' : isLinux() ? 'computer' : isWindows() ? 'computer' : 'device';
+        const shortcut = isMacOS() ? '⌥Space' : 'Alt+Space';
         addMessage({
           id: crypto.randomUUID(),
           role: 'assistant',
-          content: `Hey — I'm Henry, your personal AI on your Mac.\n\nI'm connected to your tasks, habits, goals, and more. I work best when I know you:\n\n• Say **"remember that I..."** and I'll save any fact permanently\n• Ask me anything — tasks, reminders, scripture, decisions, writing\n• Press **⌥Space** from anywhere on your Mac to open me instantly\n\nWhat are you working on right now?`,
+          content: `Hey — I'm Henry, your personal AI on your ${platform.toLowerCase()}.\n\nI'm connected to your tasks, habits, goals, and more. I work best when I know you:\n\n• Say **"remember that I..."** and I'll save any fact permanently\n• Ask me anything — tasks, reminders, decisions, writing\n• Press **${shortcut}** from anywhere on your ${platform.toLowerCase()} to open me instantly\n\nWhat are you working on right now?`,
           conversation_id: activeConversationId || '',
           created_at: new Date().toISOString(),
           model: 'henry',
@@ -1267,8 +1225,17 @@ What do you want to tackle first?`);
     streamRef.current = run; // Stop button → cancelStream() → run.cancel()
   }
 
-  async function handleSend(content: string) {
-    if (!content.trim() || isStreaming) return;
+  async function handleSend(rawContent: string) {
+    if (isStreaming) return;
+    // An attachment-only message is valid: say what was shared so the turn
+    // still has a prompt for the model.
+    const autoText = pendingAttachments.length > 0 && !rawContent.trim()
+      ? `I've attached ${pendingAttachments.length} file${pendingAttachments.length === 1 ? '' : 's'}: ${pendingAttachments.map((a) => a.file_name).join(', ')}.`
+      : '';
+    const content = rawContent.trim() ? rawContent : autoText;
+    if (!content.trim()) return;
+    const attachmentsForThisMessage = pendingAttachments;
+    setPendingAttachments([]);
     cancelTTS();
     void voiceStopSpeaking(); // cut Henry off — the user is talking now
 
@@ -1332,6 +1299,14 @@ What do you want to tackle first?`);
       created_at: new Date().toISOString(),
     };
     addMessage(userMsg);
+
+    // Bind any queued attachments to the message they were sent with, so the
+    // bubbles can render them and the files stay with the conversation.
+    if (attachmentsForThisMessage.length > 0) {
+      void window.henryAPI
+        .linkAttachmentsToMessage(attachmentsForThisMessage.map((a) => a.id), userMsg.id, convId)
+        .catch(() => { /* attachments stay orphaned but the message still sends */ });
+    }
 
     // Save user message to DB
     try {
@@ -1438,13 +1413,44 @@ What do you want to tackle first?`);
     const lc = content.toLowerCase();
     if (lc.includes('task') || lc.includes('todo')) trackUsage('chat', 'tasks');
     else if (lc.includes('remind')) trackUsage('chat', 'reminders');
-    else if (lc.includes('bible') || lc.includes('verse') || lc.includes('scripture')) trackUsage('chat', 'bible');
     else if (lc.includes('remember') || lc.includes('memory') || lc.includes('save')) trackUsage('chat', 'memory');
     else if (lc.includes('goal')) trackUsage('chat', 'goals');
     else if (lc.includes('habit')) trackUsage('chat', 'habits');
     else if (lc.includes('journal') || lc.includes('write')) trackUsage('chat', 'journal');
     else if (lc.includes('finance') || lc.includes('money') || lc.includes('budget')) trackUsage('chat', 'finance');
     else trackUsage('chat', 'general');
+
+    // ── App deep links ────────────────────────────────────────────────────
+    // "show me my inbox" / "search youtube for lofi beats" — jump straight to
+    // the right screen in a known app. Local catalogue, no third-party
+    // service, and the OS routes the URL to whichever app handles it.
+    const appLink = parseAppLink(content);
+    if (appLink) {
+      setIsStreaming(true);
+      setStreamingContent('');
+      let opened = false;
+      let failure: string | undefined;
+      try {
+        const res = await window.henryAPI.computerOpenUrl(appLink.url);
+        opened = !!res?.success;
+        if (!opened) failure = res?.error;
+      } catch (e) {
+        failure = e instanceof Error ? e.message : String(e);
+      }
+      addMessage({
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: opened
+          ? `✓ ${appLink.description} — ${appLink.url}`
+          : `✗ Could not ${appLink.description.toLowerCase()}${failure ? `: ${failure}` : ''}`,
+        conversation_id: convId,
+        created_at: new Date().toISOString(),
+        model: 'computer:applink',
+        provider: 'henry',
+      });
+      setIsStreaming(false);
+      return;
+    }
 
     // ── Pre-AI delegation interceptor ─────────────────────────────────────
     // "tell ChatGPT to X" / "ask Claude to Y" — execute DIRECTLY, no AI needed
@@ -1478,7 +1484,7 @@ What do you want to tackle first?`);
     // ── Local-first router (cost-efficiency) ─────────────────────────────
     // Before spending any AI tokens, see if Henry can answer this from his
     // own SQLite. Patterns like "what colors do I have", "show my machines",
-    // "what's running low", "verse for today" are all answered instantly,
+    // "what's running low", "how much did I spend" are all answered instantly,
     // offline, with zero token cost. Falls through to AI on no match.
     try {
       const local = await routeLocally(content);
@@ -1507,19 +1513,50 @@ What do you want to tackle first?`);
     // license, do not attempt any AI call. Render an inline setup card
     // instead. This is THE wall that protects the developer from paying
     // for free-tier usage — never bypass it.
-    if (!hasUsableBackend()) {
+    if (!hasUsableBackend(settings)) {
+      const backendStatus = getBackendStatus(settings);
+      const availableOptions: string[] = [];
+      if (!backendStatus.kinds.includes('groq')) {
+        availableOptions.push(
+          '**Free Groq key (60 seconds, recommended)** — Get one at [console.groq.com/keys](https://console.groq.com/keys), then paste it in **Settings → AI Providers → Groq**. The free tier is 14,400 requests/day — plenty for normal use.'
+        );
+      }
+      if (!backendStatus.kinds.includes('ollama')) {
+        availableOptions.push(
+          '**Local Ollama (fully private, fully free)** — Install from [ollama.com](https://ollama.com/download), then Henry connects automatically.'
+        );
+      }
+      if (!backendStatus.kinds.includes('openai')) {
+        availableOptions.push(
+          '**OpenAI API key** — Add in **Settings → AI Providers → OpenAI**.'
+        );
+      }
+      if (!backendStatus.kinds.includes('anthropic')) {
+        availableOptions.push(
+          '**Anthropic API key** — Add in **Settings → AI Providers → Anthropic**.'
+        );
+      }
+      if (!backendStatus.kinds.includes('google')) {
+        availableOptions.push(
+          '**Google Gemini API key (free tier available)** — Get one at [aistudio.google.com](https://aistudio.google.com), then paste it in **Settings → AI Providers → Google**.'
+        );
+      }
+      if (!backendStatus.kinds.includes('license')) {
+        availableOptions.push(
+          '**Henry license** — If you bought one, paste it in **Settings → License**.'
+        );
+      }
+
       const setupMessage = [
         '**Henry needs an AI provider to answer.**',
         '',
-        'You have three options:',
+        availableOptions.length > 0
+          ? `You have ${availableOptions.length} option${availableOptions.length === 1 ? '' : 's'}:`
+          : 'No providers configured.',
         '',
-        '1. **Free Groq key (60 seconds, recommended)** — Get one at [console.groq.com/keys](https://console.groq.com/keys), then paste it in **Settings → AI Providers → Groq**. The free tier is 14,400 requests/day — plenty for normal use.',
+        ...availableOptions.map((opt, i) => `${i + 1}. ${opt}`),
         '',
-        '2. **Local Ollama (fully private, fully free)** — Install from [ollama.com](https://ollama.com/download), then Henry connects automatically.',
-        '',
-        '3. **Henry license** — If you bought one, paste it in **Settings → License**.',
-        '',
-        '_Henry will never charge you for AI use. Your key, your costs — Groq\'s free tier is generous enough that most people never pay anything._',
+        '_Henry will never charge you for AI use. Your keys stay local — cloud providers\' free tiers are generous enough that most people never pay anything._',
       ].join('\n');
       addMessage({
         id: crypto.randomUUID(),
@@ -1635,7 +1672,6 @@ What do you want to tackle first?`);
 
     const convTitle = conversations.find((c) => c.id === convId)?.title ?? null;
     const workspacePath = settings.workspace_path?.trim() || null;
-    const bibleProfile = getBibleSourceProfile(biblicalSourceProfileId);
     const writerType = getWriterDocumentType(writerDocumentTypeId);
     const design3dType = getDesign3DWorkflowType(design3dWorkflowTypeId);
     const lastFile = effectiveMode === 'design3d' ? design3dRefPath : null;
@@ -1660,7 +1696,6 @@ What do you want to tackle first?`);
       mode: effectiveMode,
       historyLength: threadMessagesLive.length,
       hasWorkspaceContext: !!activeWorkspaceContext,
-      isBiblicalMode: effectiveMode === 'biblical',
     });
 
     // ── Debug store: capture routing decision ─────────────────────────────
@@ -1706,15 +1741,13 @@ What do you want to tackle first?`);
     };
 
     // Build memory context: empty for LIGHT, compact for MEDIUM, full for FULL
-    let memoryContext = tier === 'light'
+    const memoryContext = tier === 'light'
       ? ''
       : buildHenryMemoryContextBlock({
           mode: effectiveMode,
           lean: tieredLean,
           workspacePathHint: workspacePath,
           conversationTitle: convTitle,
-          biblicalSourceProfileLabel:
-            effectiveMode === 'biblical' ? bibleProfile?.label ?? null : null,
           writerDocumentTypeLabel:
             effectiveMode === 'writer' ? writerType?.label ?? null : null,
           design3dWorkflowLabel:
@@ -1722,22 +1755,6 @@ What do you want to tackle first?`);
           design3dReferenceNote: design3dRefNote,
           activeWorkspaceContextBlock: wsBlock || null,
         });
-
-    if (effectiveMode === 'biblical') {
-      try {
-        const sl = await lookupScriptureFromUserMessage(content);
-        if (sl) {
-          const bp = getBibleSourceProfile(biblicalSourceProfileId);
-          const scriptureBlock = formatScriptureLookupForPrompt(sl, {
-            activeBibleProfileLabel: bp?.label ?? null,
-            activeBibleProfileId: biblicalSourceProfileId,
-          });
-          memoryContext = [memoryContext.trim(), scriptureBlock].filter(Boolean).join('\n\n');
-        }
-      } catch {
-        /* Local scripture lookup is optional */
-      }
-    }
 
     // History: apply tier-based caps (fewer messages + shorter per-message on LIGHT)
     const history = sliceRecentThreadMessages(
@@ -1791,13 +1808,12 @@ What do you want to tackle first?`);
     let systemPrompt: string;
     if (customModeOverride?.systemPrompt) {
       systemPrompt = `${customModeOverride.systemPrompt}\n\n${memoryContext ? `## Memory Context\n${memoryContext}` : ''}`;
-    } else if (tier === 'full' || effectiveMode === 'biblical' || effectiveMode === 'writer' || effectiveMode === 'design3d') {
-      // FULL tier or mode-specific (biblical/writer/design3d) always use the rich system prompt
+    } else if (tier === 'full' || effectiveMode === 'writer' || effectiveMode === 'design3d') {
+      // FULL tier or mode-specific (writer/design3d) always use the rich system prompt
       systemPrompt = buildCompanionStreamSystemPrompt(effectiveMode, memoryContext, {
         weather: currentWeather,
         hasWebContext: webContextBlock.length > 0,
         currentView: useStore.getState().currentView,
-        ...(effectiveMode === 'biblical' ? { biblicalSourceProfileId } : {}),
         ...(effectiveMode === 'writer'
           ? { writerDocumentTypeId, writerActiveDraftRelativePath: writerActiveDraftPath }
           : {}),
@@ -1818,24 +1834,14 @@ What do you want to tackle first?`);
       }
     }
 
-    // Inject full Bible corpus context in biblical mode (IndexedDB cache, up to 100K chars)
-    let bibleContextBlock = '';
-    if (effectiveMode === 'biblical' && bibleStatus.loaded) {
-      try {
-        bibleContextBlock = await getBibleContextForPrompt(content);
-      } catch {
-        // Bible corpus unavailable — Henry falls back to training knowledge
-      }
-    }
-
     // Emotional intelligence — detect user state and adapt tone (all tiers)
     const emotionResult = detectEmotionalState(content);
     const emotionBlock = buildEmotionBlock(emotionResult);
 
     // Extra context: LIGHT skips deep memory + self-repair blocks (saves ~400–800 tokens)
     const extraContextParts = tier === 'light'
-      ? [emotionBlock, webContextBlock, bibleContextBlock]
-      : [deepContextBlock, emotionBlock, webContextBlock, bibleContextBlock, selfRepairContextBlock];
+      ? [emotionBlock, webContextBlock]
+      : [deepContextBlock, emotionBlock, webContextBlock, selfRepairContextBlock];
     const extraContext = extraContextParts.filter(Boolean).join('\n\n');
     const enrichedSystemPrompt = (extraContext
       ? `${systemPrompt}\n\n${extraContext}`
@@ -2001,13 +2007,8 @@ What do you want to tackle first?`);
       groqStream.onChunk((chunk: string) => { appendStreamingContent(chunk); });
       groqStream.onError((error: string) => {
         let errorContent: string;
-        if (/tokens per minute|token.*limit|limit.*token|request too large|tpm/i.test(error)) {
-          errorContent = '**Groq rate limit hit.** Start a **New Chat** to clear context, or wait 60 seconds.';
-        } else if (/401|invalid.*key|incorrect api/i.test(error)) {
-          errorContent = '**Groq rejected the key.** Go to **Settings → AI Providers → Groq** and re-enter your key.';
-        } else {
-          errorContent = `**Groq error:** ${error}`;
-        }
+        // Use the companionProvider to correctly attribute errors
+        errorContent = buildStreamError(companionProvider, companionModel, error);
         addMessage({ id: crypto.randomUUID(), conversation_id: convId, role: 'assistant', content: errorContent, engine: 'companion', created_at: new Date().toISOString() });
         setStreamingContent(''); setIsStreaming(false); setCompanionStatus({ status: 'idle' });
       });
@@ -2049,7 +2050,7 @@ What do you want to tackle first?`);
             `**Your options:**`,
             `- **Use the desktop app** — Henry connects to Ollama directly, no browser restrictions`,
             `- **Switch to a Cloud AI** — OpenAI, Anthropic, or Google. Add an API key in **Settings → AI Providers**`,
-            `- **iPad → Mac IP** — If Ollama is on your Mac at e.g. \`192.168.x.x\`, update the URL in **Settings → AI Providers → Ollama** (must still be served over HTTPS or via the desktop app)`,
+            `- **Remote Ollama** — If Ollama is on another machine at e.g. \`192.168.x.x\`, update the URL in **Settings → AI Providers → Ollama** (must still be served over HTTPS or via the desktop app)`,
           ].join('\n'),
           engine: 'companion',
           created_at: new Date().toISOString(),
@@ -2066,9 +2067,7 @@ What do you want to tackle first?`);
 
       // Max output tokens — sized to realistic response lengths, not theoretical max.
       // Smaller ceilings reduce TTFT because models reserve capacity before streaming.
-      const maxOutputTokens = effectiveMode === 'biblical'
-        ? 8_192
-        : presenceTier === 'quality' ? 6_000 : presenceTier === 'fast' ? 1_500 : 3_000;
+      const maxOutputTokens = presenceTier === 'quality' ? 6_000 : presenceTier === 'fast' ? 1_500 : 3_000;
 
       // Iron Gateway — route to cheapest capable path
       const gatewayResult = gatewayRoute(content, {
@@ -2625,18 +2624,6 @@ What do you want to tackle first?`);
     }
   }
 
-  async function handleAbsorbBible() {
-    if (bibleLoadProgress?.phase === 'downloading' || bibleLoadProgress?.phase === 'storing') return;
-    setBibleLoadProgress({ phase: 'downloading' });
-    try {
-      await absorbBible((p) => setBibleLoadProgress(p));
-      const status = await getBibleCorpusStatus();
-      setBibleStatus(status);
-    } catch {
-      setBibleLoadProgress({ phase: 'error', error: 'Download failed — check your connection and try again.' });
-    }
-  }
-
   function cancelStream() {
     if (streamRef.current) {
       streamRef.current.cancel();
@@ -2801,50 +2788,6 @@ What do you want to tackle first?`);
       {/* Input area */}
       <div className="shrink-0 border-t border-henry-border/30 bg-henry-surface/20 px-3 sm:px-6 py-3 sm:py-4">
         <div className="max-w-3xl mx-auto">
-          {operatingMode === 'biblical' && (
-            <>
-              {/* Bible corpus absorption panel */}
-              <div className="flex items-center gap-2 mb-2 flex-wrap">
-                {!bibleStatus.loaded && bibleLoadProgress?.phase !== 'done' ? (
-                  <button
-                    type="button"
-                    disabled={bibleLoadProgress?.phase === 'downloading' || bibleLoadProgress?.phase === 'storing' || bibleLoadProgress?.phase === 'parsing'}
-                    onClick={() => void handleAbsorbBible()}
-                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border border-henry-accent/30 bg-henry-accent/8 text-xs text-henry-accent hover:bg-henry-accent/15 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    {bibleLoadProgress?.phase === 'downloading' ? (
-                      <>
-                        <svg className="w-3 h-3 animate-spin shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity="0.2"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
-                        Downloading Bible…
-                      </>
-                    ) : bibleLoadProgress?.phase === 'parsing' ? (
-                      <>
-                        <svg className="w-3 h-3 animate-spin shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity="0.2"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
-                        Parsing…
-                      </>
-                    ) : bibleLoadProgress?.phase === 'storing' ? (
-                      <>
-                        <svg className="w-3 h-3 animate-spin shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeOpacity="0.2"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
-                        Storing{bibleLoadProgress.totalBooks ? ` (${bibleLoadProgress.booksStored ?? 0}/${bibleLoadProgress.totalBooks})` : ''}…
-                      </>
-                    ) : bibleLoadProgress?.phase === 'error' ? (
-                      <>⚠ Retry: Load Full Bible (KJV)</>
-                    ) : (
-                      <>📖 Load Full Bible into Memory</>
-                    )}
-                  </button>
-                ) : bibleStatus.loaded ? (
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border border-henry-success/25 bg-henry-success/6 text-xs text-henry-success/80">
-                    <svg className="w-3 h-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                    Full Bible loaded · {bibleStatus.bookCount} books · {bibleStatus.verseCount.toLocaleString()} verses
-                  </div>
-                ) : null}
-                {bibleLoadProgress?.phase === 'error' && (
-                  <span className="text-xs text-henry-error/80">{bibleLoadProgress.error}</span>
-                )}
-              </div>
-            </>
-          )}
           {operatingMode === 'design3d' && (
             <Design3DReferencePanel
               referencePath={design3dRefPath}
@@ -2998,36 +2941,6 @@ What do you want to tackle first?`);
                 </select>
               </label>
             )}
-            {operatingMode === 'biblical' && (
-              <label className="flex flex-col gap-1 shrink-0 text-[10px] text-henry-text-muted uppercase tracking-wide">
-                Bible version
-                <select
-                  className="text-xs font-medium normal-case tracking-normal rounded-lg border border-henry-border/40 bg-henry-surface/40 text-henry-text px-2 py-1.5 max-w-[14rem] focus:outline-none focus:ring-1 focus:ring-henry-accent/50"
-                  value={biblicalSourceProfileId}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    if (isBibleSourceProfileId(v)) setBiblicalSourceProfileId(v);
-                  }}
-                  aria-label="Bible version for Biblical mode"
-                >
-                  <optgroup label="Protestant translations">
-                    {BIBLE_SOURCE_PROFILES.filter((p) => p.category === 'protestant').map((p) => (
-                      <option key={p.id} value={p.id}>{p.label}</option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Orthodox">
-                    {BIBLE_SOURCE_PROFILES.filter((p) => p.category === 'orthodox').map((p) => (
-                      <option key={p.id} value={p.id}>{p.label}</option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Ethiopian">
-                    {BIBLE_SOURCE_PROFILES.filter((p) => p.category === 'ethiopian' || (p.category === 'study' && p.canonFamily === 'ethiopian_orthodox')).map((p) => (
-                      <option key={p.id} value={p.id}>{p.label}</option>
-                    ))}
-                  </optgroup>
-                </select>
-              </label>
-            )}
             <div className="flex-1">
               
               {/* Smart follow-up suggestion chips */}
@@ -3066,6 +2979,9 @@ What do you want to tackle first?`);
                 onToggleAgentMode={toggleAgentMode}
                 onSearch={handleSearch}
                 isSearching={isSearching}
+                pendingAttachments={pendingAttachments}
+                onAttachmentsChange={setPendingAttachments}
+                conversationId={activeConversationId ?? undefined}
                 ambientMode={settings.ambient_mode === 'on'}
                 onFileIngest={(content, fileName) => {
                   handleSend(
@@ -3075,16 +2991,6 @@ What do you want to tackle first?`);
               />
             </div>
           </div>
-          {operatingMode === 'biblical' && (
-            <p className="text-[10px] text-henry-text-muted mt-2 leading-relaxed">
-              Henry responds in the language and style of your selected Bible version. Local scripture store
-              is used when verses are imported — otherwise Henry renders in that version's register and labels
-              it clearly. Scripture-first: scripture, commentary, interpretation, and speculation are always
-              labeled distinctly. Try{' '}
-              <span className="text-henry-text-dim">John 3:16</span> or{' '}
-              <span className="text-henry-text-dim">Explain Psalm 23</span>.
-            </p>
-          )}
 
           {operatingMode === 'developer' && coderAvailable() && (
             <p className="text-[10px] text-henry-text-muted mt-2 leading-relaxed">
@@ -3158,7 +3064,6 @@ What do you want to tackle first?`);
           saveSessionResumeSnapshot({
             lastConversationId: st.activeConversationId,
             operatingMode,
-            biblicalSourceProfileId,
             writerDocumentTypeId,
             design3dWorkflowTypeId,
             writerActiveDraftPath,
@@ -3274,17 +3179,6 @@ const DISCOVERY_MODES: Array<{
       'Help me write an email to my landlord',
       'Draft a short essay about gratitude',
       'Give me an outline for a 5-page report',
-    ],
-  },
-  {
-    mode: 'biblical',
-    icon: '📖',
-    title: 'Bible Study',
-    desc: 'Explore scripture, theology, and history. Ethiopian Orthodox tradition aware.',
-    examples: [
-      'Explain the meaning of John 3:16',
-      'What does the Ethiopian Orthodox Church teach about fasting?',
-      'Walk me through Psalm 23 verse by verse',
     ],
   },
   {

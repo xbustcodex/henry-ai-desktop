@@ -11,6 +11,7 @@
  * Each tab lets you see what Henry knows, add new entries, edit, or delete.
  */
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import MemoryGraphView from './MemoryGraphView';
 import { sendToHenry } from '../../actions/store/chatBridgeStore';
 import { useStore } from '../../store';
 import { confirmDialog, toast } from '../ui/Toast';
@@ -39,7 +40,7 @@ function L({ children }: { children: React.ReactNode }) {
   return <label className="text-[10px] uppercase tracking-wider text-henry-text-muted mb-1.5 block">{children}</label>;
 }
 
-type TabId = 'facts' | 'projects' | 'goals' | 'story' | 'live';
+type TabId = 'facts' | 'projects' | 'goals' | 'story' | 'live' | 'graph';
 
 const TABS: { id: TabId; label: string; icon: string }[] = [
   { id: 'facts',    label: 'Facts',    icon: '🧠' },
@@ -47,6 +48,7 @@ const TABS: { id: TabId; label: string; icon: string }[] = [
   { id: 'goals',    label: 'Goals',    icon: '◎' },
   { id: 'story',    label: 'Story',    icon: '📜' },
   { id: 'live',     label: 'Live',     icon: '⚡' },
+  { id: 'graph',    label: 'Graph',    icon: '🕸️' },
 ];
 
 export default function MemoryPanel() {
@@ -218,7 +220,15 @@ export default function MemoryPanel() {
 
   async function saveMilestone() {
     if (!milestoneForm.title.trim() || !api?.saveMilestone) return;
-    await api.saveMilestone(milestoneForm);
+    // The IPC handler takes camelCase (milestoneType/significanceScore). The
+    // form state is snake_case, so passing it straight through silently
+    // dropped the chosen type — every milestone was stored as "win" at 0.7.
+    await api.saveMilestone({
+      title: milestoneForm.title,
+      summary: milestoneForm.summary,
+      milestoneType: milestoneForm.milestone_type,
+      significanceScore: milestoneForm.significance_score,
+    });
     setMilestoneForm({ title: '', summary: '', milestone_type: 'win', significance_score: 0.7 });
     setAdding(null);
     void reload();
@@ -231,6 +241,7 @@ export default function MemoryPanel() {
     goals: goals.length + commitments.filter(c => c.status === 'open' || c.status === 'in_progress').length,
     story: narratives.length + milestones.length,
     live: 0,
+    graph: projects.length + goals.length + facts.length + commitments.length + milestones.length + narratives.length,
   };
 
   // ── Filter for search across visible tab ───────────────────────────────
@@ -735,6 +746,11 @@ export default function MemoryPanel() {
               </div>
             )}
           </>
+        )}
+        {tab === 'graph' && (
+          <div className="flex-1 min-h-0">
+            <MemoryGraphView />
+          </div>
         )}
       </div>
     </div>

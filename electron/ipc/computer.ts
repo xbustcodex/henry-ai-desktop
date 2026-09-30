@@ -15,6 +15,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { classifyCommand } from './_commandSafety';
+import { detectLinuxSession, isWaylandSession } from './sessionDetect';
 import { launchApplication, openUrl } from '../../src/platform/launcher';
 import { discoverInstalledApps, InstalledApp } from '../../src/platform/installedApps';
 
@@ -25,11 +26,38 @@ function appleScriptString(s: string): string {
   return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
+/**
+ * Current CPU utilisation on Linux, measured from two /proc/stat samples.
+ * Returns 0 when it cannot be measured — never a fabricated number.
+ */
+async function linuxCpuPercent(): Promise<number> {
+  const fs = await import('fs');
+  const read = (): number[] | null => {
+    try {
+      const line = fs.readFileSync('/proc/stat', 'utf8').split('\n')[0];
+      const parts = line.trim().split(/\s+/).slice(1).map(Number);
+      if (parts.length < 4 || parts.some((n) => !Number.isFinite(n))) return null;
+      const idle = parts[3] + (parts[4] ?? 0);
+      const total = parts.reduce((a, b) => a + b, 0);
+      return [total, idle];
+    } catch { return null; }
+  };
+  const first = read();
+  if (!first) return 0;
+  await new Promise((r) => setTimeout(r, 250));
+  const second = read();
+  if (!second) return 0;
+  const totalDelta = second[0] - first[0];
+  const idleDelta = second[1] - first[1];
+  if (totalDelta <= 0) return 0;
+  return Math.max(0, Math.min(100, ((totalDelta - idleDelta) / totalDelta) * 100));
+}
+
 export function registerComputerHandlers(winGetter: WindowGetter) {
   const platform = process.platform;
 
   // ── Helper: run a shell command and capture output ───────────────────
-  function runCmd(command: string, timeout = 15000): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  function runCmd(command: string, timeout = 600000): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     return new Promise((resolve) => {
       const shell = platform === 'win32' ? ['cmd', ['/c', command]] : ['sh', ['-c', command]];
       const child = spawn(shell[0] as string, shell[1] as string[], { timeout });
@@ -42,43 +70,80 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
     });
   }
 
+  /**
+   * Run a binary with an argv array — no shell, so renderer/AI supplied text
+   * can never be interpreted as shell syntax. Use this instead of runCmd for
+   * anything that embeds user or model text.
+   */
+  function runBin(cmd: string, args: string[], timeout = 15000): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    // Promise.withResolvers is unavailable at this tsconfig lib target, so the
+    // executor form is used deliberately here.
+    const { promise, resolve } = (() => {
+      let r!: (v: { stdout: string; stderr: string; exitCode: number }) => void;
+      const p = new Promise<{ stdout: string; stderr: string; exitCode: number }>((res) => { r = res; });
+      return { promise: p, resolve: r };
+    })();
+    const child = spawn(cmd, args, { timeout });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+    child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+    child.on('close', (code: number | null) => resolve({ stdout, stderr, exitCode: code ?? -1 }));
+    child.on('error', (e: Error) => resolve({ stdout: '', stderr: e.message, exitCode: -1 }));
+    return promise;
+  }
+
   // ── Screenshot ────────────────────────────────────────────────────────
+  // Delegates to the shared capture implementation so this handler and the
+  // capability probe use the SAME backend ladder. It used to shell out to
+  // `scrot || import` while the probe advertised a four-backend list, so a
+  // "ready" capability could describe a backend this handler never ran.
   ipcMain.handle('computer:screenshot', async (_event, params: { region?: { x: number; y: number; w: number; h: number } } = {}) => {
-    const tmpFile = path.join(os.tmpdir(), `henry_screenshot_${Date.now()}.png`);
-    let cmd: string;
-
-    if (platform === 'darwin') {
-      if (params.region) {
-        const { x, y, w, h } = params.region;
-        cmd = `screencapture -x -R${x},${y},${w},${h} "${tmpFile}"`;
-      } else {
-        cmd = `screencapture -x "${tmpFile}"`;
-      }
-    } else if (platform === 'win32') {
-      // PowerShell screenshot
-      cmd = `powershell -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen | ForEach-Object { $bmp = New-Object System.Drawing.Bitmap($_.Bounds.Width, $_.Bounds.Height); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($_.Bounds.Location, [System.Drawing.Point]::Empty, $_.Bounds.Size); $bmp.Save('${tmpFile}') }"`;
-    } else {
-      // Linux: use scrot or import
-      if (params.region) {
-        const { x, y, w, h } = params.region;
-        cmd = `scrot -a ${x},${y},${w},${h} "${tmpFile}" 2>/dev/null || import -window root -crop ${w}x${h}+${x}+${y} "${tmpFile}" 2>/dev/null`;
-      } else {
-        cmd = `scrot "${tmpFile}" 2>/dev/null || import -window root "${tmpFile}" 2>/dev/null`;
-      }
-    }
-
-    const result = await runCmd(cmd, 10000);
-    if (result.exitCode !== 0) {
-      return { success: false, error: result.stderr || 'Screenshot failed. Check Screen Recording permission in System Settings.', base64: null };
-    }
-
     try {
-      const data = fs.readFileSync(tmpFile);
-      const base64 = data.toString('base64');
-      fs.unlinkSync(tmpFile);
-      return { success: true, base64, mimeType: 'image/png' };
-    } catch (e: any) {
-      return { success: false, error: e.message, base64: null };
+      const { captureScreenshot } = await import('../../src/platform/screenshot');
+      const result = await captureScreenshot(params.region);
+      if (!result.success) {
+        return {
+          success: false,
+          base64: null,
+          error: result.error
+            || (platform === 'darwin'
+              ? 'Screenshot failed. Check Screen Recording permission in System Settings.'
+              : 'No screenshot backend could capture the screen.'),
+        };
+      }
+      return { success: true, base64: result.base64 ?? null, mimeType: result.mimeType };
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : String(e);
+      console.error('[computer:screenshot]', message);
+      return { success: false, base64: null, error: message };
+    }
+  });
+
+  // ── Close a window by title ────────────────────────────────────────────
+  // HQPanel used to build `pkill -f "<title>"` in the renderer and POST it to
+  // /computer/shell. Titles come from wmctrl, i.e. from arbitrary window
+  // content, so a title containing a quote or `$(...)` became shell input.
+  // `wmctrl -c` takes the title as a plain argument — no shell involved.
+  ipcMain.handle('computer:closeApp', async (_event, appName: string) => {
+    const name = (appName ?? '').trim();
+    if (!name) return { success: false, error: 'No window title supplied.' };
+    try {
+      if (platform === 'darwin') {
+        const escaped = name.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        const r = await runBin('osascript', ['-e', `tell application "${escaped}" to quit`], 5000);
+        return { success: r.exitCode === 0, error: r.exitCode !== 0 ? r.stderr : undefined };
+      }
+      if (platform === 'win32') {
+        const r = await runBin('taskkill', ['/f', '/im', `${name}.exe`], 5000);
+        return { success: r.exitCode === 0, error: r.exitCode !== 0 ? r.stderr : undefined };
+      }
+      // Linux: close the window itself rather than killing a matching process.
+      const r = await runBin('wmctrl', ['-c', name], 5000);
+      if (r.exitCode === 0) return { success: true };
+      return { success: false, error: r.stderr || `Could not close "${name}".` };
+    } catch (e: unknown) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
     }
   });
 
@@ -270,8 +335,8 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
       const { clipboard } = await import('electron');
       const os = await import('os');
 
-      const sessionType = process.env.XDG_SESSION_TYPE || process.env.XDG_CURRENT_DESKTOP || 'unknown';
-      const isWayland = sessionType === 'wayland';
+      const sessionType = detectLinuxSession();
+      const isWayland = isWaylandSession();
       const isWSL = (process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP) ? true : false;
 
       // Clipboard capability (Electron clipboard works everywhere)
@@ -365,35 +430,30 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
           }
         }
 
-        // Screen capture
-        const scrot = await checkBin(['scrot']);
-        const importBin = await checkBin(['import']);
-        const gnomeScreenshot = await checkBin(['gnome-screenshot']);
-        const xfceScreenshot = await checkBin(['xfce4-screenshooter']);
-        const grim = await checkBin(['grim']);
+        // Screen capture — PROBED, not assumed.
+        //
+        // This used to `which` each binary and report the first one present.
+        // On this machine `import` (ImageMagick 7) exists but cannot grab a
+        // frame in any invocation, so Henry advertised a backend that always
+        // failed. probeScreenshotBackend runs the SAME ladder capture uses and
+        // reports the first one that actually produced an image.
+        const { probeScreenshotBackend } = await import('../../src/platform/screenshot');
+        const probed = await probeScreenshotBackend();
 
-        let bestBackend = '';
-        let regionCapture = false;
-        let windowCapture = false;
-
-        if (scrot) { bestBackend = 'scrot'; regionCapture = true; windowCapture = false; }
-        else if (importBin) { bestBackend = 'import (ImageMagick)'; regionCapture = true; windowCapture = true; }
-        else if (gnomeScreenshot) { bestBackend = 'gnome-screenshot'; regionCapture = true; windowCapture = true; }
-        else if (xfceScreenshot) { bestBackend = 'xfce4-screenshooter'; regionCapture = true; windowCapture = true; }
-        else if (grim) { bestBackend = 'grim'; regionCapture = true; windowCapture = false; }
-
-        if (bestBackend) {
+        if (probed) {
           screenCaptureStatus = {
             status: 'ready',
-            backend: bestBackend,
-            details: `Linux screenshot via ${bestBackend}`,
-            regionCapture,
-            windowCapture
+            backend: probed.name,
+            details: `Linux screenshot via ${probed.name} (verified by test capture)`,
+            regionCapture: probed.region,
+            windowCapture: probed.window
           };
         } else {
           screenCaptureStatus = {
             status: 'dependency-missing',
-            details: `No screenshot backend available (${sessionType}). Install scrot, ImageMagick (import), gnome-screenshot, or grim`
+            details:
+              `No screenshot backend could actually capture (${sessionType}). ` +
+              'Install scrot (recommended) or grim, then re-check.'
           };
         }
 
@@ -468,24 +528,65 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
       const cpus = os.default.cpus();
       const uptime = os.default.uptime();
 
-      // CPU usage via top (1-second snapshot)
+      // CPU usage. `top -l 1` is macOS-only; on Linux/Windows it always threw
+      // and the catch filled in a RANDOM number, so the HQ/system panel showed
+      // invented load. Each platform now measures for real.
       let cpuPercent = 0;
-      try {
-        const topOut = execSync("top -l 1 -s 0 | grep 'CPU usage'", { encoding: 'utf8', timeout: 3000 });
-        const m = topOut.match(/([\d.]+)% user.*?([\d.]+)% sys/);
-        if (m) cpuPercent = parseFloat(m[1]) + parseFloat(m[2]);
-      } catch { cpuPercent = Math.random() * 30 + 10; }
+      if (platform === 'darwin') {
+        try {
+          const topOut = execSync("top -l 1 -s 0 | grep 'CPU usage'", { encoding: 'utf8', timeout: 3000 });
+          const m = topOut.match(/([\d.]+)% user.*?([\d.]+)% sys/);
+          if (m) cpuPercent = parseFloat(m[1]) + parseFloat(m[2]);
+        } catch { cpuPercent = 0; }
+      } else if (platform === 'linux') {
+        cpuPercent = await linuxCpuPercent();
+      } else {
+        try {
+          const out = execSync(
+            'powershell -NoProfile -Command "(Get-Counter \'\\Processor(_Total)\\% Processor Time\').CounterSamples.CookedValue"',
+            { encoding: 'utf8', timeout: 5000 },
+          );
+          cpuPercent = parseFloat(out.trim()) || 0;
+        } catch { cpuPercent = 0; }
+      }
 
       // Battery
       const battery = { percent: null as number|null, charging: false, time: '' };
-      try {
-        const battOut = execSync('pmset -g batt', { encoding: 'utf8', timeout: 2000 });
-        const bp = battOut.match(/(\d+)%/);
-        if (bp) battery.percent = parseInt(bp[1]);
-        battery.charging = /AC Power|charging/.test(battOut);
-        const bt = battOut.match(/(\d+:\d+) remaining/);
-        if (bt) battery.time = bt[1];
-      } catch { /* no battery (desktop) */ }
+      if (platform === 'darwin') {
+        try {
+          const battOut = execSync('pmset -g batt', { encoding: 'utf8', timeout: 2000 });
+          const bp = battOut.match(/(\d+)%/);
+          if (bp) battery.percent = parseInt(bp[1]);
+          battery.charging = /AC Power|charging/.test(battOut);
+          const bt = battOut.match(/(\d+:\d+) remaining/);
+          if (bt) battery.time = bt[1];
+        } catch { /* no battery (desktop) */ }
+      } else if (platform === 'linux') {
+        // sysfs, not pmset — pmset does not exist here.
+        try {
+          const fs = await import('fs');
+          const bases = fs.readdirSync('/sys/class/power_supply')
+            .filter((d: string) => d.startsWith('BAT'));
+          if (bases.length > 0) {
+            const base = `/sys/class/power_supply/${bases[0]}`;
+            const cap = fs.readFileSync(`${base}/capacity`, 'utf8').trim();
+            const pct = parseInt(cap, 10);
+            battery.percent = Number.isFinite(pct) ? pct : null;
+            const status = fs.readFileSync(`${base}/status`, 'utf8').trim();
+            battery.charging = status === 'Charging';
+          }
+        } catch { /* desktop or unreadable sysfs */ }
+      } else {
+        try {
+          const out = execSync(
+            'powershell -NoProfile -Command "(Get-CimInstance Win32_Battery | Select-Object -First 1 -ExpandProperty EstimatedChargeRemaining)"',
+            { encoding: 'utf8', timeout: 5000 },
+          );
+          const pct = parseInt(out.trim(), 10);
+          battery.percent = Number.isFinite(pct) ? pct : null;
+          battery.charging = pct > 0;
+        } catch { /* desktop */ }
+      }
 
       // Network (active interface)
       let network = { interface: '', ip: '' };
@@ -500,13 +601,33 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
 
       // Running apps (not just processes — visible apps)
       let runningApps: string[] = [];
-      try {
-        const appsOut = execSync(
-          `osascript -e 'tell application "System Events" to get name of every process whose background only is false'`,
-          { encoding: 'utf8', timeout: 3000 }
-        );
-        runningApps = appsOut.trim().split(', ').filter(Boolean).slice(0, 20);
-      } catch { runningApps = []; }
+      if (platform === 'darwin') {
+        try {
+          const appsOut = execSync(
+            `osascript -e 'tell application "System Events" to get name of every process whose background only is false'`,
+            { encoding: 'utf8', timeout: 3000 }
+          );
+          runningApps = appsOut.trim().split(', ').filter(Boolean).slice(0, 20);
+        } catch { runningApps = []; }
+      } else if (platform === 'linux') {
+        // wmctrl -l: the last column is the window title; the window is the
+        // closest thing to a "running app" on a generic Linux desktop.
+        const res = await runBin('wmctrl', ['-l'], 4000);
+        if (res.exitCode === 0) {
+          runningApps = res.stdout.split('\n')
+            .map((line) => line.trim().split(/\s{2,}/).pop() || '')
+            .filter(Boolean)
+            .slice(0, 20);
+        }
+      } else {
+        try {
+          const appsOut = execSync(
+            'powershell -NoProfile -Command "Get-Process | Where-Object {$_.MainWindowTitle} | Select-Object -ExpandProperty ProcessName -Unique"',
+            { encoding: 'utf8', timeout: 5000 },
+          );
+          runningApps = appsOut.trim().split(/\r?\n/).filter(Boolean).slice(0, 20);
+        } catch { runningApps = []; }
+      }
 
       // Disk usage
       const disk = { total: 0, free: 0 };
@@ -768,17 +889,36 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
   });
 
   // ── Kill process ─────────────────────────────────────────────────────────
-  ipcMain.handle('computer:killProcess', async (_e, pid: number) => {
-    const { execSync } = await import('child_process');
+  ipcMain.handle('computer:killProcess', async (_e, pid: unknown) => {
+    const { execFile } = await import('child_process');
     const platform = process.platform;
+    // IPC payloads are not type-checked at runtime. Interpolating the raw
+    // value into a shell string meant `kill 1; rm -rf ~` was one string away.
+    const n = typeof pid === 'number' ? pid : Number(pid);
+    if (!Number.isInteger(n) || n <= 0) {
+      return { ok: false, error: 'Invalid PID' };
+    }
     try {
-      if (platform === 'win32') {
-        execSync(`taskkill /PID ${pid} /F`, { timeout: 2000 });
-      } else {
-        execSync(`kill ${pid}`, { timeout: 2000 });
-      }
+      // Must be awaited: the previous fire-and-forget form resolved before the
+      // process was signalled, so killing a PID we do not own still reported
+      // success (ESRCH/EPERM were discarded) and the UI removed the row.
+      const { name: bin, args: argv } =
+        platform === 'win32'
+          ? { name: 'taskkill', args: ['/PID', String(n), '/F'] }
+          : { name: 'kill', args: [String(n)] };
+      const { promise, resolve, reject } = (() => {
+        let res!: (v: null) => void;
+        let rej!: (e: Error) => void;
+        const p = new Promise<null>((a, b) => { res = a; rej = b; });
+        return { promise: p, resolve: res, reject: rej };
+      })();
+      execFile(bin, argv, { timeout: 2000 }, (err) => {
+        if (err) reject(err instanceof Error ? err : new Error(String(err)));
+        else resolve(null);
+      });
+      await promise;
       return { ok: true };
-    } catch (e) { return { ok: false, error: String(e) }; }
+    } catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) }; }
   });
 
   // ── Schedule / automation ─────────────────────────────────────────────────
@@ -827,22 +967,26 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
   // ── Type text (cross-platform) ──────────────────────────────────────────
   ipcMain.handle('computer:typeText', async (_event, text: string) => {
     try {
+      // argv form only — the previous shell string let a backslash or a $(...)
+      // inside the typed text escape the quotes and execute as a command.
       let cmd: string;
+      let args: string[];
       if (platform === 'darwin') {
         const escaped = text.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-        cmd = `osascript -e 'tell application "System Events" to keystroke "${escaped}"'`;
+        cmd = 'osascript';
+        args = ['-e', `tell application "System Events" to keystroke "${escaped}"`];
       } else if (platform === 'linux') {
-        // Use xdotool to type text
-        const escaped = text.replace(/"/g, '\\"').replace(/`/g, '\\`').replace(/\$/g, '\\$');
-        cmd = `xdotool type -- "${escaped}"`;
+        cmd = 'xdotool';
+        args = ['type', '--', text];
       } else if (platform === 'win32') {
         // Use PowerShell to send text
         const escaped = text.replace(/'/g, "''").replace(/"/g, '`"');
-        cmd = `powershell -Command "$wshell = New-Object -ComObject wscript.shell; $wshell.SendKeys('${escaped}')"`;
+        cmd = 'powershell';
+        args = ['-Command', `$wshell = New-Object -ComObject wscript.shell; $wshell.SendKeys('${escaped}')`];
       } else {
         return { success: false, error: `Unsupported platform: ${platform}` };
       }
-      const result = await runCmd(cmd, 10000);
+      const result = await runBin(cmd, args, 10000);
       return { success: result.exitCode === 0, error: result.exitCode !== 0 ? result.stderr : undefined };
     } catch (e: unknown) {
       console.error('[computer:typeText]', e instanceof Error ? e.message : String(e));
@@ -853,18 +997,35 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
   // ── Activate application (cross-platform) ──────────────────────────────────
   ipcMain.handle('computer:activateApplication', async (_event, appName: string) => {
     try {
+      // argv form only. The old Linux branch escaped just the double quote, so
+      // `$(...)`, backticks or a backslash in an app name executed as a command.
       let cmd: string;
+      let args: string[];
+      let fallback: { cmd: string; args: string[] } | null = null;
       if (platform === 'darwin') {
-        cmd = `osascript -e 'tell application "${appName.replace(/"/g, '\\"')}" to activate'`;
+        cmd = 'osascript';
+        args = ['-e', `tell application "${appName.replace(/"/g, '\\"')}" to activate`];
       } else if (platform === 'linux') {
-        // Try wmctrl first, then xdotool as fallback
-        cmd = `wmctrl -a "${appName.replace(/"/g, '\\"')}" 2>/dev/null || xdotool search --name "${appName.replace(/"/g, '\\"')}" windowactivate 2>/dev/null`;
+        cmd = 'wmctrl';
+        args = ['-a', appName];
+        fallback = { cmd: 'xdotool', args: ['search', '--name', appName, 'windowactivate'] };
       } else if (platform === 'win32') {
-        cmd = `powershell -Command "(Get-Process -ProcessName '${appName.replace(/'/g, "''")}' | Where-Object {$_.MainWindowTitle}).ForEach({Set-ForegroundWindow $_.MainWindowHandle})"`;
+        cmd = 'powershell';
+        args = ['-Command', `(Get-Process -ProcessName '${appName.replace(/'/g, "''")}' | Where-Object {$_.MainWindowTitle}).ForEach({Set-ForegroundWindow $_.MainWindowHandle})`];
       } else {
         return { success: false, error: `Unsupported platform: ${platform}` };
       }
-      const result = await runCmd(cmd, 10000);
+      let result = await runBin(cmd, args, 10000);
+      if (result.exitCode !== 0 && fallback) {
+        // `xdotool search --name X windowactivate` exits 0 even when it matched
+        // nothing, so success must be judged on whether a window was found.
+        const found = await runBin(fallback.cmd, ['search', '--name', appName], 5000);
+        if (found.exitCode === 0 && found.stdout.trim()) {
+          result = await runBin(fallback.cmd, ['windowactivate', '--sync', found.stdout.trim().split('\n')[0].trim()], 5000);
+        } else {
+          result = { stdout: '', stderr: `No window matching "${appName}"`, exitCode: 1 };
+        }
+      }
       return { success: result.exitCode === 0, error: result.exitCode !== 0 ? result.stderr : undefined };
     } catch (e: unknown) {
       console.error('[computer:activateApplication]', e instanceof Error ? e.message : String(e));
@@ -899,18 +1060,21 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
   // ── Press a key (cross-platform) ───────────────────────────────────────────
   ipcMain.handle('computer:pressKey', async (_event, key: string) => {
     try {
+      // argv form only — the previous `xdotool key ${key}` was unquoted, so the
+      // key parameter was shell-interpreted.
       let cmd: string;
+      let args: string[];
       if (platform === 'darwin') {
         // Map key names to macOS key codes
         const keyCodes: Record<string, string> = {
           'enter': '36',
           'return': '36',
-          'tab': '48',
           'escape': '53',
           'space': '49',
         };
         const keyCode = keyCodes[key.toLowerCase()] || key;
-        cmd = `osascript -e 'tell application "System Events" to key code ${keyCode}'`;
+        cmd = 'osascript';
+        args = ['-e', `tell application "System Events" to key code ${keyCode}`];
       } else if (platform === 'linux') {
         // Linux: use xdotool key names
         const keyMap: Record<string, string> = {
@@ -921,7 +1085,8 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
           'space': 'space',
         };
         const xdotoolKey = keyMap[key.toLowerCase()] || key;
-        cmd = `xdotool key ${xdotoolKey}`;
+        cmd = 'xdotool';
+        args = ['key', xdotoolKey];
       } else if (platform === 'win32') {
         // Windows: use PowerShell SendKeys
         const keyMap: Record<string, string> = {
@@ -931,12 +1096,16 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
           'escape': '{ESC}',
           'space': ' ',
         };
-        const sendKey = keyMap[key.toLowerCase()] || key;
-        cmd = `powershell -Command "$wshell = New-Object -ComObject wscript.shell; $wshell.SendKeys('${sendKey}')"`;
+        // Escape for a PowerShell single-quoted string, exactly as typeText
+        // does. Without this a key containing ' terminated the string and the
+        // remainder was executed as PowerShell.
+        const escapedKey = (keyMap[key.toLowerCase()] || key).replace(/'/g, "''");
+        cmd = 'powershell';
+        args = ['-Command', `$wshell = New-Object -ComObject wscript.shell; $wshell.SendKeys('${escapedKey}')`];
       } else {
         return { success: false, error: `Unsupported platform: ${platform}` };
       }
-      const result = await runCmd(cmd, 5000);
+      const result = await runBin(cmd, args, 5000);
       return { success: result.exitCode === 0, error: result.exitCode !== 0 ? result.stderr : undefined };
     } catch (e: unknown) {
       console.error('[computer:pressKey]', e instanceof Error ? e.message : String(e));

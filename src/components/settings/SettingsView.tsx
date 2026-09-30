@@ -18,7 +18,7 @@
  * rest of the app sees changes immediately.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useStore } from '../../store';
 import type { AIProvider } from '../../types';
 import { PROVIDERS, AVAILABLE_MODELS, formatPrice } from '../../providers/models';
@@ -226,24 +226,176 @@ function EngineRow({ engine, label, hint }: { engine: 'companion' | 'worker'; la
   const settings = useStore((s) => s.settings);
   const updateSetting = useStore((s) => s.updateSetting);
   const providers = useStore((s) => s.providers);
+  const setProviders = useStore((s) => s.setProviders);
   const configuredIds = new Set(providers.filter((p) => p.apiKey || p.id === 'ollama').map((p) => p.id));
 
   const currentProvider = settings[`${engine}_provider`] || '';
   const currentModel = settings[`${engine}_model`] || '';
 
   // Only offer models from providers that actually have a key (plus Ollama).
-  const models = AVAILABLE_MODELS.filter(
+  const baseModels = AVAILABLE_MODELS.filter(
     (m) => configuredIds.size === 0 || configuredIds.has(m.provider),
   );
 
+  // opencode models are discovered at runtime and shown in this same list, so
+  // they sit alongside every other model rather than behind a separate picker.
+  // opencode is listed whenever its CLI is present — it needs no API key of its
+  // own, so it is not gated on `configuredIds`.
+  const [opencodeModels, setOpencodeModels] = useState<import('../../types').OpencodeModelInfo[]>([]);
+  const [opencodeReady, setOpencodeReady] = useState(false);
+  const [testingModel, setTestingModel] = useState<string | null>(null);
+
+  // Proves the model is actually reachable before committing to it, since
+  // opencode models come and go and some are served by overloaded providers.
+  const testOpencode = async (modelId: string) => {
+    setTestingModel(modelId);
+    try {
+      const r = await window.henryAPI.opencodeTest?.(modelId);
+      if (r?.ok) toast.success(`${modelId} → ${(r.reply || '').trim().slice(0, 40) || 'ok'}`);
+      else toast.error(`${modelId}: ${r?.error ?? 'no response'}`);
+    } finally {
+      setTestingModel(null);
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const st = await window.henryAPI.opencodeStatus?.();
+        if (cancelled) return;
+        setOpencodeReady(!!st?.available);
+        if (!st?.available) return;
+        const res = await window.henryAPI.opencodeModels?.();
+        if (!cancelled && res?.ok) setOpencodeModels(res.models);
+      } catch { /* opencode is optional */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const opencodeAsModels = useMemo(
+    () =>
+      opencodeModels.map((m) => ({
+        id: m.id,
+        name: m.name,
+        provider: 'opencode',
+        contextWindow: 0,
+        inputPricePer1M: null,
+        outputPricePer1M: null,
+        description: m.isZen ? 'opencode zen' : m.provider,
+      })),
+    [opencodeModels],
+  );
+
+  // opencode zen first (free + always available), then the rest of opencode's
+  // catalogue, then the statically-known providers.
+  const zenIds = new Set(opencodeModels.filter((o) => o.isZen).map((o) => o.id));
+  const zenModels = opencodeAsModels.filter((m) => zenIds.has(m.id));
+  const otherOpencodeModels = opencodeAsModels.filter((m) => !zenIds.has(m.id));
+  // De-dupe by id: opencode's openrouter/... entries can share a string with a
+  // static one, which would render two <option>s with the same value.
+  const seenModelIds = new Set<string>();
+  const models = (opencodeReady
+    ? [...zenModels, ...otherOpencodeModels, ...baseModels]
+    : baseModels
+  ).filter((m) => {
+    if (seenModelIds.has(m.id)) return false;
+    seenModelIds.add(m.id);
+    return true;
+  });
+
+  // For Ollama, fetch installed models
+  const [ollamaInstalled, setOllamaInstalled] = useState<string[]>([]);
+  const [ollamaLoading, setOllamaLoading] = useState(false);
+
+  useEffect(() => {
+    if (currentProvider === 'ollama' || configuredIds.has('ollama')) {
+      setOllamaLoading(true);
+      window.henryAPI.ollamaModels?.(settings.ollama_base_url || 'http://localhost:11434')
+        .then((raw: any) => {
+          const installed = (raw?.models ?? []).map((m: any) => m.name as string);
+          setOllamaInstalled(installed);
+        })
+        .catch(() => {})
+        .finally(() => setOllamaLoading(false));
+    }
+  }, [currentProvider, settings.ollama_base_url, configuredIds]);
+
   const onPick = async (modelId: string) => {
+    // opencode models are dynamic, so they are not in AVAILABLE_MODELS. They
+    // are matched by ID, which can collide with the static `openrouter/...`
+    // entries — so prefer the static entry when the id exists in both, since
+    // that one has a real API key path.
+    const isOpencodePick =
+      opencodeModels.some((o) => o.id === modelId) && !AVAILABLE_MODELS.some((m) => m.id === modelId);
+
+    if (isOpencodePick) {
+      // A provider row is REQUIRED, not optional: consumers resolve the engine
+      // with `providers.find(p => p.id === <provider>)`, so saving the setting
+      // alone left every chat surface reporting "No model configured".
+      await window.henryAPI.saveProvider?.({
+        id: 'opencode',
+        name: 'OpenCode (CLI)',
+        apiKey: '',
+        enabled: true,
+        models: JSON.stringify(opencodeModels.map((o) => o.id)),
+      });
+      await refreshProviders(setProviders);
+      await window.henryAPI.saveSetting?.(`${engine}_provider`, 'opencode');
+      await window.henryAPI.saveSetting?.(`${engine}_model`, modelId);
+      updateSetting(`${engine}_provider`, 'opencode');
+      updateSetting(`${engine}_model`, modelId);
+      toast.success(`Engine → ${modelId}`);
+      return;
+    }
     const model = AVAILABLE_MODELS.find((m) => m.id === modelId);
     if (!model) return;
+    
+    // Check if this is an Ollama model that needs to be pulled
+    const isOllama = model.provider === 'ollama';
+    const isInstalled = isOllama && ollamaInstalled.some((inst) => inst.startsWith(model.id) || model.id.startsWith(inst.split(':')[0]));
+    
+    if (isOllama && !isInstalled) {
+      // Model needs to be pulled first
+      toast.info(`Pulling ${model.name}... this may take a few minutes`);
+      
+      try {
+        const result = await window.henryAPI.ollamaPull?.(model.id, settings.ollama_base_url || 'http://localhost:11434');
+        if (!result?.success) {
+          throw new Error(result?.error || 'Failed to pull model');
+        }
+        
+        // Pull succeeded - refresh installed list
+        const refreshed = await window.henryAPI.ollamaModels?.(settings.ollama_base_url || 'http://localhost:11434');
+        const installed = (refreshed?.models ?? []).map((m: any) => m.name as string);
+        setOllamaInstalled(installed);
+        
+        toast.success(`Pulled ${model.name} successfully`);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'Failed to pull model';
+        toast.error(msg);
+        return; // Don't proceed to set as active model
+      }
+    }
+    
     try {
       await window.henryAPI.saveSetting?.(`${engine}_provider`, model.provider);
       await window.henryAPI.saveSetting?.(`${engine}_model`, model.id);
       updateSetting(`${engine}_provider`, model.provider);
       updateSetting(`${engine}_model`, model.id);
+
+      // Ensure the provider exists in the database (especially for keyless providers like Ollama)
+      if (model.provider === 'ollama') {
+        await window.henryAPI.saveProvider?.({
+          id: 'ollama',
+          name: 'Ollama (Local)',
+          apiKey: '',
+          enabled: true,
+          models: JSON.stringify(AVAILABLE_MODELS.filter((m) => m.provider === 'ollama').map((m) => m.id)),
+        });
+        await refreshProviders(setProviders);
+      }
+
       toast.success(`${label} → ${model.name}`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not set engine');
@@ -261,11 +413,20 @@ function EngineRow({ engine, label, hint }: { engine: 'companion' | 'worker'; la
         <option value="" disabled>Choose a model…</option>
         {models.map((m) => (
           <option key={`${m.provider}:${m.id}`} value={m.id}>
-            {PROVIDERS[m.provider as keyof typeof PROVIDERS]?.name ?? m.provider} — {m.name}
+            {(PROVIDERS as Record<string, { name?: string }>)[m.provider]?.name ?? m.provider} — {m.name}
             {m.inputPricePer1M != null ? ` (${formatPrice(m.inputPricePer1M)}/1M in)` : ''}
           </option>
         ))}
       </select>
+      {opencodeModels.some((o) => o.id === currentModel) && (
+        <button
+          onClick={() => void testOpencode(currentModel)}
+          disabled={testingModel != null}
+          className="mt-1.5 px-2.5 py-1 rounded-lg text-[11px] border border-henry-border/40 text-henry-text hover:border-henry-accent/50 disabled:opacity-40"
+        >
+          {testingModel === currentModel ? 'Testing…' : 'Test this model'}
+        </button>
+      )}
     </div>
   );
 }
@@ -280,6 +441,63 @@ function EnginesSection() {
       <div>
         <EngineRow engine="companion" label="Companion engine" hint="Used for live conversation in Chat." />
         <EngineRow engine="worker" label="Worker engine" hint="Used for tasks, the queue, and scheduled Routines." />
+      </div>
+      <RelayRow />
+    </div>
+  );
+}
+
+/**
+ * Optional hosted relay. Off until a URL is set — Henry runs entirely on your
+ * own providers or local Ollama by default, and nothing here is required.
+ */
+function RelayRow() {
+  const settings = useStore((s) => s.settings);
+  const updateSetting = useStore((s) => s.updateSetting);
+  const [url, setUrl] = useState(settings.relay_base_url || '');
+  const [busy, setBusy] = useState(false);
+
+  const save = async () => {
+    const value = url.trim();
+    if (value && !/^https?:\/\//i.test(value)) {
+      toast.error('Relay URL must start with http:// or https://');
+      return;
+    }
+    setBusy(true);
+    try {
+      await window.henryAPI.saveSetting?.('relay_base_url', value);
+      updateSetting('relay_base_url', value);
+      toast.success(value ? 'Hosted relay enabled' : 'Hosted relay disabled');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not save the relay URL');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-4 p-3 rounded-xl border border-henry-border/25 bg-henry-surface/30">
+      <p className="text-xs font-semibold text-henry-text">Hosted relay (optional)</p>
+      <p className="text-[11px] text-henry-text-muted mt-0.5 leading-relaxed">
+        Route requests through any OpenAI-compatible endpoint you control — a self-hosted
+        gateway, a corporate proxy, or a service you already pay for. Leave blank to stay
+        entirely on your own keys and local Ollama.
+      </p>
+      <div className="flex items-center gap-2 mt-2">
+        <input
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://your-relay.example.com/v1"
+          spellCheck={false}
+          className="flex-1 bg-henry-bg border border-henry-border/30 rounded-lg px-2.5 py-1.5 text-xs text-henry-text placeholder:text-henry-text-muted outline-none focus:border-henry-accent/50"
+        />
+        <button
+          onClick={() => void save()}
+          disabled={busy}
+          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-henry-accent text-white disabled:opacity-40"
+        >
+          {busy ? 'Saving…' : 'Save'}
+        </button>
       </div>
     </div>
   );
@@ -329,16 +547,28 @@ function CoderEngineSection() {
     <div className={cardCls}>
       <SectionHeader
         title="Coder Engine"
-        sub="Code mode in chat writes code with the Claude Code CLI (your Claude subscription — big context, edits files) or a free local model via Ollama."
+        sub="Code mode in chat writes code with the Claude Code CLI, opencode, or a free local model via Ollama."
       />
       <div className="space-y-3">
         <select className={inputCls} value={choice} onChange={(e) => void pick(e.target.value)}>
-          <option value="auto">Auto — Claude Code when installed, else local (recommended)</option>
+          <option value="auto">Auto — Claude Code, then opencode, else local (recommended)</option>
           <option value="claude-code">Claude Code CLI only</option>
+          <option value="opencode">opencode only</option>
           <option value="local">Local only — free qwen coder via Ollama</option>
         </select>
 
         <div className="text-[11px] text-henry-text-muted space-y-1">
+          <div>
+            opencode:{' '}
+            {status?.opencode?.available ? (
+              <span className="text-emerald-400">detected — {status.opencode.version ?? 'installed'}</span>
+            ) : (
+              <span>
+                not found — install from{' '}
+                <span className="text-henry-text-dim">opencode.ai</span>
+              </span>
+            )}
+          </div>
           <div>
             Claude Code CLI:{' '}
             {status?.claude.available ? (
@@ -432,6 +662,14 @@ function VoiceSection() {
       setSetupProgress(null);
       void refresh(true);
     }
+  };
+
+  const greetingOn = settings.voice_greeting === 'on';
+
+  const toggleGreeting = async () => {
+    const next = greetingOn ? 'off' : 'on';
+    await saveVoiceSetting('voice_greeting', next);
+    if (!greetingOn) await window.henryAPI.voiceGreetingClearCache?.();
   };
 
   const saveElevenKey = async () => {
@@ -600,6 +838,13 @@ function VoiceSection() {
               {speakBusy ? 'Speaking…' : 'Test speaking'}
             </button>
             <button className={btnCls} onClick={() => void voiceStopSpeaking()}>Stop</button>
+            <button
+              className={btnCls + (greetingOn ? ' text-henry-accent border-henry-accent/50' : '')}
+              onClick={() => void toggleGreeting()}
+              title="Speak a short greeting when Henry starts. Audio is generated once and cached."
+            >
+              {greetingOn ? '✓ Greeting on' : 'Greeting off'}
+            </button>
           </div>
         </div>
 

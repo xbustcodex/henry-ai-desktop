@@ -9,7 +9,6 @@ import type { ActiveWorkspaceContext } from './workspaceContext';
 import { buildUseWorkspaceContextComposerSeed } from './workspaceContext';
 import { getDocumentScaffoldMarkdown } from './formatDocumentDraft';
 import { getDesign3DPlanScaffoldMarkdown } from './formatDesign3DPlan';
-import { getStudyNoteScaffoldMarkdown } from './studyNoteScaffold';
 import type { HenryCommand } from './commandLayer';
 import type { ExportPresetId } from './exportBundle';
 
@@ -42,7 +41,6 @@ const MODE_LABEL: Record<HenryOperatingMode, string> = {
   writer: 'Writer / document',
   developer: 'Developer',
   builder: 'App Builder',
-  biblical: 'Biblical',
   design3d: '3D / design',
   secretary: 'Secretary',
   computer: 'Computer control',
@@ -58,11 +56,10 @@ export function buildHenryCommandHelpText(): string {
     '',
     '- `/help` — this list',
     '- `/new` — fresh thread (same window; modes unchanged)',
-    '- `/mode companion` | `writer` | `biblical` | `design3d` | `developer` — switch operating mode',
+    '- `/mode companion` | `writer` | `design3d` | `developer` — switch operating mode',
     '- `/memory` — where lean thread memory lives (right panel)',
     '- `/clear-context` — clear Writer draft, Design3D reference, and workspace selection',
     '- `/use-workspace-context` — seed composer from the active workspace context (if any)',
-    '- `/start-study-note` — Biblical mode + study scaffold in composer',
     '- `/start-design-plan` — Design3D mode + plan scaffold in composer',
     '- `/start-draft` — Writer mode + document scaffold in composer',
     '- `/export-pack` — open export pack builder',
@@ -88,7 +85,7 @@ export function resolveHenryCommand(cmd: HenryCommand, ctx: CommandContextSnapsh
 
     case 'mode-invalid':
       return {
-        acknowledgement: `Unknown mode \`${cmd.arg || '(missing)'}\`. Use \`/mode companion\`, \`/mode writer\`, \`/mode biblical\`, \`/mode design3d\`, or \`/mode developer\`. Try \`/help\` for the full list.`,
+        acknowledgement: `Unknown mode \`${cmd.arg || '(missing)'}\`. Use \`/mode companion\`, \`/mode writer\`, \`/mode design3d\`, or \`/mode developer\`. Try \`/help\` for the full list.`,
         effects,
       };
 
@@ -134,25 +131,6 @@ export function resolveHenryCommand(cmd: HenryCommand, ctx: CommandContextSnapsh
       };
     }
 
-    case 'start-study-note': {
-      effects.setOperatingMode = 'biblical';
-      effects.composerSeed = [
-        'Read John 3:16',
-        '',
-        'Work through this passage using Henry’s study structure. Replace the reference above if you want a different passage.',
-        '',
-        'Scaffold:',
-        '```markdown',
-        getStudyNoteScaffoldMarkdown(),
-        '```',
-      ].join('\n');
-      return {
-        acknowledgement:
-          '**Biblical mode** on. **Composer** seeded with a sample reference and study scaffold — edit the reference, then send.',
-        effects,
-      };
-    }
-
     case 'start-design-plan': {
       effects.setOperatingMode = 'design3d';
       effects.composerSeed = [
@@ -188,7 +166,6 @@ export function resolveHenryCommand(cmd: HenryCommand, ctx: CommandContextSnapsh
       let preset: ExportPresetId = 'mixed_workspace';
       if (ctx.operatingMode === 'writer') preset = 'writer_handoff';
       else if (ctx.operatingMode === 'design3d') preset = 'design3d_handoff';
-      else if (ctx.operatingMode === 'biblical') preset = 'biblical_study_pack';
       effects.openExportPackPreset = preset;
       if (!ctx.workspaceReady) {
         return {

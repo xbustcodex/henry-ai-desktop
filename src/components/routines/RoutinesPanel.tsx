@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Clock, Play, Plus, Trash2, Loader2, X } from 'lucide-react';
+import { Clock, Play, Plus, Trash2, Loader2, X, History } from 'lucide-react';
 
 /**
  * RoutinesPanel — management UI for Henry's scheduled Routines (design §3).
@@ -100,6 +100,9 @@ export default function RoutinesPanel() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [runs, setRuns] = useState<import('../../types').AutomationRun[]>([]);
+  const [unread, setUnread] = useState(0);
+  const [showRuns, setShowRuns] = useState(false);
 
   const reload = useCallback(async () => {
     const api = window.henryAPI;
@@ -153,6 +156,38 @@ export default function RoutinesPanel() {
     }
   }
 
+  const loadRuns = useCallback(async () => {
+    try {
+      const [list, u] = await Promise.all([
+        window.henryAPI.automationRuns?.({ limit: 100 }),
+        window.henryAPI.automationUnreadCount?.(),
+      ]);
+      if (list) setRuns(list);
+      if (u) setUnread(u.count);
+    } catch { /* run history is optional */ }
+  }, []);
+
+  useEffect(() => {
+    void loadRuns();
+    return window.henryAPI.onAutomationRunChanged?.(() => { void loadRuns(); });
+  }, [loadRuns]);
+
+  async function handleAbort(taskId: string) {
+    const res = await window.henryAPI.automationAbort?.(taskId);
+    if (res && !res.ok) setError(res.error ?? 'Could not stop that Routine.');
+    void loadRuns();
+  }
+
+  async function handleMarkAllRead() {
+    await window.henryAPI.automationMarkAllRunsRead?.();
+    void loadRuns();
+  }
+
+  async function handleClearRuns() {
+    await window.henryAPI.automationClearRuns?.();
+    void loadRuns();
+  }
+
   async function handleDelete(r: Routine) {
     await window.henryAPI.deleteRoutine?.(r.id);
     void reload();
@@ -196,6 +231,19 @@ export default function RoutinesPanel() {
           <Clock className="w-5 h-5 text-henry-accent" />
           <h1 className="text-lg font-bold text-henry-text">Routines</h1>
         </div>
+        <button
+          onClick={() => setShowRuns((v) => !v)}
+          title="Run history"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-henry-border/40 text-henry-text hover:border-henry-accent/50 transition-colors"
+        >
+          <History className="w-3.5 h-3.5" />
+          Runs
+          {unread > 0 && (
+            <span className="ml-0.5 px-1.5 rounded-full bg-henry-accent text-white text-[10px] font-semibold">
+              {unread}
+            </span>
+          )}
+        </button>
         <button
           onClick={() => {
             setForm(EMPTY_FORM);
@@ -380,6 +428,81 @@ export default function RoutinesPanel() {
           })}
         </div>
       )}
+      {showRuns && (
+        <section className="mt-5 rounded-2xl border border-henry-border/30 bg-henry-surface/30 p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-henry-text">Run history</h2>
+            <div className="flex items-center gap-2">
+              {unread > 0 && (
+                <button
+                  onClick={() => void handleMarkAllRead()}
+                  className="text-[11px] text-henry-text-muted hover:text-henry-text"
+                >
+                  Mark all read
+                </button>
+              )}
+              {runs.length > 0 && (
+                <button
+                  onClick={() => void handleClearRuns()}
+                  className="text-[11px] text-henry-text-muted hover:text-henry-text"
+                >
+                  Clear
+                </button>
+              )}
+              <button onClick={() => setShowRuns(false)} className="text-henry-text-muted hover:text-henry-text">×</button>
+            </div>
+          </div>
+
+          {runs.length === 0 ? (
+            <p className="text-xs text-henry-text-muted">
+              No runs recorded yet. When a Routine fires, what it did shows up here.
+            </p>
+          ) : (
+            <ul className="space-y-2 max-h-96 overflow-y-auto">
+              {runs.map((r) => (
+                <li
+                  key={r.id}
+                  className={`rounded-xl border p-2.5 ${
+                    r.read_at ? 'border-henry-border/20' : 'border-henry-accent/40 bg-henry-accent/5'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <StatusDot status={r.status} />
+                    <span className="text-xs font-medium text-henry-text truncate">{r.task_name}</span>
+                    <span className="text-[10px] text-henry-text-muted shrink-0">
+                      {r.trigger === 'manual' ? 'manual · ' : ''}
+                      {new Date(r.started_at + 'Z').toLocaleString()}
+                    </span>
+                    {r.read_at === null && (
+                      <button
+                        onClick={() => { void window.henryAPI.automationMarkRunRead?.(r.id); void loadRuns(); }}
+                        className="ml-auto text-[10px] text-henry-text-muted hover:text-henry-text shrink-0"
+                      >
+                        Mark read
+                      </button>
+                    )}
+                  </div>
+                  {r.error && <p className="text-[11px] text-red-400 break-words">{r.error}</p>}
+                  {r.result && (
+                    <p className="text-[11px] text-henry-text-muted line-clamp-3 whitespace-pre-wrap break-words">
+                      {r.result}
+                    </p>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
     </div>
   );
+}
+
+function StatusDot({ status }: { status: string }) {
+  const color =
+    status === 'succeeded' ? 'bg-green-500'
+    : status === 'failed' ? 'bg-red-500'
+    : status === 'aborted' ? 'bg-amber-500'
+    : 'bg-blue-500 animate-pulse';
+  return <span className={`w-2 h-2 rounded-full shrink-0 ${color}`} title={status} />;
 }

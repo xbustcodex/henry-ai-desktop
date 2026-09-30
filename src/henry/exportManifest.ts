@@ -23,14 +23,6 @@ export function buildExportManifestMarkdown(bundle: ExportBundleModel): string {
     '',
   ];
 
-  if (bundle.contextNotes.length > 0) {
-    lines.push('## Context notes');
-    for (const n of bundle.contextNotes) {
-      lines.push(`- ${n}`);
-    }
-    lines.push('');
-  }
-
   lines.push('## Artifacts');
   lines.push('');
   lines.push('| Label | Path (workspace-relative) | Category | Status | Notes |');

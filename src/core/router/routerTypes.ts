@@ -117,5 +117,4 @@ export interface RouterInput {
   mode: string;
   historyLength: number;
   hasWorkspaceContext: boolean;
-  isBiblicalMode?: boolean;
 }

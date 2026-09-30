@@ -30,6 +30,128 @@ export interface Conversation {
   message_count?: number;
 }
 
+/** One execution of a scheduled Routine. */
+export interface AutomationRun {
+  id: string;
+  task_id: string;
+  task_name: string;
+  prompt: string | null;
+  status: 'running' | 'succeeded' | 'failed' | 'aborted';
+  trigger: 'schedule' | 'manual';
+  result: string | null;
+  error: string | null;
+  session_id: string | null;
+  read_at: string | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+/** A boot failure that prevented Henry from starting cleanly. */
+export interface StartupFailure {
+  message: string;
+  at: string;
+}
+
+/** Live snapshot of the running desktop process. */
+export interface RuntimeStatus {
+  ok: boolean;
+  version: string;
+  electron: string;
+  chrome: string;
+  node: string;
+  platform: string;
+  arch: string;
+  startedAt: string;
+  uptimeSeconds: number;
+  bootFailed: boolean;
+  lastError: string | null;
+  databaseOk: boolean;
+  databaseError: string | null;
+}
+
+/** A model opencode can reach, as reported by `opencode models`. */
+export interface OpencodeModelInfo {
+  /** `provider/model`, exactly what is passed to --model. */
+  id: string;
+  provider: string;
+  name: string;
+  /** True for opencode's own hosted ("zen") service. */
+  isZen: boolean;
+  isFree: boolean;
+}
+
+export type CatalogEntryType = 'app' | 'tool' | 'plugin' | 'extension';
+export type CatalogEntryState = 'installed' | 'available' | 'unavailable';
+
+export interface CatalogEntry {
+  id: string;
+  name: string;
+  type: CatalogEntryType | string;
+  category: string;
+  description: string;
+  version?: string;
+  author?: string;
+  packageName?: string;
+  repository?: string;
+  homepage?: string;
+  apkUrl?: string;
+  capabilities?: string[];
+  integrations?: string[];
+  requirements?: Record<string, unknown>;
+  install: { type: string; scriptUrl?: string };
+}
+
+export interface CatalogListing {
+  manifest: string;
+  version: number;
+  entries: CatalogEntry[];
+  problems: string[];
+  fetchedAt: string;
+}
+
+export type MediaKind = 'image' | 'audio' | 'document';
+
+/** An item in the local media library. */
+export interface MediaItem {
+  id: string;
+  kind: MediaKind;
+  file_name: string;
+  stored_name: string;
+  mime_type: string | null;
+  byte_size: number;
+  created_at: string;
+}
+
+export type MemoryNodeType =
+  | 'fact' | 'project' | 'goal' | 'commitment' | 'milestone' | 'narrative' | 'personal';
+
+export interface MemoryGraphNode {
+  id: string;
+  type: MemoryNodeType;
+  label: string;
+  detail: string;
+  weight: number;
+  updatedAt: string | null;
+}
+
+export interface MemoryGraphEdge {
+  from: string;
+  to: string;
+  type: string;
+  weight: number;
+}
+
+/** A file attached to a chat message. Bytes live on disk; this is the index row. */
+export interface MessageAttachment {
+  id: string;
+  conversation_id: string | null;
+  message_id: string | null;
+  file_name: string;
+  mime_type: string | null;
+  byte_size: number;
+  created_at: string;
+}
+
 export interface Message {
   id: string;
   conversation_id: string;
@@ -146,12 +268,6 @@ export interface MemoryContext {
   extended?: Record<string, unknown>;
 }
 
-// ── Scripture (re-export from henry for API / global typings) ─
-export type { ScriptureEntry } from '../henry/scriptureStore';
-export type { ScriptureLookupResult } from '../henry/scriptureLookup';
-export type { ScriptureImportRow, ScriptureImportResult } from '../henry/scriptureImport';
-export type { ParsedScriptureReference, ParseScriptureResult } from '../henry/scriptureReference';
-
 // ── File System Types ─────────────────────────────────────────
 
 export interface FileEntry {
@@ -172,7 +288,7 @@ export interface DirectoryResult {
 // R2-Fix 9: added 'memos' (SQLite voice memos via RecorderPanel) and 'queue'
 // (TaskQueueView) — Layout.tsx renders these but TS didn't know they were
 // valid ViewType values, forcing `as any` casts at nav call sites.
-export type ViewType = 'today' | 'chat' | 'companion' | 'tasks' | 'files' | 'workspace' | 'terminal' | 'computer' | 'printer' | 'costs' | 'settings' | 'journal' | 'recorder' | 'memos' | 'queue' | 'modes' | 'reminders' | 'finance' | 'printstudio' | 'machines' | 'materials' | 'production' | 'waste' | 'maintenance' | 'imagegen' | 'videogen' | 'captures' | 'weekly' | 'health' | 'goals' | 'hq' | 'setup' | 'memory' | 'scripture' | 'prayer' | 'quoting' | 'routines' | 'audit' | 'book' | 'slicer' | 'approvals';
+export type ViewType = 'today' | 'chat' | 'companion' | 'tasks' | 'files' | 'workspace' | 'terminal' | 'computer' | 'printer' | 'costs' | 'settings' | 'journal' | 'recorder' | 'memos' | 'queue' | 'modes' | 'reminders' | 'finance' | 'printstudio' | 'machines' | 'materials' | 'production' | 'waste' | 'maintenance' | 'imagegen' | 'videogen' | 'captures' | 'weekly' | 'health' | 'goals' | 'hq' | 'setup' | 'memory' | 'quoting' | 'routines' | 'audit' | 'book' | 'slicer' | 'approvals' | 'media' | 'marketplace' | 'about';
 
 export interface AppSettings {
   [key: string]: string;

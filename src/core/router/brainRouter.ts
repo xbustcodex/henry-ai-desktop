@@ -200,7 +200,7 @@ function buildRationale(
  * @returns `RouterDecision` — the full routing output
  */
 export function routeRequest(input: RouterInput): RouterDecision {
-  const { message, mode, historyLength, hasWorkspaceContext, isBiblicalMode } = input;
+  const { message, historyLength, hasWorkspaceContext } = input;
 
   // 1. Classify the request
   const requestClass = classifyRequest(message);
@@ -216,7 +216,6 @@ export function routeRequest(input: RouterInput): RouterDecision {
         requestClassToIntent(requestClass),
         historyLength,
         hasWorkspaceContext,
-        isBiblicalMode ?? mode === 'biblical'
       );
 
   // 4. Resolve execution mode

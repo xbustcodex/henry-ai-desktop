@@ -107,6 +107,8 @@ const SCHEDULED_RUN_SYSTEM_PROMPT =
 export class HenryScheduler {
   private jobs = new Map<string, CronJob>();
   private firing = new Set<string>(); // guards against overlapping runs
+  /** In-flight run controllers, so a running Routine can be aborted. */
+  private controllers = new Map<string, AbortController>();
 
   constructor(
     private db: Database.Database,
@@ -118,6 +120,7 @@ export class HenryScheduler {
   /** Seed defaults (first run only), then register every enabled Routine. */
   init(): void {
     this.seedDefaults();
+    this.reconcileOrphanedRuns();
     const tasks = this.db
       .prepare("SELECT * FROM scheduled_tasks WHERE enabled = 1")
       .all() as ScheduledTask[];
@@ -135,6 +138,37 @@ export class HenryScheduler {
       }
     }
     this.jobs.clear();
+    for (const ctrl of this.controllers.values()) {
+      try { ctrl.abort(); } catch { /* best effort */ }
+    }
+    this.controllers.clear();
+    // `firing` must be cleared too, or a shutdown mid-run leaves the Routine
+    // permanently wedged for the rest of the process.
+    this.firing.clear();
+  }
+
+  /**
+   * A run that was in flight when Henry quit or crashed is still marked
+   * 'running' in the database forever. On startup, close those out so the Runs
+   * list and the unread badge reflect reality.
+   */
+  private reconcileOrphanedRuns(): void {
+    try {
+      const info = this.db
+        .prepare(
+          `UPDATE automation_runs
+             SET status = 'aborted',
+                 error = 'Interrupted — Henry closed while this run was in progress',
+                 finished_at = ?
+           WHERE status = 'running'`,
+        )
+        .run(new Date().toISOString());
+      if (info.changes > 0) {
+        log.warn(`[scheduler] reconciled ${info.changes} orphaned run(s) from a previous session`);
+      }
+    } catch (e) {
+      log.warn('[scheduler] could not reconcile orphaned runs:', e);
+    }
   }
 
   private seedDefaults(): void {
@@ -271,7 +305,7 @@ export class HenryScheduler {
   async runNow(id: string): Promise<{ ok: boolean; content?: string; error?: string }> {
     const row = this.getRow(id);
     if (!row) return { ok: false, error: `No Routine found for id "${id}"` };
-    return this.fire(id);
+    return this.fire(id, "manual");
   }
 
   private getRow(id: string): ScheduledTask | null {
@@ -286,6 +320,7 @@ export class HenryScheduler {
 
   private async fire(
     id: string,
+    trigger: 'schedule' | 'manual' = 'schedule',
   ): Promise<{ ok: boolean; content?: string; error?: string }> {
     const task = this.getRow(id);
     if (!task) return { ok: false, error: "Routine not found" };
@@ -298,11 +333,30 @@ export class HenryScheduler {
     }
     this.firing.add(id);
 
-    this.send("scheduler:task-started", { id: task.id, name: task.name });
+    const controller = new AbortController();
+    this.controllers.set(id, controller);
+    // Everything from here must be inside the try, or a throw would skip the
+    // finally and leave `firing` set for the life of the process — which wedges
+    // the Routine (every later tick short-circuits, isRunning() stays true and
+    // abort() reports nothing to abort).
     const startedAt = new Date().toISOString();
-
+    let runId: string | null = null;
     let sessionId: string | null = null;
     try {
+      this.send("scheduler:task-started", { id: task.id, name: task.name });
+
+      // ── Run history ────────────────────────────────────────────────────
+      // Scheduled tasks only remembered lastRunAt, so there was no record of
+      // what a Routine actually did, whether it failed, or what was unread.
+      runId = randomUUID();
+      this.db
+        .prepare(
+          `INSERT INTO automation_runs (id, task_id, task_name, prompt, status, trigger, started_at)
+           VALUES (?, ?, ?, ?, 'running', ?, ?)`,
+        )
+        .run(runId, task.id, task.name, task.prompt, trigger, startedAt);
+      this.send("automation:run-changed", { id: runId, taskId: task.id, status: "running" });
+
       // Open a session so the run's output + tool-call audit trail are recorded.
       sessionId =
         (await createSessionRecord({
@@ -318,7 +372,7 @@ export class HenryScheduler {
         content: task.prompt,
       }).catch(() => {});
 
-      const content = await this.runPrompt(task.prompt, sessionId);
+      const content = await this.runPrompt(task.prompt, sessionId, controller.signal);
 
       await recordSessionMessage({
         session_id: sessionId,
@@ -334,6 +388,15 @@ export class HenryScheduler {
         .prepare("UPDATE scheduled_tasks SET lastRunAt = ?, nextRunAt = ? WHERE id = ?")
         .run(startedAt, next, id);
 
+      if (runId) {
+        this.db
+          .prepare(
+            `UPDATE automation_runs SET status = 'succeeded', result = ?, session_id = ?, finished_at = ?
+             WHERE id = ?`,
+          )
+          .run(content, sessionId, new Date().toISOString(), runId);
+      }
+      this.send("automation:run-changed", { id: runId, taskId: task.id, status: "succeeded" });
       this.send("scheduler:task-completed", {
         id: task.id,
         name: task.name,
@@ -344,10 +407,19 @@ export class HenryScheduler {
       return { ok: true, content };
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e);
+      const aborted = controller.signal.aborted;
       console.error(`[scheduler] Routine ${task.name} failed:`, error);
       this.db
         .prepare("UPDATE scheduled_tasks SET lastRunAt = ? WHERE id = ?")
         .run(startedAt, id);
+      if (runId) {
+        this.db
+          .prepare(
+            `UPDATE automation_runs SET status = ?, error = ?, session_id = ?, finished_at = ? WHERE id = ?`,
+          )
+          .run(aborted ? 'aborted' : 'failed', error, sessionId, new Date().toISOString(), runId);
+      }
+      this.send("automation:run-changed", { id: runId, taskId: task.id, status: aborted ? "aborted" : "failed" });
       this.send("scheduler:task-completed", {
         id: task.id,
         name: task.name,
@@ -358,7 +430,24 @@ export class HenryScheduler {
       return { ok: false, error };
     } finally {
       this.firing.delete(id);
+      if (this.controllers.get(id) === controller) this.controllers.delete(id);
     }
+  }
+
+  /**
+   * Abort the in-flight run of a Routine, if any. Returns true when a run was
+   * actually cancelled.
+   */
+  abort(id: string): boolean {
+    const ctrl = this.controllers.get(id);
+    if (!ctrl) return false;
+    ctrl.abort();
+    return true;
+  }
+
+  /** Whether a Routine currently has a run in flight. */
+  isRunning(id: string): boolean {
+    return this.firing.has(id);
   }
 
   /**
@@ -366,7 +455,7 @@ export class HenryScheduler {
    * config (provider/model/key) the same way the task broker does, builds the
    * `complete` callback over `callAIWithTools`, and drives the tool-call loop.
    */
-  private async runPrompt(prompt: string, sessionId: string): Promise<string> {
+  private async runPrompt(prompt: string, sessionId: string, external?: AbortSignal): Promise<string> {
     const { provider, model, apiKey } = this.resolveEngine();
 
     const messages: RunnerMessage[] = [
@@ -378,8 +467,19 @@ export class HenryScheduler {
     const complete = (msgs: RunnerMessage[], modelTools: ModelTool[]): Promise<ModelCompletion> => {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 120_000);
+      // An abort request (or a shutdown) must also cancel the in-flight fetch.
+      // The signal may ALREADY be aborted by the time a later round starts (an
+      // abort can land during a tool call or during session setup) — and a
+      // listener added to an aborted signal never fires, which silently dropped
+      // the abort and let the run finish as 'succeeded'.
+      const onExternalAbort = () => ctrl.abort();
+      if (external?.aborted) ctrl.abort();
+      else external?.addEventListener('abort', onExternalAbort);
       return callAIWithTools({ provider, model, apiKey, messages: msgs, modelTools, signal: ctrl.signal })
-        .finally(() => clearTimeout(timer));
+        .finally(() => {
+          clearTimeout(timer);
+          external?.removeEventListener('abort', onExternalAbort);
+        });
     };
 
     const context = {

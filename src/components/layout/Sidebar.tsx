@@ -2,9 +2,10 @@ import { useState, useEffect, type ComponentType } from 'react';
 import { Shield, BookOpen, Search } from 'lucide-react';
 import { useStore } from '../../store';
 
-// R2-Fix 9: keep this in sync with src/types/index.ts ViewType.
-type ViewType = 'today' | 'chat' | 'companion' | 'tasks' | 'files' | 'workspace' | 'terminal' | 'computer' | 'printer' | 'costs' | 'settings' | 'journal' | 'recorder' | 'memos' | 'queue' | 'modes' | 'reminders' | 'finance' | 'printstudio' | 'machines' | 'materials' | 'production' | 'waste' | 'maintenance' | 'imagegen' | 'videogen' | 'captures' | 'weekly' | 'health' | 'goals' | 'hq' | 'setup' | 'memory' | 'prayer' | 'quoting'
-  | 'scripture' | 'routines' | 'audit' | 'book' | 'slicer' | 'approvals';
+// Import the real ViewType rather than duplicating it — the duplicated union
+// had already drifted (a new view type caused a type error here) and its only
+// protection was a "keep this in sync" comment.
+import type { ViewType } from '../../types';
 
 // A nav item renders either a glyph (`icon`) or a lucide component (`lucideIcon`).
 type NavItem = { id: ViewType; icon?: string; lucideIcon?: ComponentType<{ size?: number }>; label: string; desc?: string };
@@ -18,7 +19,6 @@ const CORE_NAV: NavItem[] = [
   { id: 'computer',   icon: '⌘',  label: 'Computer',    desc: 'Let Henry run apps and commands on your computer' },
   { id: 'journal',    icon: '✦',  label: 'Journal',     desc: 'Private journal entries' },
   { id: 'book',       lucideIcon: BookOpen, label: 'Book', desc: 'Capture your life story — the Book Crew turns it into chapters' },
-  { id: 'scripture',  icon: '✝',  label: 'Scripture',   desc: 'Bible study and scripture tools' },
   { id: 'reminders',  icon: '◎',  label: 'Reminders',   desc: 'Time-based reminders' },
   { id: 'captures',   icon: '⊕',  label: 'Captures',    desc: 'Quick voice/text notes Henry files for you' },
   { id: 'memory',     icon: '🧠', label: 'Memory',      desc: 'What Henry remembers about you and your work' },
@@ -37,6 +37,8 @@ const BUSINESS_NAV: NavItem[] = [
   { id: 'routines',   icon: '🕐', label: 'Routines',  desc: 'Scheduled autonomous runs, like a morning briefing' },
   // Sprint 4: Audit Log — "What Henry Did" feed of every tool call.
   { id: 'audit',      lucideIcon: Shield, label: 'Audit Log', desc: 'Every action Henry took — and your approvals' },
+  { id: 'media',      icon: '◫',  label: 'Media',     desc: 'Your images, audio and documents' },
+  { id: 'marketplace',icon: '◇',  label: 'Marketplace', desc: 'PrimeTech tools and apps you can fetch' },
 ];
 
 const MORE_NAV: NavItem[] = [
@@ -60,6 +62,7 @@ const BOTTOM_NAV: NavItem[] = [
   { id: 'setup',      icon: '⚙',  label: 'Setup',     desc: 'First-time setup and provider auto-detect' },
   { id: 'companion',  icon: '⊚',  label: 'Companion', desc: 'Pair your phone to control Henry remotely' },
   { id: 'settings',   icon: '⊙',  label: 'Settings',  desc: 'Profile, AI providers, engines, and pairing' },
+  { id: 'about',      icon: 'ⓘ',  label: 'About',     desc: 'Version, updates, and your setup progress' },
 ];
 
 /** Every navigable surface — one source of truth for the sidebar and the ⌘K launcher. */

@@ -336,14 +336,27 @@ async function processNextTask() {
         ? (result as { cost: number }).cost
         : null;
 
-    db.prepare(`
-      UPDATE tasks SET status = 'completed', completed_at = ?, result = ?, cost = COALESCE(?, cost)
-      WHERE id = ?
-    `).run(new Date().toISOString(), JSON.stringify(result), costArg, taskId);
+    // A task cancelled mid-flight must not be reported as completed. Some
+    // task types (notably executeFileTask) never read the abort signal, so the
+    // run finishes normally and used to overwrite the 'cancelled' row — the
+    // user saw "cancelled" and then found it marked done.
+    const alreadyCancelled = !!db
+      .prepare(`SELECT status FROM tasks WHERE id = ?`)
+      .get(taskId) && (db.prepare(`SELECT status FROM tasks WHERE id = ?`).get(taskId) as { status: string }).status === 'cancelled';
+    if (alreadyCancelled) {
+      db.prepare(`
+        UPDATE tasks SET result = ?, cost = COALESCE(?, cost) WHERE id = ?
+      `).run(JSON.stringify(result), costArg, taskId);
+    } else {
+      db.prepare(`
+        UPDATE tasks SET status = 'completed', completed_at = ?, result = ?, cost = COALESCE(?, cost)
+        WHERE id = ?
+      `).run(new Date().toISOString(), JSON.stringify(result), costArg, taskId);
+    }
 
     safeSend(getWindow, 'task:update', {
       id: taskId,
-      status: 'completed',
+      status: alreadyCancelled ? 'cancelled' : 'completed',
       result,
     });
 
@@ -357,6 +370,21 @@ async function processNextTask() {
     }
   } catch (error: unknown) {
     if (error instanceof Error && error.name === 'AbortError') {
+      // A cancelled task must still be written back. This used to `return`
+      // before any DB update, leaving the row stuck at status='running' — the
+      // UI showed it as cancelled while the single-slot broker still counted
+      // it as active, so the queue could wedge until restart.
+      db.prepare(`
+        UPDATE tasks SET status = 'cancelled', completed_at = ? WHERE id = ?
+      `).run(new Date().toISOString(), taskId);
+      safeSend(getWindow, 'task:update', { id: taskId, status: 'cancelled' });
+      if (nextTask.conversation_id) {
+        safeSend(getWindow, 'task:result', {
+          taskId,
+          conversationId: nextTask.conversation_id,
+          error: 'Cancelled',
+        });
+      }
       return;
     }
 

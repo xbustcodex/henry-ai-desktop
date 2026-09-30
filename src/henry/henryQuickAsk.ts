@@ -111,14 +111,6 @@ export const PANEL_QUICK_ASK = {
         : 'Review my workspace. What files or projects should I be focused on? What can I help you build or improve today?',
     }),
 
-  bible: (reference?: string) =>
-    henryQuickAsk({
-      mode: 'biblical',
-      prompt: reference
-        ? `Study ${reference} with me. Give me the text, key themes, historical context, and a practical application for today.`
-        : 'Let\'s do some scripture study. What passage or topic should we explore today?',
-    }),
-
   focus: () =>
     henryQuickAsk({
       prompt: 'Based on what you know about my projects, tasks, and goals — what should I be working on right now? Give me one clear focus for the next hour.',

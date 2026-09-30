@@ -107,8 +107,11 @@ export default function PrinterPanel() {
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setupListener();
+    // The unsubscribe was discarded, so every mount (doubled under StrictMode)
+    // left another live 'printer:data' listener behind.
+    const unsubscribe = setupListener();
     checkDepsAndScan();
+    return () => { unsubscribe?.(); };
   }, []);
 
   useEffect(() => {
@@ -131,8 +134,8 @@ export default function PrinterPanel() {
     }
   }
 
-  function setupListener() {
-    window.henryAPI.onPrinterData((data: any) => {
+  function setupListener(): () => void {
+    return window.henryAPI.onPrinterData((data: any) => {
       if (data.type === 'disconnected') {
         setConnected(false);
         addLog('disconnected', 'Printer disconnected.');

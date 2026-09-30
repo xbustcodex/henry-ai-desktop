@@ -386,14 +386,13 @@ The more you tell me, the more personal every response gets. I use your top fact
     name: 'monthly_finance',
     match: re(/(what'?s |show )?(my )?(income|expenses?|spending|finance) (this )?month/i, /how much (did i (make|spend|earn))/i),
     run: async () => {
-      const a = api(); if (!a?.financeSummary && !(a as any)?.['finance:summary']) return null;
-      // Note: `financeSummary` may not be a preload alias — call via direct invoke if needed
+      const a = api(); if (!a?.financeSummary) return null;
       let s: {income:number; expenses:number; net:number; breakdown:unknown[]} | null = null;
       try {
-        // Most direct path — the preload lacks a typed alias for finance:summary, so route via invoke
-        if ((window as any).electronAPI?.invoke) {
-          s = await (window as any).electronAPI.invoke('finance:summary', thisMonthStr()) as {income:number; expenses:number; net:number; breakdown:unknown[]};
-        }
+        // Use the typed preload alias. There is no `window.electronAPI` — the
+        // preload only exposes `henryAPI`, so this always returned null and
+        // "what's my finance" silently produced nothing.
+        s = await a.financeSummary(thisMonthStr()) as {income:number; expenses:number; net:number; breakdown:unknown[]};
       } catch { /* ignore */ }
       if (!s) return null;
       return `**${thisMonthStr()} finance:**\n\n• Income: ${fmtMoney(s.income)}\n• Expenses: ${fmtMoney(s.expenses)}\n• **Net: ${fmtMoney(s.net)}**`;
@@ -445,7 +444,7 @@ The more you tell me, the more personal every response gets. I use your top fact
     run: async () => {
       const a = api();
       try {
-        const list = await ((a as any)?.['remindersList']?.() ?? (window as any).electronAPI?.invoke?.('reminders:list')) as Array<{title:string;due_at:string;done:number}> | null;
+        const list = await (a?.remindersList?.() ?? null) as Array<{title:string;due_at:string;done:number}> | null;
         if (!list) return null;
         const open = list.filter(r => !r.done);
         if (!open.length) return "No active reminders. ✓";
@@ -471,27 +470,6 @@ The more you tell me, the more personal every response gets. I use your top fact
           out.push(`• ${j.date}${title}${mood}`);
         });
         return out.join('\n');
-      } catch { return null; }
-    },
-  },
-
-  // Verse of the day — entirely local lookup
-  {
-    name: 'verse_today',
-    match: re(/verse (of|for) (the )?day/i, /today'?s verse/i, /daily verse/i, /scripture for today/i),
-    run: async () => {
-      try {
-        const VERSES = [
-          'Proverbs 3:5-6', 'Philippians 4:13', 'Romans 8:28', 'Psalm 23:1',
-          'Joshua 1:9', 'Isaiah 40:31', 'Jeremiah 29:11', 'Matthew 6:33',
-          'John 3:16', '2 Corinthians 5:17', '1 Corinthians 13:4-7', 'Psalm 46:10',
-        ];
-        const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000);
-        const ref = VERSES[dayOfYear % VERSES.length];
-        const a = api();
-        const v = await a?.scriptureLookup?.(ref) as { reference?:string; text?:string } | null;
-        if (v?.text) return `**Verse for today — ${v.reference || ref}:**\n\n${v.text}`;
-        return `**Today's verse:** ${ref}\n\n_(Import the KJV in Settings → Scripture to see the full text right here.)_`;
       } catch { return null; }
     },
   },

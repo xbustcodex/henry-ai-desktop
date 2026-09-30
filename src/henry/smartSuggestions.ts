@@ -39,14 +39,6 @@ const RULES: SuggestionRule[] = [
     ],
   },
   {
-    patterns: [/scripture|bible|verse|proverbs|psalm|gospel|faith|prayer/i],
-    suggestions: [
-      { id: 'bib_study', label: 'Study deeper', prompt: 'Help me study this passage more deeply', icon: '📖' },
-      { id: 'bib_apply', label: 'Apply today', prompt: 'How can I apply this scripture to my day today?', icon: '🌅' },
-      { id: 'bib_cross', label: 'Cross-references', prompt: 'What are the key cross-references for this passage?', icon: '🔗' },
-    ],
-  },
-  {
     patterns: [/remind|reminder|due|deadline|schedule|meeting/i],
     suggestions: [
       { id: 'rem_set', label: 'Set reminder', prompt: 'Set a reminder for this', icon: '🔔' },

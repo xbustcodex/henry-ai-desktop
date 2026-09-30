@@ -63,6 +63,48 @@ contextBridge.exposeInMainWorld('henryAPI', {
   getMessages: (conversationId: string) => ipcRenderer.invoke('messages:getAll', conversationId),
   saveMessage: (message: Message) => ipcRenderer.invoke('messages:save', message),
 
+  // ── Chat attachments ───────────────────────────────────────
+  saveAttachment: (input: {
+    fileName: string;
+    mimeType?: string;
+    data: string | Uint8Array;
+    conversationId?: string;
+    messageId?: string;
+  }) => ipcRenderer.invoke('attachments:save', input),
+  linkAttachmentsToMessage: (ids: string[], messageId: string, conversationId?: string) =>
+    ipcRenderer.invoke('attachments:linkToMessage', ids, messageId, conversationId),
+  listAttachments: (conversationId: string) => ipcRenderer.invoke('attachments:list', conversationId),
+  listAttachmentsForMessage: (messageId: string) => ipcRenderer.invoke('attachments:listForMessage', messageId),
+  getAttachment: (id: string) => ipcRenderer.invoke('attachments:get', id),
+  deleteAttachment: (id: string) => ipcRenderer.invoke('attachments:delete', id),
+  openAttachment: (id: string) => ipcRenderer.invoke('attachments:open', id),
+
+  // ── Media library ──────────────────────────────────────────
+  mediaImport: (opts?: { kind?: 'image' | 'audio' | 'document' }) =>
+    ipcRenderer.invoke('media:import', opts ?? {}),
+  mediaList: (opts?: { kind?: 'image' | 'audio' | 'document'; limit?: number }) =>
+    ipcRenderer.invoke('media:list', opts ?? {}),
+  mediaCounts: () => ipcRenderer.invoke('media:counts'),
+  mediaGet: (id: string) => ipcRenderer.invoke('media:get', id),
+  mediaOpen: (id: string) => ipcRenderer.invoke('media:open', id),
+  mediaReveal: (id: string) => ipcRenderer.invoke('media:reveal', id),
+  mediaDelete: (id: string) => ipcRenderer.invoke('media:delete', id),
+
+  // ── PrimeTech marketplace ───────────────────────────────────
+  marketplaceList: () => ipcRenderer.invoke('marketplace:list'),
+  marketplaceStates: () => ipcRenderer.invoke('marketplace:states'),
+  marketplaceFetch: (entryId: string) => ipcRenderer.invoke('marketplace:fetch', entryId),
+  marketplaceOpenEntry: (entryId: string) => ipcRenderer.invoke('marketplace:openEntry', entryId),
+  marketplaceReveal: (filePath: string) => ipcRenderer.invoke('marketplace:reveal', filePath),
+  marketplaceHistory: () => ipcRenderer.invoke('marketplace:history'),
+  marketplaceRemove: (entryId: string) => ipcRenderer.invoke('marketplace:remove', entryId),
+
+  // ── Runtime / startup diagnostics ─────────────────────────
+  runtimeGetStatus: () => ipcRenderer.invoke('runtime:get-status'),
+  startupGetFailure: () => ipcRenderer.invoke('startup:get-failure'),
+  startupClearFailure: () => ipcRenderer.invoke('startup:clear-failure'),
+  runtimeRestart: () => ipcRenderer.invoke('runtime:restart'),
+
   // ── AI ────────────────────────────────────────────────────
   sendMessage: (params: AIInvokeParams) => ipcRenderer.invoke('ai:send', params),
   streamMessage: (params: AIInvokeParams) => {
@@ -214,6 +256,26 @@ contextBridge.exposeInMainWorld('henryAPI', {
   updateBookEntry: (id: string, patch: Record<string, unknown>) => ipcRenderer.invoke('book:update', { id, patch }),
   deleteBookEntry: (id: string) => ipcRenderer.invoke('book:delete', { id }),
 
+  // ── Quoting (estimates → quotes → production runs) ────────
+  // These handlers were registered in main but never bridged, so
+  // QuotingPanel's `api()` probe returned undefined and the whole panel
+  // rendered empty.
+  quoteList: (opts?: { status?: string; query?: string; limit?: number }) =>
+    ipcRenderer.invoke('quote:list', opts),
+  quoteGet: (id: string) => ipcRenderer.invoke('quote:get', id),
+  quoteSave: (quote: Record<string, unknown>) => ipcRenderer.invoke('quote:save', quote),
+  quoteDelete: (id: string) => ipcRenderer.invoke('quote:delete', id),
+  quoteSetStatus: (id: string, status: string) => ipcRenderer.invoke('quote:setStatus', id, status),
+  quoteDuplicate: (id: string) => ipcRenderer.invoke('quote:duplicate', id),
+  quoteLineItemSave: (item: Record<string, unknown>) => ipcRenderer.invoke('quote:lineItem:save', item),
+  quoteLineItemDelete: (id: string) => ipcRenderer.invoke('quote:lineItem:delete', id),
+  quoteLineItemsReorder: (quoteId: string, ids: string[]) =>
+    ipcRenderer.invoke('quote:lineItems:reorder', quoteId, ids),
+  quoteSummary: (opts?: { sinceDays?: number }) => ipcRenderer.invoke('quote:summary', opts),
+  quoteConvertToRun: (quoteId: string, machineId?: string) =>
+    ipcRenderer.invoke('quote:convertToRun', quoteId, machineId),
+  quoteExportMarkdown: (quoteId: string) => ipcRenderer.invoke('quote:exportMarkdown', quoteId),
+
   // ── Approval Queue ────────────────────────────────────────
   approvalsList: (filter?: { status?: string; limit?: number }) =>
     ipcRenderer.invoke('approvals:list', filter),
@@ -226,6 +288,21 @@ contextBridge.exposeInMainWorld('henryAPI', {
   toggleRoutine: (id: string, enabled: boolean) =>
     ipcRenderer.invoke('scheduler:toggle', { id, enabled }),
   runRoutineNow: (id: string) => ipcRenderer.invoke('scheduler:run-now', { id }),
+
+  // ── Automation run history ────────────────────────────────────────
+  automationRuns: (opts?: { taskId?: string; limit?: number; unreadOnly?: boolean }) =>
+    ipcRenderer.invoke('automation:runs', opts ?? {}),
+  automationUnreadCount: () => ipcRenderer.invoke('automation:unread-count'),
+  automationMarkRunRead: (id: string) => ipcRenderer.invoke('automation:mark-read', id),
+  automationMarkAllRunsRead: () => ipcRenderer.invoke('automation:mark-all-read'),
+  automationClearRuns: (taskId?: string) => ipcRenderer.invoke('automation:clear-runs', taskId),
+  automationAbort: (taskId: string) => ipcRenderer.invoke('automation:abort', taskId),
+  automationIsRunning: (taskId: string) => ipcRenderer.invoke('automation:is-running', taskId),
+  onAutomationRunChanged: (cb: (data: unknown) => void) => {
+    const handler = (_e: Electron.IpcRendererEvent, payload: unknown) => cb(payload);
+    ipcRenderer.on('automation:run-changed', handler);
+    return () => { ipcRenderer.removeListener('automation:run-changed', handler); };
+  },
   deleteRoutine: (id: string) => ipcRenderer.invoke('scheduler:delete', { id }),
   // Main → renderer events: a Routine started / finished running.
   onSchedulerTaskStarted: (cb: (data: unknown) => void) => {
@@ -333,8 +410,13 @@ contextBridge.exposeInMainWorld('henryAPI', {
   // Google OAuth (PKCE desktop flow)
   googleStartAuth: (opts: { clientId: string; clientSecret: string; scopes: string[] }) =>
     ipcRenderer.invoke('google:startAuth', opts),
-  googleGetToken: () => ipcRenderer.invoke('google:getToken'),
-  googleRefreshToken: () => ipcRenderer.invoke('google:refreshToken'),
+  // The handlers refresh using the app's OAuth client credentials, so they must
+  // be passed through. These previously invoked with no argument at all, which
+  // made the handler's destructuring throw a TypeError on every call.
+  googleGetToken: (creds?: { clientId: string; clientSecret: string }) =>
+    ipcRenderer.invoke('google:getToken', creds ?? { clientId: '', clientSecret: '' }),
+  googleRefreshToken: (creds?: { clientId: string; clientSecret: string }) =>
+    ipcRenderer.invoke('google:refreshToken', creds ?? { clientId: '', clientSecret: '' }),
   googleHasCredentials: () => ipcRenderer.invoke('google:hasCredentials'),
   googleDisconnect: () => ipcRenderer.invoke('google:disconnect'),
   // Recordings (Meeting Recorder → SQLite)
@@ -346,12 +428,6 @@ contextBridge.exposeInMainWorld('henryAPI', {
   captureSave: (c: Record<string,unknown>) => ipcRenderer.invoke('capture:save', c),
   exportBackup: () => ipcRenderer.invoke('data:export-backup'),
   captureList: (limit?: number) => ipcRenderer.invoke('capture:list', limit),
-  // Scripture / DeepWellAudio
-  scriptureSavedList: () => ipcRenderer.invoke('scripture:saved-list'),
-  scriptureSaveVerse: (v: Record<string,unknown>) => ipcRenderer.invoke('scripture:save-verse', v),
-  scriptureUpdateNote: (ref: string, note: string) => ipcRenderer.invoke('scripture:update-note', ref, note),
-  scriptureDeleteVerse: (ref: string) => ipcRenderer.invoke('scripture:delete-verse', ref),
-  scriptureSearchSaved: (q: string) => ipcRenderer.invoke('scripture:search-saved', q),
   // Focus sessions
   focusSave: (s: Record<string,unknown>) => ipcRenderer.invoke('focus:save', s),
   focusList: (limit?: number) => ipcRenderer.invoke('focus:list', limit),
@@ -460,22 +536,12 @@ contextBridge.exposeInMainWorld('henryAPI', {
   getMemorySummaries: (opts?: Record<string, unknown>) => ipcRenderer.invoke('memory:getMemorySummaries', opts),
   saveGraphEdge: (edge: Record<string, unknown>) => ipcRenderer.invoke('memory:saveGraphEdge', edge),
   getGraphEdges: (opts?: Record<string, unknown>) => ipcRenderer.invoke('memory:getGraphEdges', opts),
+  getMemoryGraph: () => ipcRenderer.invoke('memory:getGraph'),
 
   // ── Memory — Deep Context + Where-We-Left-Off ─────────────
   buildDeepContext: (params: Record<string, unknown>) => ipcRenderer.invoke('memory:buildDeepContext', params),
   getWhereWeLeftOff: () => ipcRenderer.invoke('memory:getWhereWeLeftOff'),
   saveWhereWeLeftOff: (summary: string) => ipcRenderer.invoke('memory:saveWhereWeLeftOff', summary),
-
-  // ── Scripture (local store) ───────────────────────────────
-  scriptureLookup: (reference: string) => ipcRenderer.invoke('scripture:lookup', reference),
-  scriptureImport: (entries: Array<Record<string, unknown>>) =>
-    ipcRenderer.invoke('scripture:import', { entries }),
-  scriptureCount: () => ipcRenderer.invoke('scripture:count'),
-  scriptureGetChapter: (book: string, chapter: number) => ipcRenderer.invoke('scripture:getChapter', book, chapter),
-  scriptureSearchKeyword: (query: string, limit?: number) => ipcRenderer.invoke('scripture:searchKeyword', query, limit),
-  scriptureDownloadKJV: (books?: string[]) => ipcRenderer.invoke('scripture:downloadKJV', books),
-  scriptureSearch: (q: string) => ipcRenderer.invoke('scripture:search', q),
-  pickScriptureImportJson: () => ipcRenderer.invoke('scripture:pickImportJson'),
 
   // ── Lessons / Curriculum (Henry as teacher) ────────────────
   lessonsCoursesList: () => ipcRenderer.invoke('lessons:courses:list'),
@@ -494,8 +560,23 @@ contextBridge.exposeInMainWorld('henryAPI', {
   pathExists: (filePath: string) => ipcRenderer.invoke('fs:pathExists', filePath) as Promise<boolean>,
   writeFile: (filePath: string, content: string) => ipcRenderer.invoke('fs:writeFile', { path: filePath, content }),
 
+  // ── Project source files (dev mode only, main-process path-sandboxed) ──
+  // selfRepairTools calls these by name; the handlers existed in main but
+  // were never bridged, so the agent tools always threw on `henryAPI.*`.
+  readSourceFile: (filePath: string) => ipcRenderer.invoke('source:read', filePath),
+  writeSourceFile: (filePath: string, content: string) => ipcRenderer.invoke('source:write', filePath, content),
+
   // ── Ollama ────────────────────────────────────────────────
   ollamaStatus: (baseUrl?: string) => ipcRenderer.invoke('ollama:status', baseUrl),
+  // The local gateway IPC was registered but never exposed, so the renderer's
+  // optional probe always came back undefined.
+  getLocalGatewayStatus: () => ipcRenderer.invoke('henry:localGatewayStatus'),
+
+  // ── OpenCode (models + loopback bridge) ───────────────
+  opencodeStatus: () => ipcRenderer.invoke('opencode:status'),
+  opencodeModels: () => ipcRenderer.invoke('opencode:models'),
+  opencodeBridgeStatus: () => ipcRenderer.invoke('opencode:bridgeStatus'),
+  opencodeTest: (model: string) => ipcRenderer.invoke('opencode:test', model),
   ollamaModels: (baseUrl?: string) => ipcRenderer.invoke('ollama:models', baseUrl),
   ollamaPull: (model: string, baseUrl?: string) => ipcRenderer.invoke('ollama:pull', model, baseUrl),
   ollamaDelete: (model: string, baseUrl?: string) => ipcRenderer.invoke('ollama:delete', model, baseUrl),
@@ -523,6 +604,7 @@ contextBridge.exposeInMainWorld('henryAPI', {
   computerScreenshot: (params?: Record<string, unknown>) => ipcRenderer.invoke('computer:screenshot', params ?? {}),
   computerOpenApp: (appName: string) => ipcRenderer.invoke('computer:openApp', appName),
   computerOpenUrl: (url: string) => ipcRenderer.invoke('computer:openUrl', url),
+  computerCloseApp: (appName: string) => ipcRenderer.invoke('computer:closeApp', appName),
   computerOsascript: (script: string) => ipcRenderer.invoke('computer:osascript', script),
   computerRunShell: (params: Record<string, unknown>) => ipcRenderer.invoke('computer:runShell', params),
   computerNewFolder: (params: { path: string }) => ipcRenderer.invoke('computer:newFolder', params),
@@ -638,6 +720,8 @@ contextBridge.exposeInMainWorld('henryAPI', {
   voiceSpeak: (params: { text: string; engine?: string }) => ipcRenderer.invoke('voice:speak', params),
   voiceStopSpeaking: () => ipcRenderer.invoke('voice:stopSpeaking'),
   voiceTtsStatus: () => ipcRenderer.invoke('voice:ttsStatus'),
+  voiceGreeting: (opts?: { speak?: boolean }) => ipcRenderer.invoke('voice:greeting', opts ?? {}),
+  voiceGreetingClearCache: () => ipcRenderer.invoke('voice:greeting:clearCache'),
 
   // ── Companion Sync Bridge ─────────────────────────────────
   syncStart: (port?: number) => ipcRenderer.invoke('henry:sync:start', port),

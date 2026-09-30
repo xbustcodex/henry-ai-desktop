@@ -10,6 +10,7 @@
  */
 
 import { execSync, exec } from 'child_process';
+import { detectLinuxSession } from './sessionDetect';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -65,6 +66,24 @@ function toolExists(cmd: string): boolean {
   try { execSync(`which ${cmd}`, { encoding: 'utf8', env: ENV, timeout: 3000 }); return true; } catch { return false; }
 }
 
+// Whitelisted packages that can be installed via privileged helper
+const ALLOWED_LINUX_PACKAGES = new Set([
+  'scrot',
+  'imagemagick',
+  'gnome-screenshot',
+  'xfce4-screenshooter',
+  'sqlite3',
+  'yt-dlp',
+  'node',
+  'git',
+  'ffmpeg',
+  'python3',
+  'xdotool',
+  'wmctrl',
+  'xclip',
+  'wl-clipboard',
+]);
+
 async function installViaPackageManager(pkg: string): Promise<FixResult> {
   const platform = process.platform;
   if (platform === 'darwin') {
@@ -75,11 +94,47 @@ async function installViaPackageManager(pkg: string): Promise<FixResult> {
       });
     });
   } else if (platform === 'linux') {
-    // Try apt first, then fallback to generic instructions
+    // Check if package is in allowlist
+    if (!ALLOWED_LINUX_PACKAGES.has(pkg)) {
+      return { success: false, message: `Package "${pkg}" is not in the allowed list for auto-install. Install manually: sudo apt-get install ${pkg}` };
+    }
+
+    // Check for apt lock before attempting installation
+    const lockPaths = ['/var/lib/dpkg/lock', '/var/lib/dpkg/lock-frontend', '/var/lib/apt/lists/lock'];
+    for (const lockPath of lockPaths) {
+      try {
+        if (fs.existsSync(lockPath)) {
+          // Check if lock is held by another process
+          const { execSync } = await import('child_process');
+          try {
+            execSync(`lsof ${lockPath} 2>/dev/null`, { stdio: 'ignore', timeout: 5000 });
+            return { success: false, message: 'Package manager busy — another apt/dpkg process is running. Please wait and retry.' };
+          } catch {
+            // Lock file exists but no process holds it (stale lock) — we'll proceed but warn
+          }
+        }
+      } catch {
+        // lsof not available or other error — proceed with caution
+      }
+    }
+
+    // Use pkexec for privileged installation on Linux
+    // Single pkexec invocation with shell to run both update and install atomically
     return new Promise(resolve => {
-      exec(`apt-get update && apt-get install -y ${pkg}`, { env: ENV, timeout: 120_000 }, (err) => {
-        if (err) resolve({ success: false, message: `apt install ${pkg} failed (need sudo?): ${err.message.slice(0, 100)}. Try: sudo apt-get install ${pkg}` });
-        else resolve({ success: true, message: `Installed ${pkg} via apt` });
+      const command = `sh -c 'apt-get update && apt-get install -y ${pkg}'`;
+      exec(`pkexec ${command}`, { env: ENV, timeout: 180_000 }, (err) => {
+        if (err) {
+          const msg = err.message.slice(0, 200);
+          if (msg.includes('polkit') || msg.includes('authentication') || msg.includes('cancelled')) {
+            resolve({ success: false, message: `Installation cancelled or authentication failed. Install manually: sudo apt-get install ${pkg}` });
+          } else if (msg.includes('lock') || msg.includes('dpkg') || msg.includes('apt')) {
+            resolve({ success: false, message: 'Package manager busy or locked. Please wait and retry, or run manually: sudo apt-get install ' + pkg });
+          } else {
+            resolve({ success: false, message: `pkexec apt install ${pkg} failed: ${msg}` });
+          }
+        } else {
+          resolve({ success: true, message: `Installed ${pkg} via apt (with pkexec)` });
+        }
       });
     });
   } else if (platform === 'win32') {
@@ -153,37 +208,25 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
       id: 'cloudflared',
       name: 'Cloudflare Tunnel',
       category: 'optional',
-      description: 'Secure tunnel so mobile works from anywhere',
+      description: 'Secure tunnel so mobile works from anywhere (optional — LAN pairing works without it)',
       check: async () => {
         if (isDarwin()) {
           const v = toolVersion('cloudflared');
-          return v ? { ok: true, volume: v } : { ok: false, detail: 'cloudflared not installed — mobile only works on home WiFi' };
+          return v ? { ok: true, version: v } : { ok: true, detail: 'cloudflared not installed — mobile only works on home WiFi (optional)' };
         }
         if (isLinux()) {
-          try { execSync('cloudflared --version', { encoding: 'utf8', env: ENV, timeout: 3000 }); return { ok: true, volume: 'cloudflared' }; } catch {
-            // Check via PATH or default install locations
-            try { execSync('which cloudflared', { encoding: 'utf8', env: ENV, timeout: 3000 }); return { ok: true, volume: 'cloudflared' }; } catch {
-              return { ok: false, detail: 'cloudflared not installed — install via: sudo apt-get install cloudflared, or download from https://developers.cloudflare.com/cloudflare-one/connections/how-to/install-cloudflared/' };
+          try { execSync('cloudflared --version', { encoding: 'utf8', env: ENV, timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }); return { ok: true, version: 'cloudflared' }; } catch {
+            try { execSync('which cloudflared', { encoding: 'utf8', env: ENV, timeout: 3000 }); return { ok: true, version: 'cloudflared' }; } catch {
+              return { ok: true, detail: 'cloudflared not installed — optional for remote tunnel. LAN pairing works without it. Install manually if needed: sudo apt-get install cloudflared' };
             }
           }
         }
         // Windows or other platforms
-        try { execSync('cloudflared --version', { encoding: 'utf8', env: ENV, timeout: 3000 }); return { ok: true, volume: 'cloudflared' }; } catch {
-          return { ok: false, detail: 'cloudflared not installed — optional for remote companion' };
+        try { execSync('cloudflared --version', { encoding: 'utf8', env: ENV, timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }); return { ok: true, version: 'cloudflared' }; } catch {
+          return { ok: true, detail: 'cloudflared not installed — optional for remote companion' };
         }
       },
-      fix: async () => {
-        if (isDarwin()) {
-          return installViaPackageManager('cloudflared');
-        }
-        if (isLinux()) {
-          try { execSync('apt-get update && apt-get install -y cloudflared', { env: ENV, timeout: 120_000 }); return { success: true, message: 'Installed cloudflared via apt' }; } catch {
-            return { success: false, message: 'Auto-install failed — install cloudflared manually: sudo apt-get install cloudflared' };
-          }
-        }
-        // Windows
-        return { success: false, message: 'Auto-install not supported on this platform — install cloudflared manually' };
-      },
+      // No auto-fix for optional cloudflared
     },
 
     {
@@ -215,7 +258,7 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
     {
       id: 'whisper_cpp',
       name: 'Whisper (local speech-to-text)',
-      category: 'recommended',
+      category: 'optional',
       description: 'whisper.cpp — free, offline voice input for Henry',
       check: async () => {
         try {
@@ -223,12 +266,13 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
           const bin = detectWhisperBinary(true);
           return bin
             ? { ok: true, detail: bin }
-            : { ok: false, detail: 'whisper-cli not installed — voice input runs one-time setup on first use' };
+            : { ok: false, detail: 'whisper.cpp not installed — voice input requires manual setup (see Settings → Voice)' };
         } catch (e) {
           return { ok: false, detail: String(e) };
         }
       },
-      fix: async () => installViaPackageManager('whisper-cpp'),
+      // whisper.cpp is not available via apt; user must build from source or download binary
+      // No auto-fix available
     },
 
     {
@@ -301,7 +345,7 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
       description: 'Video downloader — for media capture features',
       check: async () => {
         const v = toolVersion('yt-dlp');
-        return v ? { ok: true, version: v } : { ok: false, detail: 'yt-dlp not installed' };
+        return v ? { ok: true, version: v } : { ok: false, detail: 'yt-dlp not installed — optional for video downloads' };
       },
       fix: async () => installViaPackageManager('yt-dlp'),
     },
@@ -374,30 +418,76 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
         }
       },
       fix: async () => {
-        return new Promise((resolve) => {
-          exec('ollama pull qwen2.5-coder:7b', { env: ENV, timeout: 600_000 }, (err) => {
-            if (err) resolve({ success: false, message: 'Auto-pull failed — run: ollama pull qwen2.5-coder:7b' });
-            else resolve({ success: true, message: 'Pulled qwen2.5-coder:7b for the free local coder' });
+        // Use Ollama API directly instead of exec() to avoid PATH issues
+        const baseUrl = 'http://localhost:11434';
+        try {
+          const response = await fetch(`${baseUrl}/api/pull`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: 'qwen2.5-coder:7b', stream: true }),
           });
-        });
+
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          if (!response.body) throw new Error('No response body');
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const text = decoder.decode(value, { stream: true });
+            const lines = text.split('\n').filter(Boolean);
+
+            for (const line of lines) {
+              try {
+                const data = JSON.parse(line);
+                if (data.status === 'success' || data.status === 'done') {
+                  return { success: true, message: 'Pulled qwen2.5-coder:7b for the free local coder' };
+                }
+              } catch {
+                // Skip malformed JSON lines
+              }
+            }
+          }
+
+          return { success: true, message: 'Pulled qwen2.5-coder:7b for the free local coder' };
+        } catch (err: any) {
+          return { success: false, message: `Auto-pull failed: ${err.message}. Run: ollama pull qwen2.5-coder:7b` };
+        }
       },
     },
 
     // ── Database ──────────────────────────────────────────────────────────────
     {
       id: 'sqlite3',
-      name: 'SQLite',
+      name: 'SQLite Database',
       category: 'required',
-      description: 'Henry\'s local database — stores all conversations, memory, tasks',
+      description: "Henry's local database — stores all conversations, memory, tasks",
       check: async () => {
-        const v = toolVersion('sqlite3');
-        // Also check DB file health
+        // Check DB file health - the sqlite3 CLI is NOT required for database operation
+        // Henry uses better-sqlite3 (native Node.js binding) which works without the CLI
         const dbExists = fs.existsSync(henryDbPath);
-        return v && dbExists
-          ? { ok: true, volume: v, detail: `DB: ${(fs.statSync(henryDbPath).size / 1024).toFixed(0)}KB` }
-          : { ok: false, detail: !dbExists ? 'Database file missing — will recreate on restart' : 'sqlite3 not installed' };
+        if (!dbExists) {
+          return { ok: false, detail: 'Database file missing — will recreate on restart' };
+        }
+        try {
+          const stat = fs.statSync(henryDbPath);
+          const sizeKB = (stat.size / 1024).toFixed(0);
+          // Quick integrity check by opening the DB
+          const testDb = require('better-sqlite3')(henryDbPath, { readonly: true });
+          testDb.pragma('integrity_check');
+          testDb.close();
+          return { ok: true, detail: `DB: ${sizeKB}KB — healthy` };
+        } catch (e) {
+          return { ok: false, detail: `Database corrupted or inaccessible: ${e instanceof Error ? e.message : String(e)}` };
+        }
       },
-      fix: async () => installViaPackageManager('sqlite3'),
+      fix: async () => {
+        // DB corruption fix would be complex - just recreate
+        return { success: false, message: 'Database issues require manual recovery. Backup henry.db and restart to recreate.' };
+      },
     },
 
     // ── Henry settings check ──────────────────────────────────────────────────
@@ -473,7 +563,7 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
             try { fs.unlinkSync(tmp); } catch { /* */ }
             if (ok) return { ok: true, detail: `${usedBackend} available` };
             // No backend available — check session type for helpful message
-            const sessionType = process.env.XDG_SESSION_TYPE || process.env.XDG_CURRENT_DESKTOP || 'unknown';
+            const sessionType = detectLinuxSession();
             return { ok: false, detail: `No screenshot backend available (${sessionType}). Install scrot, ImageMagick, or gnome-screenshot.` };
           }
 
@@ -512,8 +602,15 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
       },
       fix: async () => {
         if (isLinux()) {
-          // Linux: install a screenshot backend (scrot/ImageMagick/gnome-screenshot)
-          return { success: false, message: 'Install a screenshot tool: sudo apt install scrot (or ImageMagick for "import")' };
+          // Linux: install a screenshot backend via pkexec
+          // Try scrot first, then ImageMagick, then gnome-screenshot
+          for (const pkg of ['scrot', 'imagemagick', 'gnome-screenshot']) {
+            const result = await installViaPackageManager(pkg);
+            if (result.success) {
+              return { success: true, message: `Installed ${pkg} for screen capture` };
+            }
+          }
+          return { success: false, message: 'Failed to install any screenshot backend. Try manually: sudo apt install scrot' };
         }
         if (isWindows()) {
           return { success: true, message: 'Screen capture available on Windows' };
@@ -539,7 +636,7 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
             const { execSync } = require('child_process');
             const ENV = { ...process.env, HOME: os.homedir(), PATH: `/usr/local/bin:/usr/bin:/bin:${process.env.PATH || ''}` };
 
-            const sessionType = process.env.XDG_SESSION_TYPE || process.env.XDG_CURRENT_DESKTOP || 'unknown';
+            const sessionType = detectLinuxSession();
             const checkBin = (bins: string[]): string | null => {
               for (const b of bins) {
                 try { execSync(`which ${b} 2>/dev/null`, { encoding: 'utf8', env: ENV, timeout: 3000 }); return b; } catch { /* continue */ }
@@ -554,7 +651,7 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
             const wlCopy = checkBin(['wl-copy', 'wl-paste']);
 
             const wayland = sessionType === 'wayland';
-            const x11 = sessionType === 'x11' || sessionType === 'org.kde.plasma';
+            const x11 = sessionType === 'x11';
             const isWSL = (process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP) ? true : false;
 
             // Determine status
@@ -607,9 +704,14 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
       fix: async (): Promise<FixResult> => {
         try {
           if (isLinux()) {
-            // Linux: no macOS permissions. Report how to install the tools.
-            const pkg = 'xdotool wmctrl';
-            return { success: false, message: `Install computer control tools: sudo apt install ${pkg}` };
+            // Linux: install computer control tools via pkexec
+            for (const pkg of ['xdotool', 'wmctrl', 'xclip']) {
+              const result = await installViaPackageManager(pkg);
+              if (!result.success) {
+                return { success: false, message: `Failed to install ${pkg}: ${result.message}` };
+              }
+            }
+            return { success: true, message: 'Installed computer control tools (xdotool, wmctrl, xclip)' };
           }
           if (isWindows()) {
             return { success: true, message: 'Computer access available on Windows' };

@@ -50,7 +50,7 @@ export const WRITER_DOCUMENT_TYPES = [
   {
     id: 'sermon_outline',
     label: 'Sermon outline',
-    description: 'Preaching outline with scripture anchors, moves, and application.',
+    description: 'Preaching outline with text anchors, moves, and application.',
     defaultSections: ['Text & theme', 'Big idea', 'Outline', 'Application', 'Illustrations (optional)'],
     filenameLabel: 'Sermon Outline',
   },

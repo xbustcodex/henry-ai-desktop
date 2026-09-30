@@ -11,6 +11,7 @@ import {
   stopSpeaking,
 } from '../../henry/voice';
 import { toast } from '../ui/Toast';
+import { AttachmentPicker, uploadAttachments } from './MessageAttachments';
 
 interface ChatInputProps {
   onSend: (content: string) => void;
@@ -28,6 +29,10 @@ interface ChatInputProps {
   /** Agent mode: when on, Henry can use his tools (calendar, messages, quotes, QuickBooks, web). */
   agentMode?: boolean;
   onToggleAgentMode?: () => void;
+  /** Attachments queued for the next message. */
+  pendingAttachments?: import('../../types').MessageAttachment[];
+  onAttachmentsChange?: (next: import('../../types').MessageAttachment[]) => void;
+  conversationId?: string;
 }
 
 export default function ChatInput({
@@ -45,6 +50,9 @@ export default function ChatInput({
   ambientMode = false,
   agentMode = false,
   onToggleAgentMode,
+  pendingAttachments = [],
+  onAttachmentsChange,
+  conversationId,
 }: ChatInputProps) {
   const [input, setInput] = useState('');
   const [listening, setListening] = useState(false);
@@ -596,6 +604,22 @@ export default function ChatInput({
           )}
 
           {/* File/Document ingest button */}
+          {onAttachmentsChange && !isStreaming && (
+            <AttachmentPicker
+              attachments={pendingAttachments}
+              disabled={isStreaming}
+              onAdd={(files) => {
+                void uploadAttachments(files, conversationId).then((saved) => {
+                  if (saved.length) onAttachmentsChange([...pendingAttachments, ...saved]);
+                });
+              }}
+              onRemove={(id) => {
+                void window.henryAPI.deleteAttachment(id);
+                onAttachmentsChange(pendingAttachments.filter((a) => a.id !== id));
+              }}
+            />
+          )}
+
           {onFileIngest && !isStreaming && (
             <>
               <input

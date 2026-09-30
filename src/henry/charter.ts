@@ -3,16 +3,11 @@
  * Single source of truth for who Henry is and how each mode steers behavior.
  */
 
-import type { BibleSourceProfileId } from './biblicalProfiles';
-import { BIBLICAL_LABEL_GUIDANCE } from './biblicalLabels';
-import { getBiblicalCompanionPromptAddition } from './biblicalProfiles';
 import type { Design3DWorkflowTypeId } from './design3dTypes';
 import type { BuildDesign3DSystemAdditionOptions } from './design3dPrompts';
 import type { WriterDocumentTypeId } from './documentTypes';
 import type { BuildWriterSystemAdditionOptions } from './writerPrompts';
 import { buildDesign3DSystemAddition } from './design3dPrompts';
-import { getBiblicalResponseScaffoldHint } from './formatBiblicalResponse';
-import { getStudyNoteScaffoldHint } from './studyNoteScaffold';
 import { buildWriterSystemAddition } from './writerPrompts';
 import { buildRichMemoryBlock } from './richMemory';
 import { formatWeatherBlock, type WeatherSnapshot } from './weatherContext';
@@ -58,7 +53,6 @@ export const HENRY_OPERATING_MODES = [
   'writer',
   'developer',
   'builder',
-  'biblical',
   'design3d',
   'computer',
   'secretary',
@@ -249,27 +243,6 @@ ITERATION RULES:
 - If the request is vague, make bold confident choices and explain them in that one sentence
 
 REMEMBER: Henry is supposed to be better than Replit. The bar is a complete, production-worthy app that runs immediately and looks like it was designed by a professional.`,
-
-    biblical: `Mode: Bible Study — scripture-first, grounded, respectful, never preachy.
-
-You bring the same warmth and depth here as everywhere else. This is sacred territory for ${ownerName} and you treat it that way — with care and honesty, not performance.
-
-Prioritize scripture-first reasoning. Use these precise content labels when sectioning answers:
-- **scripture**: Verbatim or closely-indicated biblical text. Name translation or tradition if relevant.
-- **commentary**: Notes or explanations from a tradition, study Bible, or teacher — not inspired text itself.
-- **interpretation**: Theological or exegetical reasoning — what someone understands the passage to mean.
-- **historical context**: Background from history, language, or setting — scholarly or traditional.
-- **speculative**: Hypothesis or possibility; not doctrine. State uncertainty plainly.
-
-Never present commentary, interpretation, or speculation as if it were verbatim scripture.
-
-When unsure about translation, canon, or history, say so plainly. Ethiopian Orthodox canon awareness: acknowledge a broader canon and different book ordering than typical Protestant 66-book tables; do not flatten Ethiopian tradition into Western assumptions.
-
-Ethiopian Study Bible: treat as a configurable study/source profile (notes, headings, helps), not a single assumed universal printed edition unless the user specifies publisher, year, or text.
-
-The active Bible source profile in settings is appended below for study awareness; it does not replace careful labeling of your own words vs scripture.
-
-When a **Local scripture lookup** section appears in context, text inside it comes only from the user's imported local store and its stated source label — never invent a specific Ethiopian Study Bible edition. If lookup says the verse is missing, do not fabricate scripture; stay honest and study-oriented.`,
 
     design3d: `Mode: Design & 3D — spatial thinking, physical objects, layouts, and creative planning.
 
@@ -476,8 +449,6 @@ export function getModeInstruction(mode: HenryOperatingMode): string {
 }
 
 export interface CompanionStreamPromptOptions {
-  /** When mode is `biblical`: which source/canon profile to emphasize (localStorage-backed in UI). */
-  biblicalSourceProfileId?: BibleSourceProfileId;
   /** When mode is `writer`: document type for scaffolding and tone (localStorage-backed in UI). */
   writerDocumentTypeId?: WriterDocumentTypeId;
   /** When mode is `writer`: workspace-relative path to draft selected for continuity (path only). */
@@ -535,11 +506,6 @@ Let this shape how you show up. If it's early morning, ${ownerName} might be sta
   const memoryBlock = memoryContext.trim()
     ? `What you already know about this workspace / thread (use lightly; do not pretend to recall raw logs):\n${memoryContext.trim()}\n`
     : '';
-
-  const biblicalBlock =
-    mode === 'biblical'
-      ? `\n${getBiblicalCompanionPromptAddition(options?.biblicalSourceProfileId)}\n\n${getBiblicalResponseScaffoldHint()}\n\n${getStudyNoteScaffoldHint()}\n`
-      : '';
 
   const writerOpts: BuildWriterSystemAdditionOptions | undefined =
     mode === 'writer'
@@ -620,7 +586,7 @@ If the answer is no, you MUST NOT describe or imply having seen it. But being ho
 
   const aiDisclaimerBlock = `
 HENRY — AI HONESTY & SAFETY (always present, non-negotiable):
-You are an AI built by humans. You can be wrong. You can misremember, misunderstand, hallucinate facts, or generate plausible-sounding but incorrect information — especially on specialized topics like medicine, law, finance, engineering, and scripture.
+You are an AI built by humans. You can be wrong. You can misremember, misunderstand, hallucinate facts, or generate plausible-sounding but incorrect information — especially on specialized topics like medicine, law, finance, and engineering.
 
 When you are uncertain, say so clearly and plainly. Never project false confidence.
 
@@ -732,7 +698,7 @@ ${buildPersonalityBlock()}
 
 ${timeBlock}
 ${intentionBlock ? intentionBlock + '\n' : ''}${sessionSummaryBlock}${getModeInstruction(mode)}
-${writerBlock}${design3dBlock}${biblicalBlock}
+${writerBlock}${design3dBlock}
 ${actionBehaviorBlock}
 ${liveDataHonestyBlock}
 ${aiDisclaimerBlock}
@@ -843,9 +809,7 @@ export function buildGroqFreeSystemPrompt(mode: HenryOperatingMode): string {
   lines.push('Key shortcuts: ⌥Space opens Henry from anywhere (selected text auto-pastes). ⌘⇧H opens full window.');
   lines.push('When users seem stuck or ask how to do something, proactively mention the relevant panel or shortcut.');
 
-  if (mode === 'biblical') {
-    lines.push('Biblical study mode: support scripture study, theology, and spiritual reflection.');
-  } else if (mode === 'writer') {
+  if (mode === 'writer') {
     lines.push('Writer mode: help draft, edit, and improve documents.');
   }
 

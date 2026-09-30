@@ -96,7 +96,6 @@ function classifyTier(text: string): { tier: 1 | 2 | 3; reason: string } {
     /\b(step by step|detailed|comprehensive|in.depth)\b/i,
     /```[\s\S]{30,}/,
     /\b(debug|refactor|optimize|implement|build)\b.{20,}/i,
-    /\b(Bible|scripture|verse|theology|exegesis)\b.{10,}/i,
   ];
   if (complex.some(p => p.test(text)) || len > 400) return { tier: 2, reason: 'complex \u2192 70b' };
 

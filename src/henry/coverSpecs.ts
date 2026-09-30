@@ -188,7 +188,7 @@ export const GENRES: GenreSpec[] = [
     id: 'faith',
     label: 'Faith / Christian',
     artDirection:
-      'reverent and hopeful — light rays, open sky, ancient paper or subtle biblical landscape textures; warm gold and deep blue tones, dignified and uncluttered',
+      'reverent and hopeful — light rays, open sky, ancient paper or subtle dawn landscape textures; warm gold and deep blue tones, dignified and uncluttered',
     typography: 'serif',
     conventions:
       'Christian/faith covers use light as a motif (dawn, rays, open sky), warm-gold-on-deep-blue palettes, and classic serif type that signals trust and tradition.',

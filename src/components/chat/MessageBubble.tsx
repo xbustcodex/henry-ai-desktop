@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import hljs from 'highlight.js';
 import type { Message } from '../../types';
+import { MessageAttachmentList } from './MessageAttachments';
 
 // ── Henry streaming cursor — contextual variants per engine/mode ──────────
 type CursorVariant = 'blink' | 'think' | 'write' | 'stream';
-type CursorColor = 'companion' | 'worker' | 'biblical' | 'writer' | 'code' | 'error';
+type CursorColor = 'companion' | 'worker' | 'writer' | 'code' | 'error';
 
 function HenryCursor({ variant = 'stream', color = 'companion' }: {
   variant?: CursorVariant;
@@ -22,12 +23,10 @@ function HenryCursor({ variant = 'stream', color = 'companion' }: {
 function inferCursorVariant(engine?: string, content?: string): { variant: CursorVariant; color: CursorColor } {
   const c = (content || '').toLowerCase();
   const isCode = c.includes('```') || c.includes('function') || c.includes('const ') || c.includes('import ');
-  const isBiblical = c.includes('scripture') || c.includes('verse') || c.includes('bible') || c.includes('psalm');
   const isWriting = c.includes('chapter') || c.includes('paragraph') || c.includes('draft');
 
   if (engine === 'worker')   return { variant: 'write', color: 'worker' };
   if (isCode)                return { variant: 'write', color: 'code' };
-  if (isBiblical)            return { variant: 'blink', color: 'biblical' };
   if (isWriting)             return { variant: 'write', color: 'writer' };
   // Default companion — "thinking" when content is short (just started), "stream" when flowing
   const variant: CursorVariant = !content || content.length < 40 ? 'think' : 'stream';
@@ -332,6 +331,9 @@ export default function MessageBubble({
             </div>
           )
         )}
+
+        {/* Files attached to this message */}
+        {!isStreaming && <MessageAttachmentList messageId={message.id} />}
 
         {/* Hover actions row: copy + timestamp */}
         {!isStreaming && (message.content || '').trim().length > 0 && (

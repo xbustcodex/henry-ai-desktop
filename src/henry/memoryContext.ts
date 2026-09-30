@@ -11,7 +11,7 @@ import { scoreMemoryFact } from './workingMemory';
  * Caps for prompt-sized memory.
  * Tuned for 128K-context models (Groq Llama-3.1-8b-instant / 3.3-70b-versatile).
  * These are aggressive — the full memory block stays well under 20K tokens,
- * leaving 100K+ for conversation history, scripture, and web context.
+ * leaving 100K+ for conversation history and web context.
  */
 export const HENRY_MEMORY_CAPS = {
   /** Max distinct facts after deduplication */
@@ -76,8 +76,6 @@ export interface BuildHenryMemoryContextInput {
   workspacePathHint?: string | null;
   /** Current conversation title — lightweight “project/thread” hint */
   conversationTitle?: string | null;
-  /** When `mode` is `biblical`: active Bible source profile label (lean memory, no duplication of charter). */
-  biblicalSourceProfileLabel?: string | null;
   /** When `mode` is `writer`: selected document type label. */
   writerDocumentTypeLabel?: string | null;
   /** When `mode` is `design3d`: workflow label. */
@@ -103,10 +101,6 @@ export function buildHenryMemoryContextBlock(input: BuildHenryMemoryContextInput
 
   lines.push('## Session anchors');
   lines.push(`- Operating mode: **${input.mode}**`);
-  const bibleLabel = input.biblicalSourceProfileLabel?.trim();
-  if (input.mode === 'biblical' && bibleLabel) {
-    lines.push(`- Bible source profile: ${bibleLabel}`);
-  }
   const writerLabel = input.writerDocumentTypeLabel?.trim();
   if (input.mode === 'writer' && writerLabel) {
     lines.push(`- Document type: ${writerLabel}`);
