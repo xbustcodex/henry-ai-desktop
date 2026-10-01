@@ -378,7 +378,8 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
           for (const b of bins) {
             try {
               await new Promise<void>((resolve, reject) => {
-                execFile('which', [b], { timeout: 2000 }, (err) => { if (err) reject(err); else resolve(); });
+                // `which` is absent on Windows; whichBin uses `where`.
+                execFile(process.platform === 'win32' ? 'where' : 'which', [b], { timeout: 3000 }, (err) => { if (err) reject(err); else resolve(); });
               });
               return b;
             } catch { /* continue */ }
@@ -875,13 +876,14 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
     if (opts.enable) {
       win.setAlwaysOnTop(false);
       win.setFullScreen(true);
-      win.setWindowButtonVisibility(false);
+      // macOS-only API; calling it on Windows/Linux throws.
+      if (typeof win.setWindowButtonVisibility === 'function') win.setWindowButtonVisibility(false);
       win.setBackgroundColor('#00000000');
       // On macOS: send window behind others
       win.webContents.executeJavaScript('document.body.setAttribute("data-desktop-mode","1")').catch(()=>{});
     } else {
       win.setFullScreen(false);
-      win.setWindowButtonVisibility(true);
+      if (typeof win.setWindowButtonVisibility === 'function') win.setWindowButtonVisibility(true);
       win.setAlwaysOnTop(false);
       win.webContents.executeJavaScript('document.body.removeAttribute("data-desktop-mode")').catch(()=>{});
     }

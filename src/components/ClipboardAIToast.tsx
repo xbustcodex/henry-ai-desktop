@@ -1,3 +1,4 @@
+import { safeCopyToClipboard } from '../utils/clipboardSafe';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useStore } from '../store';
 
@@ -93,7 +94,7 @@ export default function ClipboardAIToast() {
   }
 
   function copyResult() {
-    navigator.clipboard.writeText(result).then(() => {
+    safeCopyToClipboard(result).then(() => {
       setCopying(true);
       setTimeout(() => setCopying(false), 2000);
     }).catch(() => {});

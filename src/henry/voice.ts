@@ -14,6 +14,7 @@
 
 import { create } from 'zustand';
 import { speak as legacySpeak, cancelTTS as legacyCancel } from './ttsService';
+import { useStore } from '../store';
 
 export type VoiceUiState = 'idle' | 'listening' | 'transcribing' | 'speaking';
 
@@ -273,8 +274,13 @@ export async function speak(text: string, engine?: 'auto' | 'local' | 'elevenlab
         };
         void audio.play().catch(done);
       });
+      return;
     }
-    // Local `say` speaks in the main process — the IPC resolves when done.
+
+    // No audio came back. macOS `say` renders to the device itself in the main
+    // process, but Windows has no local engine at all, so previously the reply
+    // was silent there. SpeechSynthesis always exists in a renderer, so use it.
+    await legacySpeak(text, useStore.getState().settings, []);
   } finally {
     const st = useVoiceStore.getState();
     if (st.state === 'speaking') st.setState('idle');

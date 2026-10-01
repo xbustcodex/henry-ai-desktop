@@ -35,7 +35,7 @@ function getCtx(sessionId: string): {role:string;content:string}[] {
 
 import http from 'http';
 import path from 'path';
-import { IS_MAC, IS_WIN, IS_LINUX, tryExec, desktopPath, downloadPath, revealFile, setVolumeCmd, getVolumeCmd, muteCmd, unmuteCmd, setBrightnessCmd, getBrightnessCmd, sleepCmd, lockScreenCmd, restartCmd, shutdownCmd, getBatteryInfo, getDiskInfo, listPrintersCmd, getDefaultPrinterCmd, printFileCmd, screenshotCmd, listAppsCmd, quitAppCmd, getOsVersion, getChipInfo, getHostname, getStartupItemsCmd } from './platformCommands';
+import { IS_MAC, IS_WIN, IS_LINUX, tryExec, desktopPath, downloadPath, revealFile, setVolumeCmd, getVolumeCmd, muteCmd, unmuteCmd, setBrightnessCmd, getBrightnessCmd, sleepCmd, lockScreenCmd, restartCmd, shutdownCmd, getBatteryInfo, getDiskInfo, getDiskBytes, formatBytes, listPrintersCmd, getDefaultPrinterCmd, printFileCmd, screenshotCmd, listAppsCmd, quitAppCmd, getOsVersion, getChipInfo, getHostname, getStartupItemsCmd } from './platformCommands';
 import crypto from 'crypto';
 import os from 'os';
 import fs from 'fs';
@@ -378,17 +378,35 @@ export function setSyncDb(db: import('better-sqlite3').Database): void {
     } catch { /* non-fatal */ }
     // Auto-backup on startup
     const { execSync: _bkx } = require('child_process') as typeof import('child_process');
-    const _bkos = require('os') as typeof import('os');
+    const _bkfs = require('fs') as typeof import('fs');
     const _bkp = require('path') as typeof import('path');
-    const _bkDir = _bkp.join(_bkos.homedir(), 'Library', 'Application Support', 'henry-ai-desktop', 'backups');
+    // The database lives under Electron's userData dir, which is already
+    // platform-correct (macOS Application Support, %APPDATA%, ~/.config).
+    // Hardcoding 'Library/Application Support' made the Windows mkdir fail, so
+    // the startup backup never ran there.
+    const _bkDir = _bkp.join(app.getPath('userData'), 'backups');
     const _bkFile = 'henry_' + new Date().toISOString().slice(0,10) + '.db';
     try {
       if (process.platform === 'win32') {
-        _bkx('mkdir "' + _bkDir.replace(/\//g,'\\') + '" 2>nul && copy "' + db.name.replace(/\//g,'\\') + '" "' + (_bkDir + '\\' + _bkFile).replace(/\//g,'\\') + '"', {timeout:3000});
+        // Plain fs rather than a cmd.exe string: no shell, no quoting, works
+        // the same on every platform.
+        _bkfs.mkdirSync(_bkDir, { recursive: true });
+        _bkfs.copyFileSync(db.name, _bkp.join(_bkDir, _bkFile));
       } else {
-        _bkx('mkdir -p "' + _bkDir + '" && cp "' + db.name + '" "' + _bkDir + '/' + _bkFile + '"', {timeout:3000,shell:'/bin/bash'});
-        _bkx('cd "' + _bkDir + '" && ls -t henry_*.db 2>/dev/null | tail -n +8 | xargs rm -f 2>/dev/null || true', {timeout:2000,shell:'/bin/bash'});
+        _bkfs.mkdirSync(_bkDir, { recursive: true });
+        _bkfs.copyFileSync(db.name, _bkp.join(_bkDir, _bkFile));
       }
+      // Keep the 7 most recent backups — no shell, so it behaves the same on
+      // Windows as on Unix.
+      try {
+        const kept = _bkfs.readdirSync(_bkDir)
+          .filter((f: string) => /^henry_.*\.db$/.test(f))
+          .sort()
+          .reverse();
+        for (const old of kept.slice(7)) {
+          try { _bkfs.unlinkSync(_bkp.join(_bkDir, old)); } catch { /* best effort */ }
+        }
+      } catch { /* no backups yet */ }
     } catch (e) {
       // R2-Fix 7: was silent — DB-backup-on-startup failures (disk full,
       // locked DB, missing parent dir) meant the user had zero protection
@@ -3419,10 +3437,9 @@ self.addEventListener('fetch', (event) => {
     if (pairPhoneMatch) {
       try {
         const { execSync: _pn } = await import('child_process') as typeof import('child_process');
-        const _ipCmd = process.platform === 'darwin' ? 'ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null' :
-          process.platform === 'linux' ? "hostname -I 2>/dev/null | awk '{print $1}'" :
-          "for /f \"tokens=2 delims=:\" %i in ('ipconfig ^| findstr /r \"IPv4\"') do echo %i";
-        const _ip = _pn(_ipCmd, { encoding:'utf8', shell: process.platform === 'win32' ? undefined : '/bin/bash', timeout:2000 }).trim().split('\n')[0].trim();
+        // getLocalIp() reads the interfaces through Node, so it is correct on
+        // every platform — the shell variants below were wrong off macOS.
+        const _ip = getLocalIp();
         const _localUrl = 'http://' + (_ip || 'YOUR-MAC-IP') + ':4242';
         const _turl = getTunnelUrl();
         const _bestUrl = _turl || _localUrl;
@@ -6857,6 +6874,13 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
     }
     // ── COMPUTER AUDIT / SCAN ──────────────────────────────────────────────
     if (/^(?:scan(?: my)? computer|audit(?: my)? computer|computer audit|computer scan|scan(?: my)? mac|what(?:'s| is) on(?: my)? computer|full computer report|henry scan|organize my computer)/.test(lowerText)) {
+      // This scan is written entirely in macOS/Unix shell (sw_vers, sysctl,
+      // du, osascript, lpstat). On Windows every one of those failed, so the
+      // report came back as a wall of "not recognized" errors.
+      if (!IS_MAC) {
+        sendReply('The full computer scan is macOS-only right now. I can still report system info and disk space here — ask me "system info" or "disk space".');
+        return;
+      }
       sendReply('\uD83D\uDD0D **Scanning your computer...** (15-30 seconds)');
       try {
         const { execSync: _ax } = await import('child_process') as typeof import('child_process');
@@ -7245,10 +7269,11 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
     // ── Disk / storage space ──────────────────────────────────────────────────
     if (/^(?:disk space|storage|how much (?:storage|space|disk)|free space|storage info)$/.test(lowerText)) {
       const { execSync: _dkx } = await import('child_process') as typeof import('child_process');
-      const _dkOut = _dkx('df -h / | tail -1', {encoding:'utf8',timeout:3000,shell:'/bin/bash'}).split(/\s+/);
-      const _theVault = _dkx('df -h /Volumes/TheVault 2>/dev/null | tail -1', {encoding:'utf8',timeout:2000,shell:'/bin/bash'}).split(/\s+/);
-      const _dkLines = ['\uD83D\uDCBE **Storage**', '', 'Mac (/): ' + _dkOut[2] + ' used, **' + _dkOut[3] + ' free** of ' + _dkOut[1]];
-      if (_theVault.length > 3) _dkLines.push('TheVault: ' + _theVault[2] + ' used, **' + _theVault[3] + ' free** of ' + _theVault[1]);
+      const _d = getDiskBytes();
+      if (!_d) { sendReply('Could not read disk space on this machine.'); return; }
+      const _dkLines = ['\uD83D\uDCBE **Storage**', '',
+        formatBytes(_d.used) + ' used, **' + formatBytes(_d.free) + ' free** of ' + formatBytes(_d.total)];
+      const _theVault = getDiskBytes();
       sendReply(_dkLines.join('\n')); return;
     }
 
@@ -8031,9 +8056,10 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
 
       // Disk space
       if (/disk|storage|free space|how much.*(?:disk|storage|space|memory|ram)/.test(t)) {
-        const out = execSync('df -h / | tail -1', { encoding: 'utf8', timeout: 5000 }) as string;
-        const p = out.trim().split(/\s+/);
-        return 'Disk: ' + p[1] + ' total, ' + p[3] + ' free (' + p[4] + ' used)';
+          const _d = getDiskBytes();
+        if (!_d) return 'Could not read disk space on this machine.';
+        return 'Disk: ' + formatBytes(_d.total) + ' total, ' + formatBytes(_d.free) + ' free ('
+          + Math.round((_d.used / _d.total) * 100) + '% used)';
       }
 
       // Running apps
@@ -8074,7 +8100,8 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
       // python3 -c ... → use tmpfile for reliable multiline support
       if (/^python3?\s+-c/.test(shellCmd)) {
         const pyInner = shellCmd.replace(/^python3?\s+-c\s+/, '').replace(/^["']|["']$/g, '');
-        const tmpPyS = '/tmp/henry_' + Date.now() + '.py';
+        // os.tmpdir(), not '/tmp' — there is no /tmp on Windows.
+        const tmpPyS = require('path').join(require('os').tmpdir(), 'henry_' + Date.now() + '.py');
         try {
           const { writeFileSync: _wsf } = await import('fs') as typeof import('fs');
           const { execSync: _pys } = await import('child_process') as typeof import('child_process');
@@ -8092,12 +8119,18 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
       try {
         const { execSync: _sh } = await import('child_process') as typeof import('child_process');
         // Try to find a sensible cwd for the command
+        // Prefer the OS temp dir and the platform home; '/tmp' does not exist
+        // on Windows.
+        const _os = require('os') as typeof import('os');
+        const _path = require('path') as typeof import('path');
+        const _home = process.env.HOME || process.env.USERPROFILE || _os.homedir();
+        const _tmpDir = _os.tmpdir();
         const _possibleDirs = [
-          process.env.HOME + '/Documents/henry-ai-desktop',
-          process.env.HOME || '/tmp',
-          '/tmp'
+          _path.join(_home, 'Documents', 'henry-ai-desktop'),
+          _home,
+          _tmpDir,
         ];
-        let _cwd = process.env.HOME || '/tmp';
+        let _cwd = _tmpDir;
         if (/git/.test(shellCmd)) {
           // For git commands, try to find a git repo
           for (const dir of _possibleDirs) {
@@ -8377,12 +8410,20 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
       return;
     }
     if (/^(?:what wifi|wifi|wi-fi|what network|internet|what connection|connected to)/.test(lowerText)) {
-      try {
-        const { execSync: _wf } = await import('child_process') as typeof import('child_process');
-        const ssid = _wf("/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -I 2>/dev/null | awk '/ SSID/{print $2}'", { encoding:'utf8', shell:'/bin/bash', timeout:3000 }).trim();
-        const ip = _wf("ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo 'no IP'", { encoding:'utf8', shell:'/bin/bash', timeout:3000 }).trim();
-        sendReply('📶 **WiFi:** ' + (ssid || 'not detected') + ' · IP: ' + ip);
-      } catch { sendReply('📶 Check WiFi in the menu bar.'); }
+      // The SSID probe was macOS-only (`airport` + `ipconfig getifaddr`), so on
+      // Windows it printed ipconfig's usage text straight into the chat. The IP
+      // now comes from the cross-platform helper; the SSID is only asked for on
+      // macOS, and reported as unknown rather than faked elsewhere.
+      const ip = getLocalIp();
+      if (process.platform === 'darwin') {
+        try {
+          const { execSync: _wf } = await import('child_process') as typeof import('child_process');
+          const ssid = _wf("/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -I 2>/dev/null | awk '/ SSID/{print $2}'", { encoding:'utf8', shell:'/bin/bash', timeout:3000 }).trim();
+          sendReply('📶 **WiFi:** ' + (ssid || 'not detected') + ' · IP: ' + ip);
+        } catch { sendReply('📶 Check WiFi in the menu bar. · IP: ' + ip); }
+      } else {
+        sendReply('📶 **Network** · IP: ' + ip + ' (WiFi name is only available on macOS)');
+      }
       return;
     }
     if (/^(?:system info|what mac|mac info|computer info|hardware info|my computer|show system|what computer do i have)/.test(lowerText)) {
@@ -8576,7 +8617,7 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
         "WHAT HENRY CAN DO AUTOMATICALLY (no special syntax needed):\n  Income: 'I got paid $350 by Bob' or 'Bob paid me' or 'collected $200 today'\n  Expense: 'spent $45 on supplies' or 'bought pipe fittings $30'\n  New job: 'start a job for Karen, ceiling fan install, $175' or 'Karen needs a faucet fixed'\n  Complete job: 'finished the bathroom job for Dave' or 'done with Karen's job'\n  Invoice: 'send Karen her invoice' or 'bill Dave for the plumbing job'\n  Paid: 'Dave paid me' or 'got payment from Karen $400'\n  Client: 'tell me about Bob' or 'what do I have for Sarah' or 'pull up Karen'\n  Outstanding: 'who owes me' or 'what's outstanding' or 'who hasn't paid'\n  Tasks: 'remind me to call Bob tomorrow' or 'I need to order more lumber'\n  Notes: 'remember Karen wants oak not pine' or 'note: Dave prefers mornings'\n  Search: 'what's the going rate for drywall' or 'look up lumber prices'\n  Timer: 'set a 25 minute timer' or 'remind me in an hour'\n  Open app: 'open Finder' or 'launch Chrome' or 'open System Settings'\n  ALWAYS: try to figure out what the user means and do it. If unclear, do your best guess and confirm.",
         "CODING: Write complete, production-quality code ALWAYS. No stubs. TypeScript (typed, modern), Python (pythonic, documented), SQL (Henry uses SQLite3 — table schema: personal_tasks(id,title,status,priority,created_at), goals(id,title,status,priority_score), habits(id,name,active), transactions(id,date,amount,type,category), memory_facts(id,fact,category,importance)). For debugging: state the bug, the root cause, then the EXACT fix with line numbers if possible. For architecture: ASCII diagrams + tradeoffs.",
         "MAKER INTELLIGENCE: Use only business facts the user shares in conversation or stored in the DB. Henry can also generate 3D STL files from text: say make stl: [description]",
-        "COMPUTER CAPABILITIES: Henry can read local files (say: read file: /path), clipboard, directories (say: list ~/Desktop), search web (say: search web for: query), system info, run Python/shell (say: python run: or run:). HENRY DB PATH: /Users/christophercook/Library/Application Support/henry-ai-desktop/henry-workspace/henry.db -- use this real path when writing Python code that accesses Henry data. Henry source: ~/Documents/henry-ai-desktop/electron/ipc/syncBridge.ts",
+        "COMPUTER CAPABILITIES: Henry can read local files (say: read file: /path), clipboard, directories (say: list ~/Desktop), search web (say: search web for: query), system info, run Python/shell (say: python run: or run:). HENRY DB PATH: ${db.name} -- use this real path when writing Python code that accesses Henry data. Henry source: ~/Documents/henry-ai-desktop/electron/ipc/syncBridge.ts",
         "RESPONSE STYLE: Be direct. Do it, then report what you did in plain English. NEVER output fake action blocks like computer:openApp() or computer:runShell() — those are not real. NEVER tell Topher to do something himself when you can do it with run: or open [App]. NEVER invent client names, project names, or job details. If you did something: say what you did in one sentence. If you cannot do it: say why in one sentence and what to do instead. No filler, no fake syntax, no hallucinated projects.",
         "NEVER output tool calls, function calls, XML tags, or structured commands. You are a CHAT assistant only — plain conversational text. Never write: computer:openApp(), <tool_call>, or any JSON/code commands.",
         "EXECUTION: When asked to run/execute code, start your reply with 'python run:' or 'run:' so Henry's engine executes it. Never just SHOW code when the user says RUN. Computer actions (open app, read file, etc.) are handled by Henry's local router automatically.",
@@ -9321,7 +9362,7 @@ async function startTunnel(port: number): Promise<void> {
     // run here, otherwise fall back to whatever is on PATH.
     let cf = CLOUDFLARED_BIN;
     if (!_isRunnableHere(cf)) {
-      try { cf = execFileSync('which', ['cloudflared'], { encoding: 'utf8' }).trim(); }
+      try { const { whichBin } = require('./platformCommands') as typeof import('./platformCommands'); cf = whichBin('cloudflared') ?? ''; }
       catch {
         log.info('[SyncBridge] cloudflared not found — remote tunnel disabled (LAN pairing still works)');
         _tunnelStarting = false;

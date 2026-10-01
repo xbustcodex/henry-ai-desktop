@@ -12,7 +12,7 @@ import { registerMediaLibraryHandlers } from './ipc/mediaLibrary';
 import { registerMarketplaceHandlers } from './ipc/marketplace';
 import { registerHenryLocalBrainGatewayIpc } from './ipc/henryLocalBrainGateway';
 import { registerOpencodeBridgeHandlers, stopOpencodeBridge } from './ipc/opencodeBridge';
-import { registerRuntimeHandlers, recordStartupFailure } from './ipc/runtimeDiagnostics';
+import { registerRuntimeHandlers, recordStartupFailure, clearStartupFailure } from './ipc/runtimeDiagnostics';
 import { registerTaskBrokerHandlers } from './ipc/taskBroker';
 import { registerMemoryHandlers } from './ipc/memory';
 import { registerMemoryGraphHandlers } from './ipc/memoryGraph';
@@ -71,9 +71,9 @@ export function getMainWindow(): BrowserWindow | null {
 /** Check if a binary exists in PATH. Returns the path if found, else empty string. */
 function tryExecBin(bin: string): string {
   try {
-    const { execSync } = require('child_process');
-    const out = execSync(`which ${bin} 2>/dev/null || command -v ${bin} 2>/dev/null`, { encoding: 'utf8', timeout: 3000 });
-    return (out || '').trim().split('\n')[0].trim() || '';
+    // `which` does not exist on Windows; whichBin uses `where` there.
+    const { whichBin } = require('./ipc/platformCommands') as typeof import('./ipc/platformCommands');
+    return whichBin(bin) ?? '';
   } catch { return ''; }
 }
 
@@ -238,6 +238,10 @@ app.whenReady().then(() => {
   try {
     // Registered before the database so a boot failure is still reportable.
     registerRuntimeHandlers(() => { try { return getDb(); } catch { return null; } });
+    // A recorded boot failure has done its job once the app is up. Leaving it
+    // set made runtimeOk report false forever, even after the underlying problem
+    // (a stale native module, a transient crash) was long gone.
+    clearStartupFailure();
   // Check for updates silently on launch
   if (app.isPackaged) { autoUpdater.checkForUpdatesAndNotify().catch(() => {}); }
 

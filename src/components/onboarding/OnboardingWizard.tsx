@@ -21,6 +21,9 @@ type StepId =
   | 'memory'
   | 'done';
 
+/** Steps whose content is macOS-only; skipped entirely elsewhere. */
+const MACOS_ONLY_STEPS = new Set<StepId>(['accessibility', 'screen']);
+
 const STEP_ORDER: StepId[] = [
   'welcome', 'howItWorks', 'accessibility', 'screen',
   'ai', 'companion', 'panels', 'memory', 'done',
@@ -172,8 +175,12 @@ export default function OnboardingWizard({ onComplete }: Props) {
     let nextStep = STEP_ORDER[i + 1];
     // On non-macOS, skip macOS-only permission steps (they're capability-checked).
     // The 'done' step shows a capability summary instead of macOS permission status.
-    if (!isMacOS() && (nextStep === 'accessibility' || nextStep === 'screen')) {
-      // Skip straight past macOS permission steps on Linux/Windows
+    //
+    // There are TWO consecutive macOS-only steps ('accessibility' then 'screen'),
+    // so this must keep advancing — advancing only once landed on 'screen', which
+    // also renders nothing outside macOS, leaving a blank screen with no way to
+    // continue. That is the dead third screen on Windows and Linux.
+    while (!isMacOS() && MACOS_ONLY_STEPS.has(nextStep)) {
       const j = STEP_ORDER.indexOf(nextStep);
       nextStep = STEP_ORDER[j + 1] ?? 'done';
     }
@@ -183,8 +190,8 @@ export default function OnboardingWizard({ onComplete }: Props) {
     const i = STEP_ORDER.indexOf(step);
     if (i <= 0) return;
     let prevStep = STEP_ORDER[i - 1];
-    // On non-macOS, skip macOS-only permission steps when going back too.
-    if (!isMacOS() && (prevStep === 'accessibility' || prevStep === 'screen')) {
+    // Same multi-step skip as next(), or Back lands on a blank macOS-only step.
+    while (!isMacOS() && MACOS_ONLY_STEPS.has(prevStep)) {
       const j = STEP_ORDER.indexOf(prevStep);
       prevStep = STEP_ORDER[j - 1] ?? STEP_ORDER[0];
     }

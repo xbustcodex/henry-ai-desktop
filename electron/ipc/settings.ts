@@ -168,7 +168,14 @@ export function registerSettingsHandlers(db: Database.Database, getMainWindow?: 
     ) => {
       db.prepare(
         `INSERT INTO messages (id, conversation_id, role, content, model, provider, tokens_used, cost, engine)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         content = excluded.content,
+         model = excluded.model,
+         provider = excluded.provider,
+         tokens_used = excluded.tokens_used,
+         cost = excluded.cost,
+         engine = excluded.engine`
       ).run(
         message.id,
         message.conversation_id,

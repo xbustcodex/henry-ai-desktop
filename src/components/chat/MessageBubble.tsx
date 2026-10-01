@@ -1,3 +1,4 @@
+import { safeCopyToClipboard } from '../../utils/clipboardSafe';
 import { useState } from 'react';
 import hljs from 'highlight.js';
 import type { Message } from '../../types';
@@ -65,7 +66,7 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
   const [copied, setCopied] = useState(false);
 
   function copy() {
-    navigator.clipboard.writeText(code).then(() => {
+    safeCopyToClipboard(code).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }).catch(() => {});
@@ -234,7 +235,7 @@ export default function MessageBubble({
     : message.content;
 
   function copyMessage() {
-    navigator.clipboard.writeText(content).then(() => {
+    safeCopyToClipboard(content).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }).catch(() => {});

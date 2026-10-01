@@ -1,3 +1,4 @@
+import { safeCopyToClipboard } from '../../utils/clipboardSafe';
 import { useCallback, useEffect, useState } from 'react';
 import { useStore } from '../../store';
 import type { MemoryContext } from '../../types';
@@ -146,7 +147,7 @@ export default function MemoryAwarenessPanel({
     const text = memoryBlock.trim();
     if (!text) return;
     try {
-      await navigator.clipboard.writeText(text);
+      await safeCopyToClipboard(text);
       setCopyFlash(true);
       window.setTimeout(() => setCopyFlash(false), 1500);
     } catch {

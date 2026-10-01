@@ -1,3 +1,4 @@
+import { safeCopyToClipboard } from '../../utils/clipboardSafe';
 import { useState } from 'react';
 import type { Design3DWorkflowTypeId } from '@/henry/design3dTypes';
 import { getDesign3DWorkflowType } from '@/henry/design3dTypes';
@@ -33,7 +34,7 @@ export default function Design3DReferencePanel({
   async function copySummary() {
     const text = buildDesign3dReferenceSummaryPlain(referencePath, wf?.label ?? workflowTypeId);
     try {
-      await navigator.clipboard.writeText(text);
+      await safeCopyToClipboard(text);
       setCopyFlash(true);
       window.setTimeout(() => setCopyFlash(false), 1500);
     } catch {

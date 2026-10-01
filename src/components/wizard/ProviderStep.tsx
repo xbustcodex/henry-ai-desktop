@@ -1,3 +1,4 @@
+import { safeCopyToClipboard } from '../../utils/clipboardSafe';
 import { useState, useEffect, useRef } from 'react';
 import { useStore } from '../../store';
 import OllamaElectronSetup from './OllamaElectronSetup';
@@ -182,7 +183,7 @@ function DesktopProviderStep({ onNext, onBack }: ProviderStepProps) {
   }
 
   function copyCmd(cmd: string) {
-    navigator.clipboard.writeText(cmd).catch(() => {});
+    safeCopyToClipboard(cmd).catch(() => {});
     setCopiedCmd(cmd);
     setTimeout(() => setCopiedCmd(''), 2000);
   }

@@ -256,7 +256,26 @@ export default function ComputerPanel() {
 
   useEffect(() => {
     inputRef.current?.focus();
-    // Check permissions via sync server
+    // macOS is the only platform with Accessibility / Screen Recording
+    // permissions, and it is the only one where an osascript probe means
+    // anything. Probing it unconditionally made every non-Mac machine report
+    // both permissions as missing. Elsewhere report what is actually true.
+    if (!isMacOS()) {
+      void window.henryAPI
+        .computerCheckCapabilities?.()
+        .then((caps) => {
+          if (!caps) return setPerms(null);
+          const screen = caps.screenCapture?.status;
+          const automation = caps.inputAutomation?.status;
+          setPerms({
+            accessibility: screen === 'ready' || automation === 'ready',
+            screenRecording: screen === 'ready',
+          });
+        })
+        .catch(() => setPerms(null));
+      return;
+    }
+
     fetch('http://127.0.0.1:4242/computer/shell', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Henry-Internal': 'true' },
@@ -268,7 +287,7 @@ export default function ComputerPanel() {
         return fetch('http://127.0.0.1:4242/computer/shell', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Henry-Internal': 'true' },
-          body: JSON.stringify({ command: 'screencapture -x /tmp/henry_perm_check.png 2>/dev/null && echo SC_OK || echo SC_FAIL' }),
+          body: JSON.stringify({ command: 'screencapture -x "$TMPDIR/henry_perm_check.png" 2>/dev/null && echo SC_OK || echo SC_FAIL' }),
         }).then(r2 => r2.json()).then((r2: any) => {
           setPerms({ accessibility: acc, screenRecording: r2.output?.includes('SC_OK') ?? false });
         });

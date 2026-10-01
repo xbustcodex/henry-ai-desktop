@@ -63,7 +63,8 @@ function toolVersion(cmd: string, versionFlag = '--version'): string | null {
 }
 
 function toolExists(cmd: string): boolean {
-  try { execSync(`which ${cmd}`, { encoding: 'utf8', env: ENV, timeout: 3000 }); return true; } catch { return false; }
+  // `which` does not exist on Windows; whichBin uses `where` there.
+  try { const { whichBin } = require('./platformCommands') as typeof import('./platformCommands'); return whichBin(cmd) !== null; } catch { return false; }
 }
 
 // Whitelisted packages that can be installed via privileged helper
@@ -639,7 +640,8 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
             const sessionType = detectLinuxSession();
             const checkBin = (bins: string[]): string | null => {
               for (const b of bins) {
-                try { execSync(`which ${b} 2>/dev/null`, { encoding: 'utf8', env: ENV, timeout: 3000 }); return b; } catch { /* continue */ }
+                // `which` does not exist on Windows; whichBin uses `where` there.
+                try { const { whichBin } = require('./platformCommands') as typeof import('./platformCommands'); if (whichBin(b)) return b; } catch { /* continue */ }
               }
               return null;
             };
@@ -736,13 +738,14 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
       description: 'Henry needs space for conversations, media, and AI models',
       check: async () => {
         try {
-          const out = execSync('df -h / | tail -1', { encoding: 'utf8', env: ENV, timeout: 3000 });
-          const parts = out.trim().split(/\s+/);
-          const available = parts[3] || '?';
-          const usedPct = parseInt(parts[4] || '0');
-          const ok = usedPct < 90;
-          return { ok, detail: `${available} free (${parts[4]} used)`, volume: available };
-        } catch { return { ok: true, detail: 'Could not check disk' }; }
+          // `df` does not exist on Windows; use the cross-platform reader.
+          const { getDiskBytes, formatBytes } = await import('./platformCommands') as typeof import('./platformCommands');
+          const d = getDiskBytes();
+          if (!d || !d.total) return { ok: true, detail: 'Could not check disk space' };
+          const usedPct = Math.round((d.used / d.total) * 100);
+          const available = formatBytes(d.free);
+          return { ok: usedPct < 90, detail: `${available} free (${usedPct}% used)`, volume: available };
+        } catch { return { ok: true, detail: 'Could not check disk space' }; }
       },
     },
   ];

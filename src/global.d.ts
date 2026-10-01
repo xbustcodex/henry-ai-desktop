@@ -375,6 +375,27 @@ declare global {
     updated_at?: string;
   }
 
+  /** Status of one probed capability. */
+  type HenryCapabilityStatus =
+    | 'ready' | 'degraded' | 'dependency-missing' | 'unsupported-session' | 'unavailable';
+
+  interface HenryCapabilityDetail {
+    status: HenryCapabilityStatus;
+    backend?: string;
+    details?: string;
+    regionCapture?: boolean;
+    windowCapture?: boolean;
+  }
+
+  interface HenryComputerCapabilities {
+    platform: string;
+    clipboard: HenryCapabilityDetail;
+    selectedText: HenryCapabilityDetail;
+    screenCapture: HenryCapabilityDetail;
+    inputAutomation: HenryCapabilityDetail;
+    session?: { type: string; isWayland: boolean; isWSL: boolean };
+  }
+
   interface HenryMachineCapabilities {
     sendJob: boolean;
     pauseResume: boolean;
@@ -781,6 +802,7 @@ declare global {
     computerRunShell: (params: { command: string; timeout?: number }) => Promise<HenryComputerShellResult>;
     computerNewFolder: (params: { path: string }) => Promise<{ ok: boolean; path?: string; error?: string }>;
     computerListApps: () => Promise<{ apps: string[]; platform: string }>;
+    computerCheckCapabilities: () => Promise<HenryComputerCapabilities>;
     computerListProcesses: () => Promise<{ processes: string[] }>;
     computerCheckPermissions: () => Promise<HenryPermissionsResult>;
     computerTypeText: (text: string) => Promise<HenryComputerShellResult>;

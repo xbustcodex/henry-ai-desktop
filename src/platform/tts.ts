@@ -13,7 +13,7 @@ import { prepareSpeechText } from '../../electron/voice/_speechText';
  * Available TTS engines
  */
 export type TtsEngineSetting = 'auto' | 'local' | 'elevenlabs';
-export type TtsActiveEngine = 'local' | 'elevenlabs' | 'web';
+export type TtsActiveEngine = 'local' | 'elevenlabs' | 'web' | 'web-speech';
 
 /**
  * TTS status information
@@ -457,7 +457,12 @@ async function speakLocal(db: Database.Database, text: string): Promise<Buffer |
 export async function getTtsStatus(db: Database.Database): Promise<TtsStatus> {
   const status: TtsStatus = {
     engine: readEngineSetting(db),
-    active: resolveEngine(db),
+    // 'local' implies a main-process engine. Windows has none (no `say`, no
+    // eSpeak), so reporting 'local' there was a lie; the renderer falls back to
+    // SpeechSynthesis, which is the engine that will actually speak.
+    active: resolveEngine(db) === 'local' && platformString !== 'darwin' && platformString !== 'linux'
+      ? 'web-speech'
+      : resolveEngine(db),
     elevenLabsKeyPresent: Boolean(getElevenLabsKey(db)),
     elevenVoiceId: (readSetting(db, 'voice_tts_voice') || DEFAULT_ELEVEN_VOICE).trim() || DEFAULT_ELEVEN_VOICE,
     sayVoice: sayVoiceSetting(db),

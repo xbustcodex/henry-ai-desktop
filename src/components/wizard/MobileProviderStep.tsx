@@ -1,3 +1,4 @@
+import { safeCopyToClipboard } from '../../utils/clipboardSafe';
 import { useState, useEffect, useRef } from 'react';
 import { useStore } from '../../store';
 
@@ -429,7 +430,7 @@ export default function MobileProviderStep({ onNext, onBack }: Props) {
                       </code>
                       <button
                         onClick={() => {
-                          navigator.clipboard.writeText(step.cmd!).catch(() => {});
+                          safeCopyToClipboard(step.cmd!).catch(() => {});
                           setCopiedCmd(true);
                           setTimeout(() => setCopiedCmd(false), 2000);
                         }}

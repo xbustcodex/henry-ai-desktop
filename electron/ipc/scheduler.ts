@@ -82,7 +82,14 @@ export function registerSchedulerHandlers(scheduler: HenryScheduler, db: Databas
     const res = runSafe(() =>
       db.prepare(`SELECT * FROM automation_runs ${clause} ORDER BY started_at DESC LIMIT ?`).all(...params, limit),
     );
-    return { ok: res.ok, rows: res.result, error: res.error };
+    // Return the ARRAY the renderer expects. Returning `{ok, rows}` here made
+    // every caller do `.map` on an object — "v.map is not a function" — and the
+    // Runs list broke. Fail soft to an empty list instead.
+    if (!res.ok) {
+      console.error('[automation:runs]', res.error);
+      return [];
+    }
+    return res.result;
   });
 
   ipcMain.handle("automation:unread-count", () => {

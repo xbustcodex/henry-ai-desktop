@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useState, useCallback } from 'react';
+import { useStore } from '../../store';
 import type { CompanionDeviceCapability, SyncServerState } from '../../sync/types';
 import { buildPairCodePayload } from '../../sync/deviceLink';
 import { toast } from '../ui/Toast';
@@ -273,7 +274,11 @@ export default function DeviceLinkPanel() {
             className="w-3.5 h-3.5 accent-henry-accent"
             defaultChecked={false}
             onChange={async (e) => {
-              await syncFetch('/computer/shell', {command: `sqlite3 "$HOME/Library/Application Support/henry-ai-desktop/henry-workspace/henry.db" "INSERT OR REPLACE INTO settings(key,value) VALUES('auto_tunnel_enabled','${e.target.checked}')"` });
+              // Persist through the real settings IPC. This used to shell out to
+              // the sqlite3 CLI with a macOS-only path, so the toggle silently
+              // failed to save on Windows and Linux.
+              await window.henryAPI.saveSetting?.('auto_tunnel_enabled', String(e.target.checked));
+              useStore.getState().updateSetting('auto_tunnel_enabled', String(e.target.checked));
               if (e.target.checked && !tunnelUrl) handleStartTunnel();
             }}
           />

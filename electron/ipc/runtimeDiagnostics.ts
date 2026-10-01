@@ -65,7 +65,7 @@ function readStartupFailure(): StartupFailure | null {
   }
 }
 
-function clearStartupFailure(): void {
+export function clearStartupFailure(): void {
   try {
     fs.rmSync(failureFile(), { force: true });
   } catch {

@@ -11,6 +11,7 @@
  * was uncompletable except via curl on the Mac.
  */
 
+import { safeCopyToClipboard } from '../../utils/clipboardSafe';
 import { useEffect, useState, useCallback } from 'react';
 import { isMacOS, isLinux, isWindows } from '../../utils/platform';
 
@@ -97,7 +98,7 @@ export default function RemoteControlPanel() {
 
   async function copy(value: string, label: string) {
     try {
-      await navigator.clipboard.writeText(value);
+      await safeCopyToClipboard(value);
       setCopied(label);
       setTimeout(() => setCopied(null), 1200);
     } catch {

@@ -1,3 +1,4 @@
+import { safeCopyToClipboard } from '../../utils/clipboardSafe';
 import { useCallback, useEffect, useState } from 'react';
 import { useStore } from '../../store';
 import type { WriterDocumentTypeId } from '@/henry/documentTypes';
@@ -95,7 +96,7 @@ export default function WriterDraftLibrary({
 
   async function copyPath(path: string) {
     try {
-      await navigator.clipboard.writeText(path);
+      await safeCopyToClipboard(path);
     } catch {
       /* ignore */
     }

@@ -200,6 +200,7 @@ function migrateDatabaseSchema(db: Database.Database) {
 
   // Memory Blueprint — full 7-layer schema migration
   migrateMemoryBlueprintSchema(db);
+  addMissingSessionMemoryColumns(db);
 
   // Agent layer — Sprint 3 scheduler (Henry's Routines).
   migrateSchedulerSchema(db);
@@ -528,6 +529,32 @@ function migrateSchedulerSchema(db: Database.Database) {
  * Idempotent migration for the full Henry Memory Blueprint schema.
  * Adds all Layer 3–7 tables without touching existing tables.
  */
+/**
+ * Additive column repair for session_memory.
+ *
+ * `emotional_pattern` was only ever declared in CREATE TABLE IF NOT EXISTS, so
+ * any database created before that column existed never got it — and the
+ * session-memory queries then failed with "no such column". This walks the
+ * table and adds anything missing.
+ */
+function addMissingSessionMemoryColumns(db: Database.Database): void {
+  const expected = [
+    'emotional_pattern', 'active_files_json', 'unresolved_items_json',
+    'project_id', 'updated_at', 'related_facts_json',
+  ];
+  try {
+    const cols = db.prepare(`PRAGMA table_info(session_memory)`).all() as { name: string }[];
+    if (cols.length === 0) return; // table not created yet
+    const have = new Set(cols.map((c) => c.name));
+    for (const name of expected) {
+      if (have.has(name)) continue;
+      db.exec(`ALTER TABLE session_memory ADD COLUMN ${name} TEXT`);
+    }
+  } catch (e) {
+    // A concurrent migration may have won the race; that is fine.
+  }
+}
+
 function migrateMemoryBlueprintSchema(db: Database.Database) {
   db.exec(`
     -- ── Layer 4: Personal Memory ─────────────────────────────────────

@@ -1458,6 +1458,13 @@ const henryAPI: Window['henryAPI'] = {
     
     return { apps, platform: 'web-preview' };
   },
+  computerCheckCapabilities: async () => ({
+    platform: 'web',
+    clipboard: { status: 'unavailable', details: 'Clipboard needs the desktop app.' },
+    selectedText: { status: 'unavailable', details: 'Selected-text capture needs the desktop app.' },
+    screenCapture: { status: 'unavailable', details: 'Screen capture needs the desktop app.' },
+    inputAutomation: { status: 'unavailable', details: 'Input automation needs the desktop app.' },
+  }),
   computerListProcesses: async () => ({
     processes: ['This is a preview — real process list requires the desktop app.'],
   }),

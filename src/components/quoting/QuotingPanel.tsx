@@ -12,6 +12,7 @@
  * "Convert to run" creates a queued production_run row pre-filled with this
  * quote's materials/labor — so an accepted quote becomes a job in one click.
  */
+import { safeCopyToClipboard } from '../../utils/clipboardSafe';
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { toast, confirmDialog } from '../ui/Toast';
 
@@ -391,7 +392,7 @@ export default function QuotingPanel() {
   const copyExport = async () => {
     if (exportText == null) return;
     try {
-      await navigator.clipboard.writeText(exportText);
+      await safeCopyToClipboard(exportText);
     } catch {
       /* ignore */
     }

@@ -1,3 +1,4 @@
+import { safeCopyToClipboard } from '../../utils/clipboardSafe';
 import { useState } from 'react';
 import type { ActiveWorkspaceContext } from '@/henry/workspaceContext';
 import {
@@ -25,7 +26,7 @@ export default function WorkspaceContextStrip({
   async function handleCopy() {
     if (!context) return;
     try {
-      await navigator.clipboard.writeText(
+      await safeCopyToClipboard(
         buildWorkspaceContextSummaryPlain(context, indexHintForCopy ?? null)
       );
       setCopyFlash(true);

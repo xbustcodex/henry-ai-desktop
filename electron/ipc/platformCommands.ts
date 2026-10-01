@@ -157,7 +157,79 @@ export function getBatteryInfo(): string {
   } catch { return 'Battery info unavailable'; }
 }
 
+/**
+ * Resolve a binary to an absolute path, or null when it is not installed.
+ *
+ * `which` does not exist on Windows — the equivalent is `where` — so probing
+ * with `which` there always failed and made capability and health reporting
+ * claim tools were missing on a machine that had them.
+ */
+export function whichBin(cmd: string): string | null {
+  try {
+    if (IS_WIN) {
+      const out = require('child_process')
+        .execFileSync('where', [cmd], { encoding: 'utf8', timeout: 4000, stdio: ['ignore', 'pipe', 'ignore'] }) as string;
+      const first = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)[0];
+      return first || null;
+    }
+    const out = require('child_process')
+      .execFileSync('which', [cmd], { encoding: 'utf8', timeout: 4000, stdio: ['ignore', 'pipe', 'ignore'] }) as string;
+    const first = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)[0];
+    return first || null;
+  } catch {
+    return null;
+  }
+}
+
 // ── Disk ──────────────────────────────────────────────────────────────────────
+/**
+ * Free / used / total bytes for the volume holding the user's home directory.
+ *
+ * `df` is a Unix tool and does not exist on Windows, so the Windows path reads
+ * the drive through Node. Returns null when neither works, so callers can say
+ * "unknown" instead of reporting a fabricated number.
+ */
+export function getDiskBytes(): { total: number; used: number; free: number } | null {
+  try {
+    const _fs = require('fs') as typeof import('fs');
+    const _os = require('os') as typeof import('os');
+    const root = process.platform === 'win32'
+      ? (_os.homedir().split(/[\\/]/)[0] || 'C:') + '\\'
+      : '/';
+    if (typeof _fs.statfsSync === 'function') {
+      const st = _fs.statfsSync(root);
+      const bsize = Number(st.bsize) || 0;
+      const total = Number(st.blocks) * bsize;
+      const free = Number(st.bfree) * bsize;
+      return { total, used: total - free, free };
+    }
+  } catch { /* fall through */ }
+  // Older Node: fall back to the platform tool that does exist.
+  try {
+    if (process.platform === 'win32') {
+      const raw = tryExec('powershell -NoProfile -c "$d=Get-PSDrive C; Write-Output ($d.Used,$d.Free)"', 5000);
+      const [used, free] = raw.trim().split(/\r?\n/).map((n: string) => parseInt(n.trim(), 10) || 0);
+      if (used || free) return { total: used + free, used, free };
+    } else {
+      const parts = tryExec('df -k / | tail -1').split(/\s+/);
+      if (parts.length >= 4) {
+        const total = parseInt(parts[1], 10) * 1024;
+        const free = parseInt(parts[3], 10) * 1024;
+        return { total, used: total - free, free };
+      }
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+export function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '?';
+  const u = ['B', 'K', 'M', 'G', 'T'];
+  let i = 0, v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(i === 0 ? 0 : 1)}${u[i]}`;
+}
+
 /** Returns { used, free, total } human-readable strings */
 export function getDiskInfo(): { used: string; free: string; total: string } {
   try {
