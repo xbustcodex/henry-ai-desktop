@@ -10,6 +10,7 @@
  */
 
 import QrCodeImage from '../common/QrCodeImage';
+import { safeCopyToClipboard } from '../../utils/clipboardSafe';
 import { useEffect, useState, useCallback } from 'react';
 import { useStore } from '../../store';
 import type { CompanionDeviceCapability, SyncServerState } from '../../sync/types';
@@ -314,7 +315,7 @@ export default function DeviceLinkPanel() {
             <div className="flex items-center gap-2">
               <code className="text-[11px] text-henry-accent bg-henry-surface px-3 py-1.5 rounded-lg border border-henry-border/30 flex-1 truncate">{tunnelUrl}</code>
               <button
-                onClick={() => navigator.clipboard?.writeText(tunnelUrl!)}
+                onClick={() => void safeCopyToClipboard(tunnelUrl!)}
                 className="text-[11px] px-2 py-1.5 rounded-lg bg-henry-surface border border-henry-border/30 text-henry-text-muted hover:text-henry-text shrink-0"
               >Copy</button>
             </div>

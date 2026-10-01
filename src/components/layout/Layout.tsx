@@ -1,4 +1,5 @@
 import React, { useState, useCallback } from 'react';
+import { safeCopyToClipboard } from '../../utils/clipboardSafe';
 import TitleBar from './TitleBar';
 import PresenceBar from './PresenceBar';
 import Sidebar from './Sidebar';
@@ -65,8 +66,13 @@ function CompanionUrlCard() {
   const localUrl = state?.localIp ? `http://${state.localIp}:4242` : 'http://192.168.x.x:4242';
   const tunnelUrl = state?.tunnelUrl || null;
 
-  function copy(url: string) {
-    navigator.clipboard?.writeText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+  async function copy(url: string) {
+    // writeText rejects with "Document is not focused" whenever the Henry
+    // window is in the background, and this .then() had no .catch().
+    if (await safeCopyToClipboard(url)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
   }
 
   function openInBrowser(url: string) {
