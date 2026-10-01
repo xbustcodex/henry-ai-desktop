@@ -9,6 +9,7 @@
  *   - Unlink devices
  */
 
+import QrCodeImage from '../common/QrCodeImage';
 import { useEffect, useState, useCallback } from 'react';
 import { useStore } from '../../store';
 import type { CompanionDeviceCapability, SyncServerState } from '../../sync/types';
@@ -200,14 +201,10 @@ export default function DeviceLinkPanel() {
 
         {pairCode ? (
           <div className="space-y-3">
-            {/* QR display via external service */}
+            {/* Rendered locally — see QrCodeImage: the payload carries pairing
+                credentials and must not go to a third-party image service. */}
             <div className="flex justify-center">
-              <img
-                src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(pairCode)}&bgcolor=0a0a12&color=a5b4fc`}
-                alt="Pairing QR code"
-                className="w-44 h-44 rounded-2xl border border-henry-border/20"
-                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-              />
+              <QrCodeImage value={pairCode} size={176} className="border border-henry-border/20" />
             </div>
 
             {/* Manual code */}

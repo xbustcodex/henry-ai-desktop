@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import QrCodeImage from '../common/QrCodeImage';
 import { useStore } from '../../store';
 import { buildPairCodePayload } from '../../sync/deviceLink';
 import { isMacOS, isLinux, isWindows, getPlatformName } from '../../utils/platform';
@@ -123,9 +124,12 @@ export default function OnboardingWizard({ onComplete }: Props) {
       if (!info?.henryId || !info?.pin) return;
       const fresh = await syncFetch<any>('/sync/state-internal');
       if (fresh?.tunnelUrl) setTunnelUrl(fresh.tunnelUrl);
-      const ipRes = await syncFetch<{ output?: string }>('/computer/shell',
-        { command: 'ipconfig getifaddr en0 || ipconfig getifaddr en1' });
-      const localIp = ipRes?.output?.trim() || '192.168.1.x';
+      // Take the address from the sync server, which resolves it through
+      // os.networkInterfaces() on every platform. Shelling out to the macOS
+      // `ipconfig getifaddr` here made Windows paste ipconfig's whole usage
+      // text into this URL — and since that text also became the QR payload,
+      // it was far too large to encode, so the QR never appeared either.
+      const localIp = fresh?.localIp || '127.0.0.1';
       const port = fresh?.port || 4242;
       setLanUrl(`http://${localIp}:${port}`);
       const payload = `http://${localIp}:${port}/companion/pair#id=${encodeURIComponent(info.henryId)}&pin=${encodeURIComponent(info.pin)}`;
@@ -679,9 +683,7 @@ export default function OnboardingWizard({ onComplete }: Props) {
             {pairCode && (
               <div className="bg-white rounded-2xl p-4 flex flex-col items-center gap-2">
                 <p className="text-black/60 text-xs font-medium">Scan with phone camera</p>
-                <img
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=8&data=${encodeURIComponent(pairCode)}`}
-                  alt="QR code" width={200} height={200} className="rounded-lg" />
+                <QrCodeImage value={pairCode} size={200} />
                 <p className="text-black/40 text-[10px]">
                   Expires in {Math.floor(pairCountdown / 60)}:{String(pairCountdown % 60).padStart(2, '0')}
                 </p>

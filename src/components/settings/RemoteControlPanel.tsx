@@ -14,6 +14,7 @@
 import { safeCopyToClipboard } from '../../utils/clipboardSafe';
 import { useEffect, useState, useCallback } from 'react';
 import { isMacOS, isLinux, isWindows } from '../../utils/platform';
+import QrCodeImage from '../common/QrCodeImage';
 
 interface PairingInfo {
   henryId: string;
@@ -122,9 +123,7 @@ export default function RemoteControlPanel() {
   // and the pair page's autofill picks it up and auto-submits. iPad camera
   // scan → Safari → pair → consent → done. No typing.
   const pairUrlWithCreds = `${pairUrl}#id=${encodeURIComponent(info.henryId)}&pin=${encodeURIComponent(info.pin)}`;
-  const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(
-    pairUrlWithCreds
-  )}&bgcolor=0a0a12&color=a5b4fc`;
+
   const mins = Math.floor(pinSecondsLeft / 60);
   const secs = pinSecondsLeft % 60;
 
@@ -230,14 +229,9 @@ export default function RemoteControlPanel() {
 
         {/* QR */}
         <div className="shrink-0">
-          <img
-            src={qrSrc}
-            alt="Pair URL QR code"
-            className="w-40 h-40 rounded-xl border border-henry-border/30 bg-henry-bg"
-            onError={(e) => {
-              (e.currentTarget as HTMLImageElement).style.display = 'none';
-            }}
-          />
+          {/* Rendered locally — the QR carries the pairing PIN, which must not
+              be sent to a third-party image service. */}
+          <QrCodeImage value={pairUrlWithCreds} size={160} className="border border-henry-border/30" />
           <p className="text-[9px] text-henry-text-muted text-center mt-1">Scan with your phone camera</p>
         </div>
       </div>
