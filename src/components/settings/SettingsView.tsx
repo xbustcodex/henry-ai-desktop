@@ -26,6 +26,8 @@ import { toast } from '../ui/Toast';
 import RemoteControlPanel from './RemoteControlPanel';
 import DeviceLinkPanel from './DeviceLinkPanel';
 import HealthPanel from './HealthPanel';
+import { isMacOS, getPlatformName } from '../../utils/platform';
+
 import {
   CODER_ENGINE_LABELS,
   CODER_ENGINE_SETTING_KEY,
@@ -45,6 +47,19 @@ import {
   stopVoiceRecording,
   transcribeLocal,
 } from '../../henry/voice';
+/**
+ * The Voice panel describes what this machine can actually do. Whisper and the
+ * system voice are macOS binaries bundled in resources/bin, so on Windows and
+ * Linux those settings do nothing until something equivalent is installed —
+ * saying otherwise sends people looking for settings that aren't there.
+ */
+function voiceSubtitle(): string {
+  if (isMacOS()) {
+    return 'Henry talks and listens. Listening runs FREE on your Mac (whisper.cpp). Speaking uses the free macOS voice — or ElevenLabs automatically when a key is saved.';
+  }
+  return `Henry talks and listens. ElevenLabs works on ${getPlatformName()} once a key is saved. Free local listening and speech need an engine installed on this ${getPlatformName()} — see the options below.`;
+}
+
 
 // Providers that take an API key and can drive chat. (Ollama is local/keyless.)
 const CLOUD_PROVIDER_IDS = ['openai', 'anthropic', 'google', 'groq'] as const;
@@ -743,7 +758,7 @@ function VoiceSection() {
     <div className={cardCls}>
       <SectionHeader
         title="Voice"
-        sub="Henry talks and listens. Listening runs FREE on your Mac (whisper.cpp). Speaking uses the free macOS voice — or ElevenLabs automatically when a key is saved."
+        sub={voiceSubtitle()}
       />
       <div className="space-y-4">
         {/* ── Listening (STT) ── */}
@@ -797,12 +812,15 @@ function VoiceSection() {
             value={engine}
             onChange={(e) => void saveVoiceSetting('voice_tts_engine', e.target.value)}
           >
-            <option value="auto">Auto — ElevenLabs when a key is saved, else free macOS voice</option>
-            <option value="local">Local only — free macOS voice (offline)</option>
+            <option value="auto">Auto — ElevenLabs when a key is saved, else the free local voice</option>
+            <option value="local">Local only — free local voice (offline)</option>
             <option value="elevenlabs">ElevenLabs only</option>
           </select>
           <p className="text-[10px] text-henry-text-muted mt-1">
-            Active now: <span className="text-henry-text-dim">{tts?.active === 'elevenlabs' ? 'ElevenLabs' : 'Free macOS voice'}</span>
+            Active now:{' '}
+            <span className="text-henry-text-dim">
+              {tts?.active === 'elevenlabs' ? 'ElevenLabs' : 'Free local voice'}
+            </span>
             {tts && !tts.elevenLabsKeyPresent && ' · no ElevenLabs key saved'}
           </p>
 

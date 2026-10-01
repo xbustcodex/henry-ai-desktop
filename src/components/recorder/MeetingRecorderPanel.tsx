@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useStore } from '../../store';
 import { saveAudio, loadAudioURL, deleteAudio } from '../../henry/audioStorage';
 import { henryQuickAsk } from '../../henry/henryQuickAsk';
+import { safeCopyToClipboard } from '../../utils/clipboardSafe';
 
 interface Recording {
   id: string;
@@ -255,12 +256,15 @@ export default function MeetingRecorderPanel() {
     setEditingTitle(false);
   }
 
-  function copyTranscript() {
+  async function copyTranscript() {
     if (!selectedRecording?.transcript) return;
-    navigator.clipboard.writeText(selectedRecording.transcript).then(() => {
+    // A bare writeText rejects with "Document is not focused" whenever the
+    // Henry window is in the background, and the .then() had no .catch(), so
+    // that surfaced as an unhandled rejection.
+    if (await safeCopyToClipboard(selectedRecording.transcript)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    });
+    }
   }
 
   function exportRecording() {
