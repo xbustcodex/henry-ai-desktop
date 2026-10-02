@@ -22,6 +22,7 @@ const CORE_NAV: NavItem[] = [
   { id: 'reminders',  icon: '◎',  label: 'Reminders',   desc: 'Time-based reminders' },
   { id: 'captures',   icon: '⊕',  label: 'Captures',    desc: 'Quick voice/text notes Henry files for you' },
   { id: 'memory',     icon: '🧠', label: 'Memory',      desc: 'What Henry remembers about you and your work' },
+  { id: 'goals',      icon: '🎯', label: 'Goals',       desc: 'Longer-term goals, milestones and commitments' },
   { id: 'recorder',   icon: '🎙', label: 'Recorder',    desc: 'Record and transcribe meetings' },
   // R2-Fix 9: SQLite-backed voice memos (was unreachable — see Layout.tsx).
   { id: 'memos',      icon: '🗂', label: 'Voice Memos', desc: 'Saved voice memos' },
@@ -42,7 +43,6 @@ const BUSINESS_NAV: NavItem[] = [
 ];
 
 const MORE_NAV: NavItem[] = [
-  { id: 'goals',      icon: '◎',  label: 'Goals',       desc: 'Longer-term goals and progress' },
   { id: 'weekly',     icon: '▦',  label: 'Weekly',      desc: 'Weekly review' },
   { id: 'machines',   icon: '⚙',  label: 'Machines',    desc: '3D printers and machines' },
   { id: 'materials',  icon: '⬢',  label: 'Materials',   desc: 'Filament and material stock' },

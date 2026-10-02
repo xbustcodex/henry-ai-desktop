@@ -47,12 +47,12 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 | 1 UI & Core | 10 | 10 | 0 | 0 | 0 |
 | 3 Creators & Media | 14 | 13 | 0 | 0 | 0 |
 | 4 Agents & Tools | 20 | 2 | 0 | 9 | 4 |
-| 5 Automation | 9 | 1 | 0 | 4 | 0 |
+| 5 Automation | 9 | 2 | 0 | 3 | 0 |
 | 6 Voice & Input | 13 | 3 | 0 | 3 | 2 |
 | 7 Computer Control | 16 | 0 | 0 | 3 | 0 |
 | 8 Companion | 9 | 0 | 0 | 3 | 0 |
 | 9 Files & Memory | 14 | 0 | 0 | 5 | 0 |
-| 10 Integrations | 14 | 1 | 0 | 3 | 4 |
+| 10 Integrations | 14 | 2 | 0 | 2 | 4 |
 | 11 Settings & System | 15 | 2 | 0 | 2 | 3 |
 
 ---
@@ -158,9 +158,9 @@ plus the syncBridge tool router. **Retain our extra tools.**
 | 5.3 | Background Jobs | `smart-job-queue.ts` | ours | keep | complete |
 | 5.4 | Workflows | workflow schema | Routines | compare | partial |
 | 5.5 | Triggers / Events | trigger types | partial | portable | partial |
-| 5.6 | Goal Planning | goal schema | none | portable | missing |
+| 5.6 | Goal Planning | goal schema (`contracts.ts`) | `src/components/goals/GoalsPanel.tsx` (414 lines) + `henry/commitmentStore` + `brain/reflectiveMind` | **already implemented and richer than the reference** — goals + commitments tabs, priority/emotional/strategic significance scoring, a coaching function, and neglected-commitment detection. The gap was discoverability: Goals sat in the hidden `···` group AND shared `◎` with Reminders | moved to the primary rail with its own icon | typecheck + 499 suite | **CRUD verified live on the installed build: create, read, update all work** | **installed pkg: reachable in the visible rail; panel renders with commitments** | **COMPLETE (exceeds reference)** |
 | 5.7 | Run management | runs + attachments + deep-link | runs only | no attachments, no notification deep-link | partial |
-| 5.8 | Native notifications | `automation-notifications.ts`; OS permission 6-state enum; click routes to the run; per-job all/failures/none with reasons | `electron/ipc/automationNotifications.ts`; scheduler emits on success and failure/abort | — | click routing into the exact run; requests queued when no window is listening yet so an early click is not lost; notify mode with an explicit reason for each suppression | **11 tests**: click routing, window restore/focus, no-window queue, ordering across clicks | — | **installed pkg: permission reports the OS value (`default`, not a fabricated boolean); normal run shows; success in failures-only suppressed with reason; mode `none` suppressed with reason; listener registers** | **CLOSED** |
+| 5.8 | Native notifications | `automation-notifications.ts`; OS permission 6-state enum; click routes to the run; per-job all/failures/none with reasons | `electron/ipc/automationNotifications.ts`; scheduler emits on success and failure/abort | the main process routed the click correctly and **nothing subscribed**, so it went nowhere | click routing into the exact run; requests queued when no window is listening yet; notify mode with an explicit reason per suppression; **App.tsx now drains the queue on mount and follows live clicks, navigating to the run** | **11 tests**: click routing, window restore/focus, no-window queue, ordering | — | **installed pkg: permission reports the OS value; fires; failures-only suppresses; listener subscribes** | **CLOSED** |
 | 5.9 | Automation ideas | renderer `ideas` tab | none | portable | missing |
 
 ---
@@ -253,7 +253,7 @@ guarding, `_denyDangerous`).
 | 10.5 | Local Model Support | paid: **none** | ours Ollama/Groq/OpenCode | keep | complete |
 | 10.6 | External APIs | paid Composio | ours relay | keep | partial |
 | 10.7 | Composio toolkits | `contracts.ts:426-975` | — | — | **commercial** |
-| 10.8 | Toolkit logo resolution | `integration-logos.ts` magic-byte sniffing + SimpleIcons→jsDelivr→Iconify→unavatar→favicon chain | none | **self-contained, reusable** | missing |
+| 10.8 | Toolkit logo resolution | `integration-logos.ts` magic-byte sniffing + SimpleIcons→jsDelivr→Iconify→unavatar→favicon chain | `src/utils/toolIcons.ts` | — | name in, renderable icon out; callers never know where an icon lives. Cached, lazy, every step degrades rather than throwing | **13 tests**: name normalisation across spellings, chain ordering, unknown-service fallback, cache, chain walking to exhaustion, and magic-byte sniffing for PNG/JPEG/GIF/ICO/WebP plus HTML-error-page detection | — | packaged | **CLOSED** |
 | 10.9 | OpenCode Integration | — | ours, now working | keep | complete |
 | 10.10 | Prime Tech Marketplace | ours | ours | keep | complete |
 | 10.11 | OAuth PKCE surfaces | ours googleAuth | no UI to complete sign-in | surface | partial |
@@ -410,3 +410,22 @@ real defect stays visible instead of being masked by a rejection:
 
 - Card 9.2 multimodal — its own card, not started.
 - Cloud notification deep-link UI (the IPC now works; nothing subscribes yet).
+
+
+---
+
+## Caller-contract bugs — fixed, not masked
+
+These were found while keeping the IPC schemas permissive. Making the schemas
+strict would have "fixed" them by rejecting the calls, hiding the real defect.
+
+| Bug | Handler returns | Caller did | Effect |
+|---|---|---|---|
+| HQPanel shell auto-run | `output` | `r.stdout` | result never shown even when the command worked |
+| HQPanel process list | `{processes: string[]}` | `Array.isArray(r)` | list always empty; kill-process unreachable behind it |
+| DeviceLinkPanel tunnel | route does not exist | POSTed `/sync/start-tunnel` | 404 swallowed; always said "cloudflared not installed" |
+| `google:startAuth` | ignores `scopes` | preload sends them | scope request silently dropped |
+
+All three fixed. The tunnel control also now uses the real IPC pair, which was
+missing from the `HenryAPI` interface entirely — part of why the panel had
+invented routes in the first place.
