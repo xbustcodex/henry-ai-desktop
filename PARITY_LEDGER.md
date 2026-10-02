@@ -48,7 +48,7 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 | 3 Creators & Media | 14 | 13 | 0 | 0 | 0 |
 | 4 Agents & Tools | 20 | 2 | 0 | 9 | 4 |
 | 5 Automation | 9 | 1 | 0 | 4 | 0 |
-| 6 Voice & Input | 13 | 0 | 0 | 6 | 2 |
+| 6 Voice & Input | 13 | 2 | 0 | 4 | 2 |
 | 7 Computer Control | 16 | 0 | 0 | 3 | 0 |
 | 8 Companion | 9 | 0 | 0 | 3 | 0 |
 | 9 Files & Memory | 14 | 0 | 0 | 5 | 0 |
@@ -169,7 +169,7 @@ plus the syncBridge tool router. **Retain our extra tools.**
 
 | # | Row | PAID EVIDENCE | OUR CURRENT | GAP | STATUS |
 |---|---|---|---|---|---|
-| 6.1 | Speech-to-Text (STT) | `voice/whisper.ts`, `sttBackend: local\|server` | ours whisper + SpeechSynthesis | STT queueing **worse in ours** (throws, loses utterance) | partial |
+| 6.1 | Speech-to-Text (STT) | `voice/whisper.ts:26,98-104` serialises on a promise chain | `electron/voice/stt.ts` | was **worse than paid**: a busy flag that THREW "already running", silently discarding whatever the user said — worst in hands-free use | serialised chain, nothing dropped; queue depth exposed | — | — | **installed pkg: two concurrent transcriptions both resolve, no "already running"** | **CLOSED** |
 | 6.2 | Text-to-Speech (TTS) | `ttsBackend: system\|openai\|elevenlabs\|kokoro` | ours system + ElevenLabs + browser | no Kokoro local neural TTS | partial |
 | 6.3 | Voice Commands | voice router | ours intents | keep + extend | partial |
 | 6.4 | Wake Word | paid claims wake word | none | assess; must not reproduce broken clap | missing |

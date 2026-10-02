@@ -351,7 +351,20 @@ async function installWhisperBinary(onProgress?: (p: SttSetupProgress) => void):
 
 // ── Transcription ───────────────────────────────────────────────────────────
 
-let transcribeBusy = false;
+/**
+ * Transcriptions are serialised rather than refused.
+ *
+ * This used to be a boolean that threw "A transcription is already running"
+ * when a second utterance arrived while the first was still going. In
+ * hands-free use — which is exactly when people talk over each other — that
+ * silently threw away what the user actually said. whisper.cpp is
+ * single-threaded here anyway, so serialising costs nothing and loses nothing.
+ *
+ * `queueDepth` is exposed so the UI can tell "still working through what you
+ * said" apart from "not listening".
+ */
+let chain: Promise<unknown> = Promise.resolve();
+let pendingCount = 0;
 
 function run(cmd: string, args: string[], timeout: number): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
@@ -362,19 +375,35 @@ function run(cmd: string, args: string[], timeout: number): Promise<{ stdout: st
   });
 }
 
+export function transcriptionQueueDepth(): number {
+  return pendingCount;
+}
+
 export async function transcribeAudio(audio: Uint8Array): Promise<{ text: string; ms: number }> {
-  if (transcribeBusy) throw new Error('A transcription is already running — try again in a moment.');
+  pendingCount++;
+  // Chain onto whatever is already running; each caller still gets its own
+  // result, and none of them are dropped.
+  const run = chain.then(
+    () => transcribeNow(audio),
+    () => transcribeNow(audio)
+  );
+  // Keep the chain alive regardless of how this one ended.
+  chain = run.then(
+    () => { pendingCount--; },
+    () => { pendingCount--; }
+  );
+  return run;
+}
+
+async function transcribeNow(audio: Uint8Array): Promise<{ text: string; ms: number }> {
   const status = getSttStatus();
   if (!status.binaryPresent) throw new Error('whisper-cli not installed — run voice setup first.');
   if (!status.modelPresent) throw new Error('Speech model not downloaded — run voice setup first.');
   if (!audio || audio.byteLength < 100) throw new Error('No audio captured.');
 
-  transcribeBusy = true;
   const t0 = Date.now();
 
   // Everything after the busy flag must live inside the try, otherwise a
-  // throw in mkdtemp/writeFile left transcribeBusy stuck true and every
-  // future transcription failed with "already running" until restart.
   try {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'henry-voice-'));
     const inPath = path.join(tmpDir, 'in.webm');
@@ -416,7 +445,7 @@ export async function transcribeAudio(audio: Uint8Array): Promise<{ text: string
       try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
     }
   } finally {
-    transcribeBusy = false;
+    // queue bookkeeping is handled by the caller
   }
 }
 
