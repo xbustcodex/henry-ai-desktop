@@ -276,8 +276,8 @@ guarding, `_denyDangerous`).
 | 11.8 | Security Settings | `secure-values.ts` | ours `_keyStorage` | keep ours | different (better) |
 | 11.9 | Privacy Controls | analytics consent | ours local-only analytics | keep local | complete |
 | 11.10 | Logs & Debug Tools | paid `dev-log.ts` | ours | keep | partial |
-| 11.11 | **Typed settings + change event** | zod 24-field schema + `settings:changed` broadcast from 4 sites | untyped `Record<string,string>`, no event | **largest structural gap** | missing |
-| 11.12 | **Zod validation on every IPC channel** | every channel parsed both ways | bare `unknown` | **root enabler of several hand-patched bugs** | missing — **may be brought forward** when a card implementation actually depends on it; record the dependency in this row |
+| 11.11 | **Typed settings + change event** | zod 24-field schema + `settings:changed` broadcast (`ipc.ts:245,262,731`) | `src/henry/settingsContract.ts`; `settings:save` broadcasts | was untyped `Record<string,string>` with no change notification | Types only at the read/write boundary. **Renames nothing, migrates nothing, never overwrites a stored value, and round-trips unknown keys untouched.** Defaults apply only to an ABSENT key. `voice_tts_engine` is enum-constrained because it branches behaviour — an unrecognised engine previously sailed through and left callers on a branch the user never chose. JSON blobs keep their exact wire format. | **16 tests**: custom `ollama_base_url` kept verbatim, both `'1'` and `'true'` booleans accepted (both exist in real DBs from different eras), blank blob stays blank, unknown key round-trips, every in-use key asserted typed | — | **installed pkg: `owner_name`, `voice_tts_engine`, `ollama_base_url` all present after the change; 28 keys survived; all 7 settings sections render** | **CLOSED** |
+| 11.12 | **Zod validation on every IPC channel** | every channel parsed both ways (`contracts.ts` throughout) | `electron/ipc/validation.ts` | baseline hardening on **every** channel; precise schemas on the ones that can cause damage | **First draft guessed channel names** (`filesystem:read` for what is actually `fs:readFile`) and would have guarded nothing. Real inventory ran first, across 333 channels. Closed an **AppleScript injection** in `computer:click` (x/y interpolated into a command while preload typed them `Record<string, unknown>`). Found and fixed dead `source:*` handlers. Failures return a tagged `{ok:false,validationError:true}` so they can never be mistaken for "not installed". | **50 tests**: injection payloads, wrong primitives, arrays/objects, oversized input, NaN/Infinity, and non-regression for the cases the inventory warned about | — | **installed pkg: `computer:click({x:'0; calc',y:0})` rejected; all 24 destinations open; 52 tools; sync 401; bridge running; 0 unhandled rejections** | **CLOSED** |
 | 11.13 | App quit | `app:quit` | none | trivial | missing |
 | 11.14 | Startup failure screen | `U9` with restart | `StartupFailureBanner` | partial | partial |
 | 11.15 | Auth / licensing / credits / telemetry | `auth:*`, `billing:*`, PostHog | none | — | **commercial** |
@@ -358,3 +358,55 @@ except actually *seeing* a picture.
 
 **Recommended:** take this as its own piece of work, behind the same gate as a
 card — implement, build, install, verify each provider that supports vision.
+
+
+---
+
+## 2026-10-02 — Card 11.12 / 11.11 closed on the installed package
+
+Built from `86bffe6`, installed, and reverified across the major surfaces because
+this change can regress anything that crosses IPC.
+
+| Surface | Result |
+|---|---|
+| Navigation | **24/24 destinations open, 0 failed** |
+| Settings | all 5 provider rows incl. OpenCode Zen; all 7 sections |
+| Existing settings | `owner_name`, `voice_tts_engine`, `ollama_base_url` all present; **28 keys survived** |
+| Providers | OpenCode Zen row present (no key saved yet — not yet provisioned) |
+| OpenCode | `omp/18.3.2`, **708 models, 0 polluted ids, Zen present** |
+| Creators / JARVIS | 7 turns, voice mode, typewriter caption, stage opens |
+| Voice | TTS on web-speech; greeting "Evening, JARVIS. All systems online" |
+| Agent tools | 52 total, 10 file tools, **3 `repo_*` preserved** |
+| Notifications | fires; failures-only mode suppresses correctly |
+| Companion | sync server listening (401), bridge running |
+| Marketplace | opens |
+| Google | surface reachable, not connected |
+| Runtime | ok, db ok, no error |
+| `computer:click` injection | **rejected at the boundary** |
+| `source:*` handlers | **reachable** (were dead) |
+| Unhandled rejections | **0** |
+
+### Two defects this pass exposed, both fixed rather than worked around
+
+- `computer:click` interpolated x/y into AppleScript with preload typing them
+  `Record<string, unknown>` — a genuine injection, macOS-gated inside the handler.
+- `registerSourceFileHandlers` was never called from `main.ts`, so all four
+  `source:*` handlers were dead while preload bridged them; every invoke
+  rejected and the self-repair source tools could never work.
+
+### Known-bad caller contracts found, deliberately NOT papered over
+
+These are pre-existing bugs in callers. The schemas were left permissive so the
+real defect stays visible instead of being masked by a rejection:
+
+- `computer:runShell` returns `output`; `HQPanel` reads `stdout`.
+- `computer:listProcesses` returns `{processes}`; `HQPanel` does `Array.isArray(r)`.
+- `computer:desktopMode` — `HQPanel` sends `fullscreen`; the handler ignores it.
+- `DeviceLinkPanel` POSTs `/sync/start-tunnel`, which does not exist — the tunnel
+  button reports "cloudflared not installed" regardless of real state.
+- `google:startAuth` — preload sends `scopes`; the handler discards it.
+
+### Also still open
+
+- Card 9.2 multimodal — its own card, not started.
+- Cloud notification deep-link UI (the IPC now works; nothing subscribes yet).
