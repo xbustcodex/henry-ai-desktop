@@ -288,7 +288,7 @@ export interface DirectoryResult {
 // R2-Fix 9: added 'memos' (SQLite voice memos via RecorderPanel) and 'queue'
 // (TaskQueueView) — Layout.tsx renders these but TS didn't know they were
 // valid ViewType values, forcing `as any` casts at nav call sites.
-export type ViewType = 'today' | 'chat' | 'companion' | 'tasks' | 'files' | 'workspace' | 'terminal' | 'computer' | 'printer' | 'costs' | 'settings' | 'journal' | 'recorder' | 'memos' | 'queue' | 'modes' | 'reminders' | 'finance' | 'printstudio' | 'machines' | 'materials' | 'production' | 'waste' | 'maintenance' | 'imagegen' | 'videogen' | 'captures' | 'weekly' | 'health' | 'goals' | 'hq' | 'setup' | 'memory' | 'quoting' | 'routines' | 'audit' | 'book' | 'slicer' | 'approvals' | 'media' | 'marketplace' | 'about' | 'creators';
+export type ViewType = 'today' | 'chat' | 'companion' | 'tasks' | 'files' | 'workspace' | 'terminal' | 'computer' | 'printer' | 'costs' | 'settings' | 'journal' | 'recorder' | 'memos' | 'queue' | 'modes' | 'reminders' | 'finance' | 'printstudio' | 'machines' | 'materials' | 'production' | 'waste' | 'maintenance' | 'imagegen' | 'videogen' | 'captures' | 'weekly' | 'health' | 'goals' | 'hq' | 'setup' | 'memory' | 'quoting' | 'routines' | 'audit' | 'book' | 'slicer' | 'approvals' | 'media' | 'marketplace' | 'about' | 'creators' | 'customize';
 
 export interface AppSettings {
   [key: string]: string;

@@ -283,3 +283,27 @@ button, [role="button"] {
   animation: henry-shimmer 1.4s ease-in-out infinite;
   border-radius: 6px;
 }
+
+/* ── Runtime theming (Customization panel) ──────────────────────────────── */
+/* Density: one variable so panels can scale padding without new utilities. */
+:root { --density-scale: 1; }
+
+[data-density='compact'] .henry-density { padding: calc(0.5rem * var(--density-scale)); }
+[data-density='roomy']   .henry-density { padding: calc(1rem   * var(--density-scale)); }
+.henry-density { padding: calc(0.75rem * var(--density-scale)); }
+
+/* Identity: the Minimal skin strips the ring weight the Reactor uses. */
+[data-skin='minimalistic'] .henry-skin-ring { stroke-width: 1 !important; opacity: .5 !important; }
+[data-skin='minimalistic'] .henry-skin-circuit { display: none; }
+
+/* Reduced motion. Set from the Customization panel, and also automatically
+   from the OS preference — this class is only ever added, never subtracted
+   below what the OS asks for. */
+.reduce-motion *,
+.reduce-motion *::before,
+.reduce-motion *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}

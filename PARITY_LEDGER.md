@@ -44,7 +44,7 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 | Card | Rows | Closed | In progress | Missing | Commercial |
 |---|---|---|---|---|---|
 | 2 Chat & Models | 9 | 5 | 0 | 0 | 0 |
-| 1 UI & Core | 10 | 0 | 0 | 8 | 0 |
+| 1 UI & Core | 10 | 10 | 0 | 0 | 0 |
 | 3 Creators & Media | 14 | 13 | 0 | 0 | 0 |
 | 4 Agents & Tools | 20 | 0 | 0 | 11 | 4 |
 | 5 Automation | 9 | 0 | 0 | 5 | 0 |
@@ -83,13 +83,13 @@ ignored. The description is honest that a key is optional; free Zen models stay 
 |---|---|---|---|---|---|---|---|---|---|
 | 1.1 | Main Chat Interface | renderer Chat mode | `ChatView.tsx` | — | — | — | — | — | **complete** |
 | 1.2 | Sidebar Navigation | `app-shell`, `rail`, `sidebar`, `data-collapsed` | `Sidebar.tsx`, 38 destinations | broader than paid's ~10 | keep ours | — | — | — | **different (better)** |
-| 1.3 | Theme / UI Customisation | `accentColor` zod field, `#5cdcff` | none | no accent theming | accent + density settings, `data-skin` root attr | | | | missing |
+| 1.3 | Theme / UI Customisation | `accentColor` zod field, `#5cdcff`; `customization-view` "Make it yours" | `src/henry/theme.ts`, `src/components/settings/CustomizationPanel.tsx` | — | accent presets + custom colour, density, identity (Reactor/Minimal live preview), reduced motion; theme applied to :root before first paint | typecheck + 324 suite | — | **installed pkg: accent #6366f1 -> #5cdcff live on :root, `data-skin`/`data-density` set, persisted to settings** | **CLOSED** |
 | 1.4 | Panel System (22 panels) | n/a | 22 verified live | — | — | — | 22/22 | — | **complete** |
-| 1.5 | JARVIS Orb Mode entry | `creators-view`, mode toggle Voice/Chat | none | see Card 3 | Card 3 | | | | missing |
-| 1.6 | HUD / Reactor Theme | `data-skin`, `skin: default` | none | see Card 3 | Card 3 | | | | missing |
-| 1.7 | Minimal Orb Theme | `skin: minimalistic` | none | see Card 3 | Card 3 | | | | missing |
-| 1.8 | Onboarding Flow | `completedOnboarding`, `seenGuide`, `tutorial:get-progress` | `OnboardingWizard.tsx` | no in-app tutorial mode | post-onboarding guided tour | | | | partial |
-| 1.9 | Multi-window Support | — | single window | no second window/always-on-top | needed for Card 3 orb overlay | | | | missing |
+| 1.5 | JARVIS Orb Mode entry | `creators-view`, mode toggle Voice/Chat | Creators nav entry | — | see Card 3 | — | — | **installed pkg: Creators in nav, Voice/Chat stage buttons** | **CLOSED (Card 3)** |
+| 1.6 | HUD / Reactor Theme | `data-skin`, `skin: default` | Reactor skin | — | see Card 3 | — | — | **installed pkg: 14-element arc-reactor SVG** | **CLOSED (Card 3)** |
+| 1.7 | Minimal Orb Theme | `skin: minimalistic` | Minimal skin | — | see Card 3 | — | — | **installed pkg: 4-element clean-ring orb** | **CLOSED (Card 3)** |
+| 1.8 | Onboarding Flow | `completedOnboarding`, `seenGuide`, `tutorial:get-progress` | `OnboardingWizard.tsx` + `src/components/onboarding/ProductTour.tsx` | no in-app tour | 6-step dismissible tour with "Show me" navigation; progress persisted so it resumes and never re-nags | typecheck + 324 suite | — | **installed pkg: tour appears, advances 1/6 -> 2/6, Skip closes and persists `done:true`** | **CLOSED** |
+| 1.9 | Multi-window Support | — | second window (demo stage) | — | Card 3 delivered an always-on-top frameless stage window | — | — | **installed pkg: stage window opens alongside the main window** | **CLOSED (Card 3)** |
 | 1.10 | Global Search | n/a | global search present | — | — | — | — | — | **complete** |
 
 ---

@@ -38,6 +38,7 @@ import WastePanel from '../maker/WastePanel';
 import MaintenancePanel from '../maker/MaintenancePanel';
 import QuotingPanel from '../quoting/QuotingPanel';
 import CreatorsPanel from '../creators/CreatorsPanel';
+import CustomizationPanel from '../settings/CustomizationPanel';
 import RoutinesPanel from '../routines/RoutinesPanel';
 import MediaLibraryPanel from '../media/MediaLibraryPanel';
 import MarketplacePanel from '../marketplace/MarketplacePanel';
@@ -274,6 +275,7 @@ export default function Layout() {
           {currentView === 'maintenance' && <PanelBoundary><MaintenancePanel /></PanelBoundary>}
           {currentView === 'quoting' && <PanelBoundary><QuotingPanel /></PanelBoundary>}
           {currentView === 'creators' && <PanelBoundary><CreatorsPanel /></PanelBoundary>}
+          {currentView === 'customize' && <PanelBoundary><CustomizationPanel /></PanelBoundary>}
           {currentView === 'routines' && <PanelBoundary><RoutinesPanel /></PanelBoundary>}
           {currentView === 'media' && <PanelBoundary><MediaLibraryPanel /></PanelBoundary>}
           {currentView === 'marketplace' && <PanelBoundary><MarketplacePanel /></PanelBoundary>}

@@ -16,6 +16,8 @@ import { isNative } from './capacitor';
 import { checkAndNotify, syncFromDb as syncRemindersFromDb } from './henry/reminders';
 import OnboardingWizard, { shouldShowOnboarding } from './components/onboarding/OnboardingWizard';
 import { installCreatorsActivation } from './henry/creatorsActivation';
+import { applyTheme, sanitizeTheme, DEFAULT_THEME } from './henry/theme';
+import ProductTour from './components/onboarding/ProductTour';
 import { buildMemoryContext } from './henry/memoryPipeline';
 import { useCapturesStore } from './ambient/capturesStore';
 import { registerShortcuts, buildShortcuts } from './henry/keyboardShortcuts';
@@ -179,6 +181,23 @@ export default function App() {
 
   // Content Creators — Ctrl+Shift+J to open the stage, plus trigger phrases.
   useEffect(() => installCreatorsActivation(), []);
+
+  // Theme must be applied before anything paints, or the first frame flashes
+  // the default accent.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const all = await window.henryAPI.getSettings?.();
+        if (cancelled) return;
+        const raw = (all as Record<string, string> | undefined)?.['theme_json'];
+        applyTheme(sanitizeTheme(raw ? JSON.parse(raw) : null));
+      } catch {
+        applyTheme(DEFAULT_THEME);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   // Register service worker in production only
   useEffect(() => {
@@ -818,6 +837,9 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* One-time guided tour, shown after onboarding completes. */}
+      <ProductTour />
 
       {/* Clipboard AI toast */}
       <ClipboardAIToast />
