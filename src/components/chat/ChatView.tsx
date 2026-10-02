@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { matchesTriggerPhrase, launchDemo } from '../../henry/creatorsActivation';
+import { buildModelMessages, toPlainText } from '../../henry/messageBuilder';
 import { incrementUsage, getTodayUsage, getRemainingRequests, isNearLimit, canUseHenryProxy } from '../../henry/proxyUsage';
 import { hasUsableBackend, getBackendStatus } from '../../henry/backendStatus';
 import { toast, promptDialog } from '../ui/Toast';
@@ -1767,6 +1768,7 @@ What do you want to tackle first?`);
     // History: apply tier-based caps (fewer messages + shorter per-message on LIGHT)
     const history = sliceRecentThreadMessages(
       threadMessagesLive.map((m) => ({
+        id: m.id,
         role: m.role,
         content: capMessageContent(m.content, tierHistoryCaps.maxCharsEach),
       })),
@@ -1891,13 +1893,45 @@ What do you want to tackle first?`);
       tierReason: brainDecision.rationale,
     });
 
-    const messagesPayload: HenryAIMessage[] = [
+    const messagesPayloadText: HenryAIMessage[] = [
       { role: 'system', content: enrichedSystemPrompt },
       ...guardedHistory.map((m) => ({
         role: m.role as HenryAIMessage['role'],
         content: m.content,
       })),
     ];
+
+    // Attach any images from the turn just sent. Before this the file was
+    // stored and rendered as a chip, and the model received nothing but the
+    // sentence "I've attached 1 file: photo.png" — so it answered confidently
+    // about a picture it had never seen.
+    let messagesPayload: HenryAIMessage[] = messagesPayloadText;
+    try {
+      // Ids come from the untrimmed history: trimHistoryToTokenBudget drops them,
+      // and without an id the attachments cannot be matched to this turn.
+      const lastUser = [...history].reverse().find((m) => m.role === 'user');
+      if (lastUser?.id) {
+        const atts = (await window.henryAPI.listAttachmentsForMessage?.(lastUser.id)) ?? [];
+        if (atts.length > 0) {
+          const byMsg = new Map<string, typeof atts>([[lastUser.id, atts]]);
+          const built = await buildModelMessages(
+            messagesPayloadText.map((m) => ({
+              role: m.role,
+              content: m.content,
+              id: m.role === 'user' && m.content === content ? lastUser.id : undefined,
+            })),
+            byMsg,
+            lastUser.id,
+            window.henryAPI
+          );
+          messagesPayload = built as HenryAIMessage[];
+        }
+      }
+    } catch (e) {
+      // Never let an attachment problem lose the turn — plain text still works.
+      console.warn('[chat] could not attach images to the turn', e);
+      messagesPayload = messagesPayloadText;
+    }
 
     const apiKey = provider.api_key || provider.apiKey || '';
 
@@ -2080,7 +2114,9 @@ What do you want to tackle first?`);
       // Iron Gateway — route to cheapest capable path
       const gatewayResult = gatewayRoute(content, {
         settings: s,
-        history: messagesPayload.slice(1).map(m => ({ role: m.role, content: m.content })).slice(-10),
+        // gatewayRoute is text-only; it flattens any parts so a parts array is
+        // never handed to a string-typed consumer.
+        history: messagesPayload.slice(1).map(m => ({ role: m.role, content: toPlainText(m.content) })).slice(-10),
       });
 
       // Tier 0: handled locally — zero tokens, zero cost

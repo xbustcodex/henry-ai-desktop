@@ -13,6 +13,7 @@ import { ipcMain, BrowserWindow } from 'electron';
 import type Database from 'better-sqlite3';
 import type { ModelTool } from '../agent/types';
 import type { ModelCompletion, RunnerMessage } from '../agent/toolRunner';
+import { toText, partition, dataUrl, isImagePart, type ContentMessage, type MessageContent, type MessagePart } from './contentParts';
 
 type WindowGetter = () => BrowserWindow | null;
 
@@ -26,9 +27,14 @@ function safeSend(getWin: WindowGetter, channel: string, data: unknown) {
 
 // ── Types ─────────────────────────────────────────────────────
 
+/**
+ * Message content may carry images. Adapters convert per provider; an adapter
+ * that cannot show an image emits a text note rather than dropping it, so the
+ * model never answers about a picture it was not given.
+ */
 interface AiMessage {
   role: string;
-  content: string;
+  content: MessageContent;
 }
 
 interface AiRequest {
@@ -183,7 +189,7 @@ async function callRelay(params: AiRequest, relayUrl?: string): Promise<{
     },
     body: JSON.stringify({
       model: params.model,
-      messages: params.messages,
+      messages: toOpenAIChatMessages(params.messages),
       temperature: params.temperature ?? 0.7,
       max_tokens: params.maxTokens ?? 4096,
     }),
@@ -238,7 +244,7 @@ async function callOpencode(params: AiRequest): Promise<{
     },
     body: JSON.stringify({
       model: params.model,
-      messages: params.messages,
+      messages: toOpenAIChatMessages(params.messages),
       temperature: params.temperature ?? 0.7,
       max_tokens: params.maxTokens ?? 4096,
     }),
@@ -262,6 +268,103 @@ async function callOpencode(params: AiRequest): Promise<{
   };
 }
 
+/**
+ * Convert messages for an OpenAI-compatible endpoint (OpenAI, Groq, Ollama,
+ * and the opencode bridge, which all speak this shape).
+ *
+ * Images become `image_url` data URLs. A model that cannot view images is
+ * marked explicitly so the model knows a picture exists but it cannot see one.
+ */
+function toOpenAIChatMessages(messages: AiMessage[], supportsImages = true): unknown[] {
+  return messages.map((m) => {
+    if (typeof m.content === 'string') return { role: m.role, content: m.content };
+    const { text, images } = partition(m.content);
+    if (images.length === 0) return { role: m.role, content: text };
+    if (!supportsImages) {
+      return {
+        role: m.role,
+        content:
+          text +
+          '\n' +
+          images
+            .map((i) => `[An image is attached (${i.name ? `${i.name}, ` : ''}${i.mimeType}) but this model cannot view images.]`)
+            .join('\n'),
+      };
+    }
+    return {
+      role: m.role,
+      content: [
+        { type: 'text', text },
+        ...images.map((i) => ({ type: 'image_url', image_url: { url: dataUrl(i.mimeType, i.data) } })),
+      ],
+    };
+  });
+}
+
+/**
+ * Anthropic takes a content ARRAY: text blocks and `image` blocks with a
+ * base64 source. A system message is a top-level field, not a message.
+ */
+function toAnthropicMessages(messages: AiMessage[]): { system?: string; messages: unknown[] } {
+  let system: string | undefined;
+  const out: unknown[] = [];
+  for (const m of messages) {
+    const text = typeof m.content === 'string' ? m.content : toText(m.content);
+    if (m.role === 'system') {
+      system = system ? `${system}\n\n${text}` : text;
+      continue;
+    }
+    if (typeof m.content === 'string' || partition(m.content).images.length === 0) {
+      out.push({ role: m.role, content: text });
+      continue;
+    }
+    const { text: t, images } = partition(m.content);
+    out.push({
+      role: m.role,
+      content: [
+        { type: 'text', text: t },
+        ...images.map((i) => ({
+          type: 'image',
+          source: { type: 'base64', media_type: i.mimeType, data: i.data },
+        })),
+      ],
+    });
+  }
+  return { system, messages: out };
+}
+
+/**
+ * Google uses `parts` with inlineData, and no system role inside messages.
+ */
+function toGoogleContents(messages: AiMessage[]): unknown[] {
+  return messages
+    .filter((m) => m.role !== 'system')
+    .map((m) => {
+      if (typeof m.content === 'string') return { role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] };
+      const { text, images } = partition(m.content);
+      return {
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [
+          ...(text ? [{ text }] : []),
+          ...images.map((i) => ({ inlineData: { mimeType: i.mimeType, data: i.data } })),
+        ],
+      };
+    });
+}
+
+/**
+ * Ollama's chat API carries images as a separate `images` array of raw base64,
+ * with `content` staying plain text.
+ */
+function toOllamaMessages(messages: AiMessage[]): unknown[] {
+  return messages.map((m) => {
+    if (typeof m.content === 'string') return { role: m.role, content: m.content };
+    const { text, images } = partition(m.content);
+    if (images.length === 0) return { role: m.role, content: text };
+    return { role: m.role, content: text, images: images.map((i) => i.data) };
+  });
+}
+
 async function callOpenAI(params: AiRequest): Promise<{
   content: string;
   usage?: { input: number; output: number };
@@ -274,7 +377,7 @@ async function callOpenAI(params: AiRequest): Promise<{
     },
     body: JSON.stringify({
       model: params.model,
-      messages: params.messages,
+      messages: toOpenAIChatMessages(params.messages),
       temperature: params.temperature ?? 0.7,
       max_tokens: params.maxTokens ?? 4096,
     }),
@@ -309,8 +412,7 @@ async function callAnthropic(params: AiRequest): Promise<{
     body: JSON.stringify({
       model: params.model,
       max_tokens: params.maxTokens ?? 4096,
-      messages: params.messages.filter((m) => m.role !== 'system'),
-      system: params.messages.find((m) => m.role === 'system')?.content,
+      ...toAnthropicMessages(params.messages),
       temperature: params.temperature ?? 0.7,
     }),
     signal: params.signal,
@@ -339,12 +441,7 @@ async function callGoogle(params: AiRequest): Promise<{
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      contents: params.messages
-        .filter((m) => m.role !== 'system')
-        .map((m) => ({
-          role: m.role === 'assistant' ? 'model' : 'user',
-          parts: [{ text: m.content }],
-        })),
+      contents: toGoogleContents(params.messages),
       systemInstruction: params.messages.find((m) => m.role === 'system')
         ? { parts: [{ text: params.messages.find((m) => m.role === 'system')!.content }] }
         : undefined,
@@ -408,7 +505,7 @@ async function callOllamaProvider(params: AiRequest): Promise<{
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: params.model,
-      messages: params.messages,
+      messages: toOllamaMessages(params.messages),
       stream: false,
       options: {
         temperature: params.temperature ?? 0.7,
@@ -456,7 +553,7 @@ async function callGroq(params: AiRequest): Promise<GroqResponse> {
     },
     body: JSON.stringify({
       model: params.model,
-      messages: params.messages,
+      messages: toOpenAIChatMessages(params.messages),
       temperature: params.temperature ?? 0.7,
       max_tokens: params.maxTokens ?? 4096,
     }),
@@ -516,8 +613,35 @@ export async function callAI(params: {
     if (!m.role || !['user', 'assistant', 'system'].includes(m.role)) {
       throw new Error(`Invalid message role: "${m.role}". Must be user, assistant, or system.`);
     }
-    if (typeof m.content !== 'string') {
-      throw new Error(`Message content must be a string (got ${typeof m.content}).`);
+    // Content may be a parts array so an attached image can reach the model.
+    // It was rejected outright here, which is why every per-provider
+    // conversion written below was unreachable.
+    if (Array.isArray(m.content)) {
+      if (m.content.length === 0) {
+        throw new Error('Message content parts must not be empty.');
+      }
+      for (const part of m.content) {
+        const p = part as { type?: string; text?: unknown; data?: unknown; mimeType?: unknown };
+        if (p?.type !== 'text' && p?.type !== 'image') {
+          throw new Error(`Invalid content part type: "${p?.type}".`);
+        }
+        if (p.type === 'text' && typeof p.text !== 'string') {
+          throw new Error('Text content part must have a string `text`.');
+        }
+        if (p.type === 'image') {
+          if (typeof p.data !== 'string' || p.data.length === 0) {
+            throw new Error('Image content part must carry base64 `data`.');
+          }
+          if (typeof p.mimeType !== 'string' || !p.mimeType.includes('/')) {
+            throw new Error('Image content part must carry a `mimeType` like "image/png".');
+          }
+          if (p.data.length > 64 * 1024 * 1024) {
+            throw new Error('Image content part is too large.');
+          }
+        }
+      }
+    } else if (typeof m.content !== 'string') {
+      throw new Error(`Message content must be a string or content parts (got ${typeof m.content}).`);
     }
   }
 
@@ -643,7 +767,7 @@ async function streamOpenAI(
       },
       body: JSON.stringify({
         model: params.model,
-        messages: params.messages,
+        messages: toOpenAIChatMessages(params.messages),
         temperature: params.temperature ?? 0.7,
         max_tokens: params.maxTokens ?? 4096,
         stream: true,
@@ -711,8 +835,8 @@ async function streamAnthropic(
       body: JSON.stringify({
         model: params.model,
         max_tokens: params.maxTokens ?? 4096,
-        messages: params.messages.filter((m) => m.role !== 'system'),
-        system: params.messages.find((m) => m.role === 'system')?.content,
+        ...toAnthropicMessages(params.messages),
+
         temperature: params.temperature ?? 0.7,
         stream: true,
       }),
@@ -781,7 +905,7 @@ async function streamGroq(
       },
       body: JSON.stringify({
         model: params.model,
-        messages: params.messages,
+        messages: toOpenAIChatMessages(params.messages),
         temperature: params.temperature ?? 0.7,
         max_tokens: params.maxTokens ?? 4096,
         stream: true,
@@ -858,13 +982,16 @@ function safeParseArgs(raw: unknown): Record<string, unknown> {
   return {};
 }
 
-/** RunnerMessage[] → OpenAI chat messages (assistant tool_calls + tool role). */
+/**
+ * RunnerMessage[] → OpenAI chat messages (assistant tool_calls + tool role,
+ * plus image parts so a tool that loaded a picture actually shows it).
+ */
 function toOpenAIMessages(messages: RunnerMessage[]): unknown[] {
   return messages.map((m) => {
     if (m.role === 'assistant' && m.toolCalls?.length) {
       return {
         role: 'assistant',
-        content: m.content || null,
+        content: typeof m.content === 'string' ? (m.content || null) : toText(m.content),
         tool_calls: m.toolCalls.map((tc) => ({
           id: tc.id,
           type: 'function',
@@ -872,25 +999,70 @@ function toOpenAIMessages(messages: RunnerMessage[]): unknown[] {
         })),
       };
     }
+    const images = m.images ?? (Array.isArray(m.content) ? m.content.filter(isImagePart) : []);
+    const text = typeof m.content === 'string' ? m.content : toText(m.content, { noteImages: false });
     if (m.role === 'tool') {
-      return { role: 'tool', tool_call_id: m.toolCallId, content: m.content };
+      // A tool result with an image is sent as a user turn carrying the image:
+      // OpenAI's `tool` role takes text only, and burying the picture in the
+      // tool text is exactly the failure this card exists to fix.
+      if (images.length === 0) return { role: 'tool', tool_call_id: m.toolCallId, content: text };
+      return {
+        role: 'tool',
+        tool_call_id: m.toolCallId,
+        content: `${text}\n[${m.name ?? 'file'} returned an image, shown below]`,
+      };
     }
-    return { role: m.role, content: m.content };
+    if (images.length === 0) return { role: m.role, content: text };
+    return {
+      role: m.role,
+      content: [
+        { type: 'text', text },
+        ...images.map((i) => ({ type: 'image_url', image_url: { url: dataUrl(i.mimeType, i.data) } })),
+      ],
+    };
   });
 }
 
+/** The follow-up user turn that carries a tool's image, for OpenAI-shaped APIs. */
+export function imageFollowUp(text: string, images: Extract<MessagePart, { type: 'image' }>[]): RunnerMessage {
+  return { role: 'user', content: text, images };
+}
+
 /** RunnerMessage[] → Anthropic system + messages (tool_use / tool_result blocks). */
-function toAnthropicMessages(messages: RunnerMessage[]): { system?: string; messages: unknown[] } {
+function toAnthropicToolMessages(messages: RunnerMessage[]): { system?: string; messages: unknown[] } {
   let system: string | undefined;
   const out: unknown[] = [];
   for (const m of messages) {
+    const mText = typeof m.content === 'string' ? m.content : toText(m.content, { noteImages: false });
+    const mImages = m.images ?? (Array.isArray(m.content) ? m.content.filter(isImagePart) : []);
     if (m.role === 'system') {
-      system = m.content;
+      system = mText;
+      continue;
+    }
+    // Anthropic's tool_result block CAN carry an image, so a tool that loaded a
+    // picture shows it in place rather than in a side channel.
+    if (m.role === 'tool' && mImages.length > 0) {
+      out.push({
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: m.toolCallId,
+            content: [
+              { type: 'text', text: `${mText}\n[${m.name ?? 'file'} returned an image, shown below]` },
+              ...mImages.map((i) => ({ type: 'image', source: { type: 'base64', media_type: i.mimeType, data: i.data } })),
+            ],
+          },
+        ],
+      });
       continue;
     }
     if (m.role === 'assistant' && m.toolCalls?.length) {
       const content: unknown[] = [];
-      if (m.content) content.push({ type: 'text', text: m.content });
+      if (mText) content.push({ type: 'text', text: mText });
+      for (const i of mImages) {
+        content.push({ type: 'image', source: { type: 'base64', media_type: i.mimeType, data: i.data } });
+      }
       for (const tc of m.toolCalls) {
         content.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.arguments ?? {} });
       }
@@ -951,7 +1123,7 @@ async function callOpenAIToolsCompletion(params: ToolCompletionParams): Promise<
 }
 
 async function callAnthropicToolsCompletion(params: ToolCompletionParams): Promise<ModelCompletion> {
-  const { system, messages } = toAnthropicMessages(params.messages);
+  const { system, messages } = toAnthropicToolMessages(params.messages);
   const tools = params.modelTools.map((t) => ({
     name: t.function.name,
     description: t.function.description,

@@ -1,3 +1,4 @@
+import type { MessagePart } from '../ipc/contentParts';
 /**
  * ToolRunner — wraps a single-round model `complete` call in a tool-calling
  * loop and enforces the safety model (design §5, §7).
@@ -27,9 +28,50 @@ export interface ModelToolCall {
   arguments: Record<string, unknown>;
 }
 
+/**
+ * Pull image payloads out of a tool result.
+ *
+ * `file_load` returns `{kind:'image', mime, base64}`. Left inside the
+ * JSON.stringify'd result the model received megabytes of base64 as prose: it
+ * could not see the picture, and the context filled with noise. The image is
+ * removed from the text and returned separately for the adapter to attach.
+ */
+export function liftImages(result: unknown): {
+  text: string;
+  images: Extract<MessagePart, { type: 'image' }>[];
+} {
+  const images: Extract<MessagePart, { type: 'image' }>[] = [];
+  if (result && typeof result === 'object') {
+    const data = (result as Record<string, unknown>).data as Record<string, unknown> | undefined;
+    const maybe = (data ?? (result as Record<string, unknown>)) as Record<string, unknown>;
+    if (maybe && maybe.kind === 'image' && typeof maybe.base64 === 'string' && typeof maybe.mime === 'string') {
+      images.push({
+        type: 'image',
+        mimeType: maybe.mime,
+        data: maybe.base64,
+        name: typeof maybe.path === 'string' ? maybe.path.split(/[\\/]/).pop() : undefined,
+      });
+      const trimmed: Record<string, unknown> = { ...(result as Record<string, unknown>) };
+      if (trimmed.data && typeof trimmed.data === 'object') {
+        const { base64: _drop, ...rest } = trimmed.data as Record<string, unknown>;
+        (trimmed.data as Record<string, unknown>) = rest;
+      }
+      return { text: JSON.stringify(trimmed), images };
+    }
+  }
+  return { text: JSON.stringify(result), images };
+}
+
 export interface RunnerMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
+  /**
+   * Text, or text plus images. Images arrive from tools such as `file_load`,
+   * which reads a picture off disk so the model can actually look at it.
+   */
+  content: string | MessagePart[];
+  /** Images carried on this turn, kept out of `content` so persistence and
+   *  every text-only consumer can ignore them. */
+  images?: Extract<MessagePart, { type: 'image' }>[];
   /** Present on an assistant turn that requested tools. */
   toolCalls?: ModelToolCall[];
   /** Present on a tool-result turn. */
@@ -291,11 +333,16 @@ export async function runToolConversation(
 
     for (const call of completion.toolCalls) {
       const result = await executeToolCall(registry, context, call);
+      // A tool that read a picture returns it as base64. Stringifying that into
+      // the message text made the image inert AND billed every token of it, so
+      // images are lifted out here and carried separately.
+      const lifted = liftImages(result);
       messages.push({
         role: 'tool',
         name: call.name,
         toolCallId: call.id,
-        content: JSON.stringify(result),
+        content: lifted.text,
+        images: lifted.images,
       });
       await logToolCall(context, call, result);
     }

@@ -220,13 +220,36 @@ async function runWorkerAI(params: {
 }
 
 // Token/cost estimator for web-mode cost tracking (no DB cost_log in browser)
+/** Flatten a possibly-parts message to plain text for the browser preview. */
+function flattenContent(content: string | unknown[]): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((p) => {
+      const q = p as { type?: string; text?: string; name?: string; mimeType?: string };
+      return q.type === 'text' ? (q.text ?? '') : `[image: ${q.name ?? q.mimeType ?? 'image'}]`;
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+/** Content may now be a parts array; the browser preview counts text only. */
+function textLength(content: string | unknown[]): number {
+  if (typeof content === 'string') return content.length;
+  if (!Array.isArray(content)) return 0;
+  return content.reduce<number>((n, p) => {
+    const q = p as { type?: string; text?: string };
+    return n + (q.type === 'text' ? (q.text?.length ?? 0) : 0);
+  }, 0);
+}
+
 function estimateUsage(
   fullText: string,
-  params: { model?: string; messages?: { content: string }[] }
+  params: { model?: string; messages?: { content: string | unknown[] }[] }
 ): { prompt_tokens: number; completion_tokens: number; total_tokens: number; cost: number } {
   const outputTokens = Math.ceil(fullText.length / 4);
   const inputTokens = Math.ceil(
-    (params.messages || []).reduce((s, m) => s + (m.content || '').length, 0) / 4
+    (params.messages || []).reduce((s, m) => s + textLength(m.content), 0) / 4
   );
   const MODEL_RATES: Record<string, [number, number]> = {
     'llama-3.1-8b-instant':          [0.06,  0.08],
@@ -560,7 +583,13 @@ const henryAPI: Window['henryAPI'] = {
             if (isGroqRateLimit(res.status)) {
               const cerebrasKey = (params as any).cerebrasApiKey as string | undefined
                 ?? localStorage.getItem('henry:cerebras_api_key') ?? undefined;
-              const fallback = await tryCerebrasFallback({ cerebrasApiKey: cerebrasKey, model, messages, signal: controller.signal });
+              // Cerebras in the browser preview is text-only.
+              const fallback = await tryCerebrasFallback({
+                cerebrasApiKey: cerebrasKey,
+                model,
+                messages: messages.map((m) => ({ role: m.role, content: flattenContent(m.content) })),
+                signal: controller.signal,
+              });
               if (fallback?.ok) { chunkCb?.(fallback.text); doneCb?.(fallback.text, estimateUsage(fallback.text, params)); return; }
             }
             throw new Error(errMsg);

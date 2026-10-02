@@ -10,7 +10,16 @@ type AIInvokeParams = {
   provider: string;
   model: string;
   apiKey: string;
-  messages: Array<{ role: string; content: string }>;
+  /** Content may carry images, so an attached picture reaches the model. */
+  messages: Array<{
+    role: string;
+    content:
+      | string
+      | Array<
+          | { type: 'text'; text: string }
+          | { type: 'image'; mimeType: string; data: string; name?: string }
+        >;
+  }>;
   temperature?: number;
   maxTokens?: number;
   apiUrl?: string;

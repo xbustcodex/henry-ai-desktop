@@ -51,7 +51,7 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 | 6 Voice & Input | 13 | 3 | 0 | 3 | 2 |
 | 7 Computer Control | 16 | 0 | 0 | 3 | 0 |
 | 8 Companion | 9 | 0 | 0 | 3 | 0 |
-| 9 Files & Memory | 14 | 0 | 0 | 5 | 0 |
+| 9 Files & Memory | 14 | 0 | 0 | 4 | 0 |
 | 10 Integrations | 14 | 2 | 0 | 2 | 4 |
 | 11 Settings & System | 15 | 2 | 0 | 2 | 3 |
 
@@ -228,7 +228,7 @@ guarding, `_denyDangerous`).
 | # | Row | PAID EVIDENCE | OUR CURRENT | GAP | STATUS |
 |---|---|---|---|---|---|
 | 9.1 | File Attachments | ours | ours | keep | complete |
-| 9.2 | Document Parsing / multimodal | `load_file` puts an image/PDF/OOXML **into the model turn** (`tool-registry.ts:191-203`); bytes deliberately not persisted | `file_load` returns `{kind:'image', mime, base64}` — **but nothing consumes it as an image** | **NOT IMPLEMENTED. Verified: `Message.content` is `string` throughout (`src/types/index.ts:159`); there is no `image_url` / `input_image` / `type:'image'` anywhere in `electron/ipc/ai.ts`, and the tool runner does not special-case an image result either. So `file_load`'s base64 is currently stringified into the tool text and the model never sees the picture.** Text/PDF extraction DOES work and reaches the model as text. | **BLOCKED ON SCOPE — see note below. Do not half-do this.** | | | | **MISSING (with cause identified)** |
+| 9.2 | Document Parsing / multimodal | `load_file` puts an image/PDF/OOXML **into the model turn** (`tool-registry.ts:191-203`); bytes deliberately not persisted in the transcript | `electron/ipc/contentParts.ts`, per-provider converters in `electron/ipc/ai.ts`, `src/henry/messageBuilder.ts` | was **not implemented**: `Message.content` was a string throughout, no `image_url`/`inlineData` anywhere, and `file_load`'s base64 was stringified into the tool text — so the model never saw a picture | Content parts end to end: OpenAI/Groq/bridge use `image_url`, Anthropic uses base64 source blocks, Google uses `inlineData`, Ollama uses a separate `images` array. Attachments hydrate the newest user turn only. Tool results lift images out of the JSON text. **An image is never silently dropped** — a non-vision model gets an explicit note | **12 builder tests** (image attached, non-image announced, only the target turn hydrated, unreadable/oversized skipped, cap per turn, throwing getter survives) + the guard's shape/mime/size checks | — | **installed pkg: guard accepts parts; a real PNG round-trips save→read-back as a `data:image/png;base64,` URL; Ollama received the image and answered `Multimodal data provided, but model does not support multimodal requests.`, which surfaced to the renderer as a clear error** | **PARTIAL — pipeline verified to the provider boundary; the final proof (a vision model describing the picture) needs a vision model, and none is installed locally** |
 | 9.3 | Memory Search | paid `toLocaleLowerCase().includes()` | ours FTS5 + 5-factor | **ours better** | different (better) |
 | 9.4 | Knowledge Base | paid pages | ours memory | keep | partial |
 | 9.5 | Vector Store | paid | ours FTS5 not vectors | portable; assess | missing |
@@ -429,3 +429,28 @@ strict would have "fixed" them by rejecting the calls, hiding the real defect.
 All three fixed. The tunnel control also now uses the real IPC pair, which was
 missing from the `HenryAPI` interface entirely — part of why the panel had
 invented routes in the first place.
+
+
+---
+
+## Card 9.2 — verification boundary, stated plainly
+
+The multimodal pipeline is implemented and verified **up to the provider boundary**, on the
+installed package:
+
+| Step | Evidence |
+|---|---|
+| Content parts pass the request guard | was `Message content must be a string (got object)`; now accepts and validates parts |
+| Bad image parts rejected | `Image content part must carry a \`mimeType\` like "image/png"` |
+| Attachments store and read back | real PNG saved → returned as `data:image/png;base64,…` |
+| Adapter converts and sends | Ollama received the image in its `images` array |
+| Provider response surfaces | Ollama's `Multimodal data provided, but model does not support multimodal requests.` reached the renderer |
+
+**What is NOT verified:** a vision model actually describing the picture. Every model installed
+locally (`llama3.2:3b`, `gpt-oss:20b`, `deepseek-coder:6.7b`, `deepseek-r1:1.5b`,
+`qwen2.5-coder:7b`, `qwen2.5-coder:3b`) is text-only. Completing this needs a vision model pulled
+into Ollama — a multi-gigabyte change to the user's setup, so it is asked for rather than done.
+
+Also unverified by the same boundary: Anthropic, Google and the opencode bridge, none of which
+have a key configured on this machine. Their converters are covered by the same shape tests but
+have not been sent to the real endpoint.

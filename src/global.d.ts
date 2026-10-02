@@ -112,7 +112,8 @@ declare global {
 
   interface HenryAIMessage {
     role: 'system' | 'user' | 'assistant';
-    content: string;
+    /** Plain text, or text plus attached images the model can actually see. */
+    content: string | Array<{ type: 'text'; text: string } | { type: 'image'; mimeType: string; data: string; name?: string }>;
   }
 
   interface HenryAIRequest {
