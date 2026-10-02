@@ -24,6 +24,13 @@ import { registerOllamaCleanup } from './ipc/ollamaManager';
 import { registerTerminalHandlers } from './ipc/terminal';
 import { registerComputerHandlers } from './ipc/computer';
 import { registerCreatorsHandlers, registerCreatorsProtocol, attachCreatorsProtocol } from './ipc/creators';
+import {
+  notifyPermission,
+  requestNotifyPermission,
+  consumeOpenRequest,
+  notifyRunFinished,
+  setMainWindowGetter,
+} from './ipc/automationNotifications';
 import { registerPrinterHandlers } from './ipc/printer';
 import { registerSessionStoreHandlers } from './ipc/sessionStore';
 import { registerApprovalHandlers } from './ipc/approvals';
@@ -625,6 +632,18 @@ app.whenReady().then(() => {
       }).show();
     }
   });
+
+  // Automation notifications: permission state, and a click that actually
+  // routes to the run. The plain notification above has no click target by
+  // design (it is a toast), but a finished routine must be one click from its
+  // own result.
+  setMainWindowGetter(getMainWindow);
+  ipcMain.handle('notification:getPermission', () => notifyPermission());
+  ipcMain.handle('notification:requestPermission', () => requestNotifyPermission());
+  ipcMain.handle('notification:consumeOpenRequest', () => consumeOpenRequest());
+  ipcMain.handle('notification:notifyRun', (_e, opts: {
+    runId: number; title: string; success: boolean; detail?: string; mode?: 'all' | 'failures' | 'none';
+  }) => notifyRunFinished(opts));
 
   // ── Global hotkeys ───────────────────────────────────────────────────────────
   // SIMPLE: One key to capture anything, one key to open Henry.

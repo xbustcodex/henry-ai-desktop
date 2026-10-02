@@ -800,6 +800,13 @@ declare global {
     computerOpenUrl: (url: string) => Promise<HenryComputerShellResult>;
 
     // Content Creators — scripted demo mode
+    notificationGetPermission: () => Promise<'granted' | 'denied' | 'default' | 'provisional' | 'unknown' | 'unsupported'>;
+    notificationRequestPermission: () => Promise<'granted' | 'denied' | 'default' | 'provisional' | 'unknown' | 'unsupported'>;
+    notificationConsumeOpenRequest: () => Promise<{ kind: string; runId: number; title: string; at: number } | null>;
+    notificationNotifyRun: (opts: { runId: number; title: string; success: boolean; detail?: string; mode?: 'all' | 'failures' | 'none' }) =>
+      Promise<{ shown: boolean; reason?: string }>;
+    onNotificationOpenRequest: (cb: (req: { kind: string; runId: number; title: string }) => void) => () => void;
+
     creatorsGetDemo: () => Promise<CreatorDemo>;
     creatorsSaveDemo: (demo: CreatorDemo) => Promise<{ ok: boolean; demo: CreatorDemo }>;
     creatorsGetOrb: () => Promise<OrbSettings>;

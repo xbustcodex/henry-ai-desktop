@@ -604,6 +604,17 @@ contextBridge.exposeInMainWorld('henryAPI', {
   computerScreenshot: (params?: Record<string, unknown>) => ipcRenderer.invoke('computer:screenshot', params ?? {}),
   computerOpenApp: (appName: string) => ipcRenderer.invoke('computer:openApp', appName),
   computerOpenUrl: (url: string) => ipcRenderer.invoke('computer:openUrl', url),
+  // Automation notifications — permission state + click routing
+  notificationGetPermission: () => ipcRenderer.invoke('notification:getPermission'),
+  notificationRequestPermission: () => ipcRenderer.invoke('notification:requestPermission'),
+  notificationConsumeOpenRequest: () => ipcRenderer.invoke('notification:consumeOpenRequest'),
+  notificationNotifyRun: (opts: { runId: number; title: string; success: boolean; detail?: string; mode?: 'all' | 'failures' | 'none' }) =>
+    ipcRenderer.invoke('notification:notifyRun', opts),
+  onNotificationOpenRequest: (cb: (req: { kind: string; runId: number; title: string }) => void) => {
+    const l = (_e: unknown, req: { kind: string; runId: number; title: string }) => cb(req);
+    ipcRenderer.on('notification:open-request', l);
+    return () => ipcRenderer.removeListener('notification:open-request', l);
+  },
   // Content Creators — scripted demo mode
   creatorsGetDemo: () => ipcRenderer.invoke('creators:getDemo'),
   creatorsSaveDemo: (demo: unknown) => ipcRenderer.invoke('creators:saveDemo', demo),

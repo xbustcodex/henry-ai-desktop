@@ -47,7 +47,7 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 | 1 UI & Core | 10 | 10 | 0 | 0 | 0 |
 | 3 Creators & Media | 14 | 13 | 0 | 0 | 0 |
 | 4 Agents & Tools | 20 | 2 | 0 | 9 | 4 |
-| 5 Automation | 9 | 0 | 0 | 5 | 0 |
+| 5 Automation | 9 | 1 | 0 | 4 | 0 |
 | 6 Voice & Input | 13 | 0 | 0 | 6 | 2 |
 | 7 Computer Control | 16 | 0 | 0 | 3 | 0 |
 | 8 Companion | 9 | 0 | 0 | 3 | 0 |
@@ -160,7 +160,7 @@ plus the syncBridge tool router. **Retain our extra tools.**
 | 5.5 | Triggers / Events | trigger types | partial | portable | partial |
 | 5.6 | Goal Planning | goal schema | none | portable | missing |
 | 5.7 | Run management | runs + attachments + deep-link | runs only | no attachments, no notification deep-link | partial |
-| 5.8 | Native notifications | `automation-notifications.ts`, OS permission 6-state enum, click→run | in-app IPC only | **fully portable, high value** | missing |
+| 5.8 | Native notifications | `automation-notifications.ts`; OS permission 6-state enum; click routes to the run; per-job all/failures/none with reasons | `electron/ipc/automationNotifications.ts`; scheduler emits on success and failure/abort | — | click routing into the exact run; requests queued when no window is listening yet so an early click is not lost; notify mode with an explicit reason for each suppression | **11 tests**: click routing, window restore/focus, no-window queue, ordering across clicks | — | **installed pkg: permission reports the OS value (`default`, not a fabricated boolean); normal run shows; success in failures-only suppressed with reason; mode `none` suppressed with reason; listener registers** | **CLOSED** |
 | 5.9 | Automation ideas | renderer `ideas` tab | none | portable | missing |
 
 ---

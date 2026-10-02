@@ -397,6 +397,7 @@ export class HenryScheduler {
           .run(content, sessionId, new Date().toISOString(), runId);
       }
       this.send("automation:run-changed", { id: runId, taskId: task.id, status: "succeeded" });
+      this.notifyFinished(runId, task.name, true);
       this.send("scheduler:task-completed", {
         id: task.id,
         name: task.name,
@@ -420,6 +421,7 @@ export class HenryScheduler {
           .run(aborted ? 'aborted' : 'failed', error, sessionId, new Date().toISOString(), runId);
       }
       this.send("automation:run-changed", { id: runId, taskId: task.id, status: aborted ? "aborted" : "failed" });
+      this.notifyFinished(runId, task.name, false);
       this.send("scheduler:task-completed", {
         id: task.id,
         name: task.name,
@@ -535,5 +537,25 @@ export class HenryScheduler {
   private send(channel: string, data: unknown): void {
     const win = this.getWindow();
     if (win && !win.isDestroyed()) win.webContents.send(channel, data);
+  }
+
+  /**
+   * Native notification for a finished run, clickable back into the run.
+   * Never let a notification failure escape into the scheduler — a run that
+   * succeeded must still be recorded as succeeded.
+   */
+  private notifyFinished(runId: number | string | null | undefined, name: string, success: boolean): void {
+    try {
+      // Loaded lazily so the scheduler stays usable in contexts without a
+      // window, and so the module is only pulled in when a run actually ends.
+      const { notifyRunFinished } = require("../ipc/automationNotifications") as typeof import("../ipc/automationNotifications");
+      // The scheduler holds the run id as a string (it comes from lastInsertRowid).
+      if (runId == null) return;
+      const id = Number(runId);
+      if (!Number.isFinite(id)) return;
+      notifyRunFinished({ runId: id, title: name || "Routine finished", success });
+    } catch (e) {
+      console.warn("[scheduler] run notification failed:", e instanceof Error ? e.message : e);
+    }
   }
 }

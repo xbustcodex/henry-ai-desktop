@@ -1492,6 +1492,15 @@ const henryAPI: Window['henryAPI'] = {
     freeMemoryGB: '?',
   }),
 
+  // ── Automation notifications (web stubs) ─────────────────────────────────
+  notificationGetPermission: async () => 'default' as const,
+  notificationRequestPermission: async () => 'granted' as const,
+  notificationConsumeOpenRequest: async () => null,
+  notificationNotifyRun: async (o: { success: boolean }) => ({
+    shown: o.success === false, reason: o.success ? 'stub' : undefined,
+  }),
+  onNotificationOpenRequest: () => () => {},
+
   // ── Content Creators (web stubs) ───────────────────────────────────────
   creatorsGetDemo: async () => ({
     enabled: true,
