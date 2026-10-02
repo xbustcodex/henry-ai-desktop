@@ -17,7 +17,7 @@ PAID EVIDENCE -> OUR CURRENT -> GAP -> IMPLEMENTATION -> AUTOMATED TEST
 
 **Status vocabulary (terminal states are explicit):**
 `missing` · `partial` · `complete` · `different` (implemented another way) ·
-`hardened/superset` (ours exceeded the reference) · `excluded by design` (intentional terminal
+`hardened/superset` (ours now exceeds the reference) · `excluded by design` (intentional terminal
 state — upstream feature disabled upstream) · `commercial boundary` (excluded, identify only).
 
 **Card gate:** a card is not complete until its rows are verified on a **freshly installed Windows
@@ -46,7 +46,7 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 | 2 Chat & Models | 9 | 5 | 0 | 0 | 0 |
 | 1 UI & Core | 10 | 10 | 0 | 0 | 0 |
 | 3 Creators & Media | 14 | 13 | 0 | 0 | 0 |
-| 4 Agents & Tools | 20 | 0 | 0 | 11 | 4 |
+| 4 Agents & Tools | 20 | 1 | 0 | 10 | 4 |
 | 5 Automation | 9 | 0 | 0 | 5 | 0 |
 | 6 Voice & Input | 13 | 0 | 0 | 6 | 2 |
 | 7 Computer Control | 16 | 0 | 0 | 3 | 0 |
@@ -133,7 +133,7 @@ plus the syncBridge tool router. **Retain our extra tools.**
 | 4.5 | File System Tools | `list_files`, `search_files`, `inspect_file`, `read_file`, `load_file`, `write_file`, `replace_file`, `move_file`, `copy_file`, `publish_file` (`tool-registry.ts:151-289`) | repo-scoped only | **8 portable tools missing**; `load_file` = multimodal, `publish_file` = attach produced file | missing |
 | 4.6 | Git Integration | — | `repo.ts` | keep | complete |
 | 4.7 | GitHub Research Tools | — | none | portable | missing |
-| 4.8 | Python Tools | paid runs them **jailed**; ours runs them unrestricted | ours unrestricted | **ours is LESS isolated than paid — a real weakness, not a parity gap** | **HARDENED / SUPERSET** — add a jailed execution boundary, keep our existing useful capability. Do NOT replace with paid's implementation. Row cannot close until tested for BOTH legitimate execution AND escape/containment attempts. |
+| 4.8 | Python Tools | paid runs them **jailed** | `electron/ipc/pythonRunner.ts` | **was LESS isolated than paid, AND completely broken on Windows** — it staged to a hardcoded `/tmp/henry_<ts>.py` and ran with `shell: '/bin/zsh'`, so neither path exists on Windows, and the blocking `execSync` froze the main process for up to 12s | **HARDENED / SUPERSET** — our own jail: pre-execution source screening (14 escape classes refused before staging), scrubbed env, private cwd under tmpdir, POSIX rlimits (CPU/AS/FSIZE/NPROC/NOFILE), wall-clock timeout with SIGKILL, hard output cap, async, cross-platform interpreter. Paid's implementation not used. | **23 tests**: 14 escapes refused + legitimate exec, real script errors, timeout, no env leaks, private cwd, output cap | — | installed build boots with it; Python 3.12.10 resolves from the packaged app | **HARDENED / SUPERSET** — **PARTIAL**: jail proven by tests; the chat entry point is not yet verified end to end because "python run:" is routed to the coder engine before it reaches this branch |
 | 4.9 | Network Tools | `files.ts` fetch | `web.ts` | keep | complete |
 | 4.10 | Sandbox | sandbox config | partial | compare | partial |
 | 4.11 | Process / System Tools | `processes.ts` | ours | keep | complete |
@@ -321,3 +321,11 @@ guarding, `_denyDangerous`).
 | loopback sync | HTTP 401 (listening, correctly rejecting unauthenticated) |
 | boot log handler errors | 0 |
 | concurrent stress | see Windows lag row above — PASS |
+
+---
+
+## Card 4.8 findings carried forward
+
+* **Chat routing:** `python run:` is intercepted by the coder engine before the sync bridge's Python branch runs. The jail is correct and tested; its chat entry point still needs an end-to-end check. Record before closing 4.8.
+* **Coder reports "no engine available"** when Ollama is not running on the machine. Environment condition, not a regression — but the message is unhelpful and should name the cause.
+* **`opencodeTest` returns "model is required"** when called with no model. That is a correct, if terse, response.
