@@ -11,6 +11,7 @@
 import { ipcMain } from 'electron';
 import type Database from 'better-sqlite3';
 import { encryptKey, decryptKey, migrateProviderKeys } from './_keyStorage';
+import { setOpencodeZenCredential } from '../coder/opencode';
 import { log } from '../lib/log';
 
 export function registerSettingsHandlers(db: Database.Database, getMainWindow?: () => import('electron').BrowserWindow | null) {
@@ -75,6 +76,13 @@ export function registerSettingsHandlers(db: Database.Database, getMainWindow?: 
            models = excluded.models,
            updated_at = datetime('now')`
         ).run(provider.id, provider.name, encryptedKey, enabled, provider.models || '[]');
+        // OpenCode Zen authenticates with OPENCODE_API_KEY, which the opencode
+        // CLI only sees in its child environment. Push the saved key there now
+        // so it takes effect without a restart — otherwise the key would be
+        // stored and then silently ignored.
+        if (provider.id === 'opencode-zen') {
+          setOpencodeZenCredential(rawKey);
+        }
         log.debug('[providers:save] saved', provider.id);
         // Immediately inject into renderer localStorage so chat picks it up without restart.
         // NOTE: localStorage itself is not encrypted — this is plaintext in Chromium's data store.

@@ -530,6 +530,9 @@ export async function callAI(params: {
       case 'groq':      return callGroq(params);
       case 'relay':     return callRelay(params);
       case 'opencode':  return callOpencode(params);
+      // Zen is served by the same local opencode bridge as OpenCode; the key
+      // decides which slice of the catalogue is reachable.
+      case 'opencode-zen': return callOpencode({ ...params, provider: 'opencode' });
       default:          throw new Error(`Unknown provider: ${params.provider}`);
     }
   };

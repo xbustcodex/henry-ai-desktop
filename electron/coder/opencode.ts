@@ -44,6 +44,24 @@ let cached: OpencodeCliInfo | undefined;
  * user-level install directories have to be added explicitly. node version
  * managers are enumerated from disk because their directory names vary.
  */
+
+/**
+ * OpenCode Zen credential, saved from Settings → AI Providers.
+ *
+ * Zen authenticates with OPENCODE_API_KEY. Until this existed the only way to
+ * supply it was having it in the OS environment, so a key typed into Henry's
+ * provider panel would have been stored and then silently ignored — the bridge
+ * would keep serving the unauthenticated model subset.
+ */
+let zenCredential = '';
+
+export function setOpencodeZenCredential(key: string | null | undefined): void {
+  zenCredential = (key ?? '').trim();
+}
+
+export function getOpencodeZenCredential(): string {
+  return zenCredential;
+}
 export function buildCoderChildEnv(): NodeJS.ProcessEnv {
   const home = os.homedir();
   const env: NodeJS.ProcessEnv = { ...process.env };
@@ -60,6 +78,8 @@ export function buildCoderChildEnv(): NodeJS.ProcessEnv {
     if (key in env && !/KEY|TOKEN|AUTH|SECRET|PASSWORD/.test(key)) delete env[key];
   }
   env.HOME = env.HOME || home;
+  // A key saved in Henry wins over one inherited from the OS environment.
+  if (zenCredential) env.OPENCODE_API_KEY = zenCredential;
 
   const dirs = [
     path.join(home, '.local', 'bin'),

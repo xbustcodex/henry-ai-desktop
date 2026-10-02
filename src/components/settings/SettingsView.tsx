@@ -62,7 +62,7 @@ function voiceSubtitle(): string {
 
 
 // Providers that take an API key and can drive chat. (Ollama is local/keyless.)
-const CLOUD_PROVIDER_IDS = ['openai', 'anthropic', 'google', 'groq'] as const;
+const CLOUD_PROVIDER_IDS = ['openai', 'anthropic', 'google', 'groq', 'opencode-zen'] as const;
 
 const inputCls =
   'w-full bg-henry-surface border border-henry-border/30 rounded-xl px-3 py-2 text-sm ' +

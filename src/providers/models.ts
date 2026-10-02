@@ -558,6 +558,16 @@ export const PROVIDERS = {
     keyPrefix: '',
     local: true,
   },
+  'opencode-zen': {
+    id: 'opencode-zen',
+    name: 'OpenCode Zen',
+    icon: '✨',
+    description:
+      "OpenCode Zen — tested models from the OpenCode team, reached through the local opencode " +
+      'bridge. Without a key you still get the free Zen models; a key unlocks the rest.',
+    keyUrl: 'https://opencode.ai/docs/zen/',
+    keyPrefix: '',
+  },
   ollama: {
     id: 'ollama',
     name: 'Ollama (Local)',
