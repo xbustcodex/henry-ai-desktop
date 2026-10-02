@@ -1492,6 +1492,17 @@ const henryAPI: Window['henryAPI'] = {
     freeMemoryGB: '?',
   }),
 
+  // ── Google (web stubs) ────────────────────────────────────────────────────
+  googleStartAuth: async () => ({ ok: false, error: 'Google sign-in needs the Henry desktop app.' }),
+  googleGetToken: async () => ({ ok: false }),
+  googleRefreshToken: async () => ({ ok: false }),
+  googleHasCredentials: async () => ({ hasCredentials: false }),
+  googleDisconnect: async () => ({ ok: true }),
+
+  // ── Runtime status (web stubs) ────────────────────────────────────────────
+  runtimeGetError: async () => ({ message: null, bootFailed: false, databaseOk: true }),
+  onRuntimeStatusChanged: () => () => {},
+
   // ── Automation notifications (web stubs) ─────────────────────────────────
   notificationGetPermission: async () => 'default' as const,
   notificationRequestPermission: async () => 'granted' as const,

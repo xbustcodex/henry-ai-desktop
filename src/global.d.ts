@@ -807,6 +807,15 @@ declare global {
       Promise<{ shown: boolean; reason?: string }>;
     onNotificationOpenRequest: (cb: (req: { kind: string; runId: number; title: string }) => void) => () => void;
 
+    runtimeGetError: () => Promise<{ message: string | null; bootFailed: boolean; databaseOk: boolean }>;
+    googleStartAuth: (opts: { clientId: string; clientSecret: string; scopes: string[] }) =>
+      Promise<{ ok: boolean; error?: string }>;
+    googleGetToken: (creds?: { clientId: string; clientSecret: string }) => Promise<{ ok: boolean; accessToken?: string }>;
+    googleRefreshToken: (creds?: { clientId: string; clientSecret: string }) => Promise<{ ok: boolean; accessToken?: string }>;
+    googleHasCredentials: () => Promise<{ hasCredentials: boolean } | boolean>;
+    googleDisconnect: () => Promise<{ ok: boolean }>;
+    onRuntimeStatusChanged: (cb: (s: RuntimeStatus) => void) => () => void;
+
     creatorsGetDemo: () => Promise<CreatorDemo>;
     creatorsSaveDemo: (demo: CreatorDemo) => Promise<{ ok: boolean; demo: CreatorDemo }>;
     creatorsGetOrb: () => Promise<OrbSettings>;
@@ -1065,4 +1074,20 @@ export interface OrbSettings {
   speed: OrbSpeed;
   accent: string;
   assistantName: string;
+}
+
+export interface RuntimeStatus {
+  ok: boolean;
+  version: string;
+  electron: string;
+  chrome: string;
+  node: string;
+  platform: string;
+  arch: string;
+  startedAt: string;
+  uptimeSeconds: number;
+  bootFailed: boolean;
+  lastError: string | null;
+  databaseOk: boolean;
+  databaseError: string | null;
 }

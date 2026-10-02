@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
+import type { RuntimeStatus } from './ipc/runtimeDiagnostics';
 import type { AIProvider, Message, Task, TaskSubmission } from '../src/types';
 
 type ProviderSavePayload = Omit<AIProvider, 'models'> & { models: string };
@@ -730,6 +731,12 @@ contextBridge.exposeInMainWorld('henryAPI', {
   },
 
   // ── Voice (local whisper.cpp STT + say/ElevenLabs TTS) ────
+  runtimeGetError: () => ipcRenderer.invoke('runtime:get-error'),
+  onRuntimeStatusChanged: (cb: (s: RuntimeStatus) => void) => {
+    const l = (_e: unknown, s: RuntimeStatus) => cb(s);
+    ipcRenderer.on('runtime:status-changed', l);
+    return () => ipcRenderer.removeListener('runtime:status-changed', l);
+  },
   voiceSttStatus: (opts?: { refresh?: boolean }) => ipcRenderer.invoke('voice:sttStatus', opts),
   voiceSttSetup: () => ipcRenderer.invoke('voice:sttSetup'),
   onVoiceSttSetupProgress: (cb: (p: unknown) => void) => {

@@ -26,6 +26,7 @@ import { toast } from '../ui/Toast';
 import RemoteControlPanel from './RemoteControlPanel';
 import DeviceLinkPanel from './DeviceLinkPanel';
 import HealthPanel from './HealthPanel';
+import GoogleConnectionPanel from './GoogleConnectionPanel';
 import { isMacOS, getPlatformName } from '../../utils/platform';
 
 import {
@@ -925,6 +926,13 @@ export default function SettingsView() {
 
         <div className={cardCls}>
           <SectionHeader title="Companion device" sub="Pair and control Henry from your phone." />
+        </div>
+
+        <div className="mt-4">
+          <GoogleConnectionPanel />
+        </div>
+
+        <div>
           <div className="space-y-5">
             <RemoteControlPanel />
             <DeviceLinkPanel />

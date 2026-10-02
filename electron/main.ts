@@ -12,7 +12,7 @@ import { registerMediaLibraryHandlers } from './ipc/mediaLibrary';
 import { registerMarketplaceHandlers } from './ipc/marketplace';
 import { registerHenryLocalBrainGatewayIpc } from './ipc/henryLocalBrainGateway';
 import { registerOpencodeBridgeHandlers, stopOpencodeBridge } from './ipc/opencodeBridge';
-import { registerRuntimeHandlers, recordStartupFailure, clearStartupFailure } from './ipc/runtimeDiagnostics';
+import { registerRuntimeHandlers, recordStartupFailure, clearStartupFailure, setRuntimeWindowGetter } from './ipc/runtimeDiagnostics';
 import { registerTaskBrokerHandlers } from './ipc/taskBroker';
 import { registerMemoryHandlers } from './ipc/memory';
 import { registerMemoryGraphHandlers } from './ipc/memoryGraph';
@@ -249,6 +249,7 @@ app.whenReady().then(() => {
   try {
     // Registered before the database so a boot failure is still reportable.
     registerRuntimeHandlers(() => { try { return getDb(); } catch { return null; } });
+    setRuntimeWindowGetter(getMainWindow);
     // A recorded boot failure has done its job once the app is up. Leaving it
     // set made runtimeOk report false forever, even after the underlying problem
     // (a stale native module, a transient crash) was long gone.

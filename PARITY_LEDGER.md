@@ -52,8 +52,8 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 | 7 Computer Control | 16 | 0 | 0 | 3 | 0 |
 | 8 Companion | 9 | 0 | 0 | 3 | 0 |
 | 9 Files & Memory | 14 | 0 | 0 | 5 | 0 |
-| 10 Integrations | 14 | 0 | 0 | 4 | 4 |
-| 11 Settings & System | 15 | 1 | 0 | 3 | 3 |
+| 10 Integrations | 14 | 1 | 0 | 3 | 4 |
+| 11 Settings & System | 15 | 2 | 0 | 2 | 3 |
 
 ---
 
@@ -246,7 +246,7 @@ guarding, `_denyDangerous`).
 
 | # | Row | PAID EVIDENCE | OUR CURRENT | GAP | STATUS |
 |---|---|---|---|---|---|
-| 10.1 | Google (Gmail/Drive) | Composio toolkit | **`electron/ipc/googleAuth.ts` — full PKCE + loopback + safeStorage, Gmail/Calendar/Drive scopes, refresh + revoke** | **no tool or panel consumes it — surface missing, hard part done** | partial |
+| 10.1 | Google (Gmail/Drive) | Composio toolkit (commercial) | `electron/ipc/googleAuth.ts` + **`src/components/settings/GoogleConnectionPanel.tsx`** | **`googleStartAuth` had zero renderer references — present and unreachable** | connection state, scopes actually requested, disconnect removing the stored token, honest copy on why you bring your own OAuth client | typecheck + 324 suite | — | **installed pkg: card renders with connect affordance, `not connected` state, keystore note** | **CLOSED (surface)** — note: no agent tool consumes the token yet; the OAuth surface is the row, tool wiring is separate |
 | 10.2 | Google Calendar | same | same OAuth, unused | surface missing | partial |
 | 10.3 | Web Browser | ours | ours | keep | complete |
 | 10.4 | Discord | paid Composio | none | assess | missing |
@@ -268,7 +268,7 @@ guarding, `_denyDangerous`).
 |---|---|---|---|---|---|
 | 11.1 | AI Providers (5+) | paid has fewer | **now 5 incl. OpenCode Zen** | — | **live-verified** |
 | 11.2 | API Key Management | `auth:redeem-*` | ours encrypted `_keyStorage` | keep ours (ours is better: local encrypted) | different (better) |
-| 11.3 | System Diagnostics | `runtime:status-changed` push | sync `runtime:get-status` | **no push — renderer can't learn runtime died** | missing |
+| 11.3 | System Diagnostics | `runtime:status-changed` push + `runtime:get-error` (`contracts.ts:2273-2274`) | `electron/ipc/runtimeDiagnostics.ts` | — | shared status computation; push on transition only (uptime excluded from the fingerprint); boot-failure record pushes immediately | typecheck + 324 suite | — | **installed pkg: status ok/dbOk true, bootFailed false, error channel answers, listener registers** | **CLOSED** |
 | 11.4 | Environment Detection | paid | ours `toolProbe` quad-state | — | **complete (fixed)** |
 | 11.5 | **Dependency Checks** | paid | ours `toolProbe`: installed/missing/unresolved/probe-failed, never auto-fixes on probe failure; sqlite check now uses `getDbFilePath()` **fixed + verified on installed pkg 2026-10-02: node v24.21.0, git 2.55.0, ffmpeg, python3 all ok, zero phantom installs** | **CLOSED** |
 | 11.6 | Update System | `autoUpdater` | ours | keep | complete |
