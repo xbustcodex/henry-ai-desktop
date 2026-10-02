@@ -1492,6 +1492,26 @@ const henryAPI: Window['henryAPI'] = {
     freeMemoryGB: '?',
   }),
 
+  // ── Content Creators (web stubs) ───────────────────────────────────────
+  creatorsGetDemo: async () => ({
+    enabled: true,
+    mode: 'voice' as const,
+    triggerPhrases: ["what's the status of my app"],
+    turns: [],
+    captionMode: 'typewriter' as const,
+    fileStaggerMs: 600,
+    playIntro: true,
+  }),
+  creatorsSaveDemo: async (demo: unknown) => ({ ok: true, demo: demo as never }),
+  creatorsGetOrb: async () => ({ skin: 'default' as const, speed: 'default' as const, accent: '#5cdcff', assistantName: 'Henry' }),
+  creatorsSaveOrb: async (orb: unknown) => ({ ok: true, orb: orb as never }),
+  creatorsListMedia: async () => ({ media: [] }),
+  creatorsImportMedia: async () => ({ media: [] }),
+  creatorsDeleteMedia: async () => ({ ok: true }),
+  creatorsOpenMedia: async () => ({ ok: false, error: 'Media reveal requires the Henry desktop app.' }),
+  creatorsLaunchStage: async () => ({ ok: false, error: 'The demo stage requires the Henry desktop app.' }),
+  creatorsCloseStage: async () => ({ ok: true }),
+
   // ── 3D Printer (web stubs) ────────────────────────────────────────────
   printerCheckDeps: async () => ({
     available: false,

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useLayoutEffect } from 'react';
+import { matchesTriggerPhrase, launchDemo } from '../../henry/creatorsActivation';
 import { incrementUsage, getTodayUsage, getRemainingRequests, isNearLimit, canUseHenryProxy } from '../../henry/proxyUsage';
 import { hasUsableBackend, getBackendStatus } from '../../henry/backendStatus';
 import { toast, promptDialog } from '../ui/Toast';
@@ -1227,6 +1228,13 @@ What do you want to tackle first?`);
 
   async function handleSend(rawContent: string) {
     if (isStreaming) return;
+    // Content Creators: a trigger phrase opens the demo stage instead of
+    // sending a chat turn. Checked before anything else so a filmed trigger
+    // never burns a model call.
+    if (matchesTriggerPhrase(rawContent)) {
+      void launchDemo('voice');
+      return;
+    }
     // An attachment-only message is valid: say what was shared so the turn
     // still has a prompt for the model.
     const autoText = pendingAttachments.length > 0 && !rawContent.trim()

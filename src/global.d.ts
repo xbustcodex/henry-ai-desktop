@@ -798,6 +798,18 @@ declare global {
     computerScreenshot: (params?: { region?: { x: number; y: number; w: number; h: number } }) => Promise<HenryScreenshotResult>;
     computerOpenApp: (appName: string) => Promise<HenryComputerShellResult>;
     computerOpenUrl: (url: string) => Promise<HenryComputerShellResult>;
+
+    // Content Creators — scripted demo mode
+    creatorsGetDemo: () => Promise<CreatorDemo>;
+    creatorsSaveDemo: (demo: CreatorDemo) => Promise<{ ok: boolean; demo: CreatorDemo }>;
+    creatorsGetOrb: () => Promise<OrbSettings>;
+    creatorsSaveOrb: (orb: OrbSettings) => Promise<{ ok: boolean; orb: OrbSettings }>;
+    creatorsListMedia: () => Promise<{ media: CreatorMedia[] }>;
+    creatorsImportMedia: (input: { paths: string[]; kind: CreatorMediaKind }) => Promise<{ media: CreatorMedia[] }>;
+    creatorsDeleteMedia: (fileName: string) => Promise<{ ok: boolean }>;
+    creatorsOpenMedia: (fileName: string) => Promise<{ ok: boolean; error?: string }>;
+    creatorsLaunchStage: (mode: 'voice' | 'chat') => Promise<{ ok: boolean; error?: string }>;
+    creatorsCloseStage: () => Promise<{ ok: boolean }>;
     computerOsascript: (script: string) => Promise<HenryComputerShellResult>;
     computerRunShell: (params: { command: string; timeout?: number }) => Promise<HenryComputerShellResult>;
     computerNewFolder: (params: { path: string }) => Promise<{ ok: boolean; path?: string; error?: string }>;
@@ -1007,3 +1019,43 @@ declare global {
 }
 
 export {};
+
+export type CreatorMediaKind = 'audio' | 'image' | 'file';
+export type CreatorCaptionMode = 'typewriter' | 'none';
+export type CreatorDemoMode = 'chat' | 'voice';
+export type CreatorTurnRole = 'user' | 'assistant';
+export type OrbSkin = 'default' | 'minimalistic';
+export type OrbSpeed = 'slow' | 'default' | 'fast' | 'off';
+
+export interface CreatorMedia {
+  id: string;
+  fileName: string;
+  originalName: string;
+  kind: CreatorMediaKind;
+  addedAt: number;
+}
+
+export interface CreatorTurn {
+  id: string;
+  role: CreatorTurnRole;
+  text: string;
+  audio: CreatorMedia | null;
+  files: CreatorMedia[];
+}
+
+export interface CreatorDemo {
+  enabled: boolean;
+  mode: CreatorDemoMode;
+  triggerPhrases: string[];
+  turns: CreatorTurn[];
+  captionMode: CreatorCaptionMode;
+  fileStaggerMs: number;
+  playIntro: boolean;
+}
+
+export interface OrbSettings {
+  skin: OrbSkin;
+  speed: OrbSpeed;
+  accent: string;
+  assistantName: string;
+}

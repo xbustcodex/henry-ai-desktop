@@ -23,6 +23,7 @@ import { registerOllamaHandlers } from './ipc/ollama';
 import { registerOllamaCleanup } from './ipc/ollamaManager';
 import { registerTerminalHandlers } from './ipc/terminal';
 import { registerComputerHandlers } from './ipc/computer';
+import { registerCreatorsHandlers, registerCreatorsProtocol, attachCreatorsProtocol } from './ipc/creators';
 import { registerPrinterHandlers } from './ipc/printer';
 import { registerSessionStoreHandlers } from './ipc/sessionStore';
 import { registerApprovalHandlers } from './ipc/approvals';
@@ -234,6 +235,9 @@ app.on('second-instance', () => {
 // A throw anywhere in boot (mkdir / initDatabase / createWindow) used to be
 // swallowed by the log-only handlers above, leaving a windowless zombie
 // process. Fail loudly and exit instead.
+// Must be declared before the app is ready.
+registerCreatorsProtocol();
+
 app.whenReady().then(() => {
   try {
     // Registered before the database so a boot failure is still reportable.
@@ -489,6 +493,8 @@ app.whenReady().then(() => {
   registerOllamaCleanup();
   registerTerminalHandlers(getMainWindow, henryDir);
   registerComputerHandlers(getMainWindow);
+  registerCreatorsHandlers(db);
+  attachCreatorsProtocol();
   registerPrinterHandlers(getMainWindow);
   registerSessionStoreHandlers(henryDir);
   registerAgentHandlers(db, getMainWindow);

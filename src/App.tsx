@@ -15,6 +15,7 @@ import { getTodayBriefing, saveBriefing, buildBriefingPrompt, getTodayKey } from
 import { isNative } from './capacitor';
 import { checkAndNotify, syncFromDb as syncRemindersFromDb } from './henry/reminders';
 import OnboardingWizard, { shouldShowOnboarding } from './components/onboarding/OnboardingWizard';
+import { installCreatorsActivation } from './henry/creatorsActivation';
 import { buildMemoryContext } from './henry/memoryPipeline';
 import { useCapturesStore } from './ambient/capturesStore';
 import { registerShortcuts, buildShortcuts } from './henry/keyboardShortcuts';
@@ -175,6 +176,9 @@ export default function App() {
 
     return () => { cleanup(); stopNudges(); stopHealing(); clearInterval(reminderInterval); unregisterShortcuts(); window.removeEventListener('keydown', handleHelpKey); window.removeEventListener('henry_open_capture', handleOpenCapture); };
   }, []);
+
+  // Content Creators — Ctrl+Shift+J to open the stage, plus trigger phrases.
+  useEffect(() => installCreatorsActivation(), []);
 
   // Register service worker in production only
   useEffect(() => {

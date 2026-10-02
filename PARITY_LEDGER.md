@@ -45,7 +45,7 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 |---|---|---|---|---|---|
 | 2 Chat & Models | 9 | 5 | 0 | 0 | 0 |
 | 1 UI & Core | 10 | 0 | 0 | 8 | 0 |
-| 3 Creators & Media | 14 | 0 | 0 | 11 | 0 |
+| 3 Creators & Media | 14 | 13 | 0 | 0 | 0 |
 | 4 Agents & Tools | 20 | 0 | 0 | 11 | 4 |
 | 5 Automation | 9 | 0 | 0 | 5 | 0 |
 | 6 Voice & Input | 13 | 0 | 0 | 6 | 2 |
@@ -100,19 +100,19 @@ Source: `contracts.ts:39-215`, `main/creators-store.ts` (190 lines), renderer `c
 
 | # | Row | PAID EVIDENCE | OUR CURRENT | GAP | IMPLEMENTATION | TEST | LIVE | INSTALLED | STATUS |
 |---|---|---|---|---|---|---|---|---|---|
-| 3.1 | Content Creators Mode (view + editor) | `creators-view`, `creators-card`, `MJ` | none | whole subsystem | creators view, demo schema, turns editor | | | | missing |
-| 3.2 | JARVIS Voice Mode (full-screen orb) | `creatorDemoModeSchema` `voice` = "full-screen reactive orb overlay"; `Yee` view | none | full-screen overlay | overlay window + orb component | | | | missing |
-| 3.3 | Reactor HUD Skin | "Full arc-reactor HUD with animated rings"; `hud-layer-reactor`, `hud-reactor`, `hud-core-*` | none | SVG layer system | `hud-*` class system, data-skin root | | | | missing |
-| 3.4 | Minimal Orb Skin | "Classic Jarvis orb: clean rings, glowing voice-reactive core" | none | second skin | `hud-layer-minimal`, voice-reactive core | | | | missing |
-| 3.5 | Caption Overlay (`typewriter`) | `captionMode: typewriter\|none`, default typewriter | none | the chat bubble | typewriter caption over orb | | | | missing |
-| 3.6 | Activation: trigger phrase | `triggerPhrases[]`, default "what's the status of my app" | none | phrase triggers demo | phrase matcher | | | | missing |
-| 3.7 | Activation: keyboard shortcut | `⌘⇧J` (paid is mac-only; we need cross-platform) | none | shortcut | Ctrl+Shift+J / configurable | | | | missing |
-| 3.8 | Activation: click standby | "double clap or click to activate" standby screen | none | standby screen | standby view, click to start | | | | missing |
-| 3.9 | Clap to wake | `clapToActivate` — **paid forces this OFF**: "ambient false positives were replaying the greeting at random" (`contracts.ts:305-309`) | none | — | **EXCLUDED BY DESIGN — terminal state, not a missing feature.** Upstream shipped it and force-disabled it due false-positive activation. Deliberately not reproduced. | n/a | n/a | n/a | **EXCLUDED BY DESIGN** |
-| 3.10 | Power-on intro | `playIntro`, "cinematic activation moment… theme and a spoken greeting" | none | intro sequence | intro animation + greeting | | | | missing |
-| 3.11 | Media store (`henry-media://`) | `CreatorsStore`, randomised names, kinds audio/image/file | none | media store + protocol | store + custom protocol | | | | missing |
-| 3.12 | File reveal as real OS windows | `creators:open-media`, "opens in the OS default viewer"; `fileStaggerMs` cascade | none | open media | open + stagger | | | | missing |
-| 3.13 | Reactor speed setting | `reactorSpeed: slow\|default\|fast\|off` | none | animation speed | setting | | | | missing |
+| 3.1 | Content Creators Mode (view + editor) | `creators-view`, `creators-card`, `MJ` | `src/components/creators/CreatorsPanel.tsx`, `electron/ipc/creators.ts` | — | Creators view in nav; demo schema, turn editor, trigger phrases, media, stage config | typecheck + 324 suite | panel renders; schema round-trips (7 default turns, caption typewriter, stagger 600) | **installed pkg: all sections render; malformed input sanitized not crashed** | **CLOSED** |
+| 3.2 | JARVIS Voice Mode (full-screen orb) | `creatorDemoModeSchema` `voice` = "full-screen reactive orb overlay" | frameless always-on-top stage window (`creators.ts: openStage`) | — | full-screen stage window + inline orb SVG | typecheck | stage window opens over the app | **installed pkg: `Henry — Demo Stage` window opens, orb renders, accent applied** | **CLOSED** |
+| 3.3 | Reactor HUD Skin | "Full arc-reactor HUD with animated rings" | arc + ring + core SVG generator | — | `default` skin: 5 rotated arc paths, 2 rings, core, halo; live rotation + glow | typecheck | — | **installed pkg: Reactor renders 14 SVG elements** | **CLOSED** |
+| 3.4 | Minimal Orb Skin | "Classic Jarvis orb: clean rings, glowing voice-reactive core" | clean-ring variant | — | `minimalistic` skin: 2 rings + core + halo | typecheck | — | **installed pkg: Minimal renders 4 elements, visibly distinct from Reactor** | **CLOSED** |
+| 3.5 | Caption Overlay (`typewriter`) | `captionMode: typewriter\|none`, default typewriter | typewriter caption in the stage | — | per-character render; assistant/user styling | typecheck | — | **installed pkg: caption types out the scripted turns, user turns styled differently** | **CLOSED** |
+| 3.6 | Activation: trigger phrase | `triggerPhrases[]`, default "what's the status of my app" | `henry/creatorsActivation.ts` | — | matcher checked before the chat turn, so a trigger never burns a model call | typecheck | — | **installed pkg: typed the phrase in Chat + Enter → stage window opened, no model call** | **CLOSED** |
+| 3.7 | Activation: keyboard shortcut | `⌘⇧J` — **paid is macOS-only** | `Ctrl/Cmd+Shift+J` | — | cross-platform: Ctrl+Shift+J on Windows/Linux, Cmd+Shift+J on macOS | typecheck | — | **installed pkg: real Ctrl+Shift+J key event opened the stage** | **CLOSED** |
+| 3.8 | Activation: click/space standby | "double clap or click to activate" standby screen | standby screen | — | standby shows a live preview of the chosen skin; click, Enter or Space starts | typecheck | — | **installed pkg: standby visible, click hides it and starts playback** | **CLOSED** |
+| 3.9 | Clap to wake | `clapToActivate` — **paid forces this OFF**: "ambient false positives were replaying the greeting at random" (`contracts.ts:305-309`) | none | — | **EXCLUDED BY DESIGN — terminal.** Upstream shipped it then force-disabled it for false-positive activation. Not reproduced. | n/a | n/a | n/a | **EXCLUDED BY DESIGN** |
+| 3.10 | Power-on intro | `playIntro`, "cinematic activation moment… theme and a spoken greeting" | intro overlay | — | orb + assistant name + "online" rise-in, then hands over to the turns; skipped when `playIntro` is off | typecheck | — | **installed pkg: intro shows `JARVIS` + orb, hides, then turns play** | **CLOSED** |
+| 3.11 | Media store (`henry-media://`) | `CreatorsStore`, randomised names, kinds audio/image/file | `CreatorsStore` + `henry-media://` | — | private dir under userData, random names, per-kind extension allowlist, `resolve()` rejects any path that is not a bare generated filename | typecheck | — | **installed pkg: imported a .txt and a .png to random names; `hosts` (no ext) and `.ini` correctly refused; traversal `../../../../Windows/.../hosts` rejected; delete removed both** | **CLOSED** |
+| 3.12 | File reveal as real OS windows | `creators:open-media`, "opens in the OS default viewer"; `fileStaggerMs` | `shell.openPath` + `fileStaggerMs` slider | — | opens in the system viewer | typecheck | — | **installed pkg: `creatorsOpenMedia` returned ok on a real imported file** | **CLOSED** |
+| 3.13 | Reactor speed setting | `reactorSpeed: slow\|default\|fast\|off` | speed setting + accent + name | — | `off` halts rotation entirely for a static orb | typecheck | — | **installed pkg: saved `fast`, read back persisted** | **CLOSED** |
 | 3.14 | Media Generation / Video / Audio / Image Gen | paid has these | ours has video + image gen | audio gen? | assess individually | | | | partial |
 
 **Card 3 order (as instructed): 3.1 → 3.2 → 3.3 → 3.4 → 3.5 → 3.6 → 3.7 → 3.8 → 3.10 → 3.11 → 3.12 → 3.13.**

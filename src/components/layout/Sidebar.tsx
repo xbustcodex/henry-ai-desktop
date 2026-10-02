@@ -59,6 +59,7 @@ const MORE_NAV: NavItem[] = [
 ];
 
 const BOTTOM_NAV: NavItem[] = [
+  { id: 'creators',    icon: '◉',  label: 'Creators',  desc: 'Scripted demo mode — full-screen orb for filming' },
   { id: 'setup',      icon: '⚙',  label: 'Setup',     desc: 'First-time setup and provider auto-detect' },
   { id: 'companion',  icon: '⊚',  label: 'Companion', desc: 'Pair your phone to control Henry remotely' },
   { id: 'settings',   icon: '⊙',  label: 'Settings',  desc: 'Profile, AI providers, engines, and pairing' },

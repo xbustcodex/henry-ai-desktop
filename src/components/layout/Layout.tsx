@@ -37,6 +37,7 @@ import ProductionRunsPanel from '../maker/ProductionRunsPanel';
 import WastePanel from '../maker/WastePanel';
 import MaintenancePanel from '../maker/MaintenancePanel';
 import QuotingPanel from '../quoting/QuotingPanel';
+import CreatorsPanel from '../creators/CreatorsPanel';
 import RoutinesPanel from '../routines/RoutinesPanel';
 import MediaLibraryPanel from '../media/MediaLibraryPanel';
 import MarketplacePanel from '../marketplace/MarketplacePanel';
@@ -272,6 +273,7 @@ export default function Layout() {
           {currentView === 'waste' && <PanelBoundary><WastePanel /></PanelBoundary>}
           {currentView === 'maintenance' && <PanelBoundary><MaintenancePanel /></PanelBoundary>}
           {currentView === 'quoting' && <PanelBoundary><QuotingPanel /></PanelBoundary>}
+          {currentView === 'creators' && <PanelBoundary><CreatorsPanel /></PanelBoundary>}
           {currentView === 'routines' && <PanelBoundary><RoutinesPanel /></PanelBoundary>}
           {currentView === 'media' && <PanelBoundary><MediaLibraryPanel /></PanelBoundary>}
           {currentView === 'marketplace' && <PanelBoundary><MarketplacePanel /></PanelBoundary>}
