@@ -8159,17 +8159,19 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
                     || lowerText.match(/^execute python[:\s]+(.+)/i);
     if (pyRunMatch) {
       const pyCode = resolvedText.replace(/^(?:run python|python run|py|execute python)[:\s]+/i, '').replace(/\\n/g, '\n').trim();
-      const tmpPy = '/tmp/henry_' + Date.now() + '.py';
-      try {
-        const { writeFileSync: _wpf } = await import('fs') as typeof import('fs');
-        const { execSync: _pyExec } = await import('child_process') as typeof import('child_process');
-        _wpf(tmpPy, pyCode, 'utf8');
-        const pyResult = _pyExec('python3 ' + JSON.stringify(tmpPy), { encoding: 'utf8', timeout: 12000, shell: '/bin/zsh' }).trim();
-        try { (await import('fs') as typeof import('fs')).unlinkSync(tmpPy); } catch { /* ok */ }
-        sendReply('```python\n' + pyCode + '\n\n# Output:\n' + (pyResult || '(no output)') + '\n```');
-      } catch (e: any) {
-        try { (await import('fs') as typeof import('fs')).unlinkSync(tmpPy); } catch { /* ok */ }
-        sendReply('```python\n' + pyCode + '\n\n# Error:\n' + ((e.stderr||e.message||'').toString().slice(0,500)) + '\n```');
+      // Runs through the jailed runner rather than a raw shell. The old path
+      // wrote to a hardcoded /tmp and ran with shell '/bin/zsh', so on Windows
+      // it could never work at all, and the blocking execSync froze the main
+      // process for up to 12s.
+      const { runPython } = await import('./pythonRunner') as typeof import('./pythonRunner');
+      const pyRun = await runPython(pyCode, { timeoutMs: 30_000 });
+      const header = '```python\n' + pyCode + '\n\n';
+      if (pyRun.refused) {
+        sendReply(header + '# Blocked by the sandbox:\n' + pyRun.stderr + '\n```');
+      } else if (pyRun.timedOut || !pyRun.ok) {
+        sendReply(header + '# Error:\n' + ((pyRun.stderr || pyRun.stdout || 'no output').slice(0, 500)) + '\n```');
+      } else {
+        sendReply(header + '# Output:\n' + (pyRun.stdout.trim() || '(no output)') + '\n```');
       }
       return;
     }
