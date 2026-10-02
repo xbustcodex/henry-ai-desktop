@@ -99,6 +99,12 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // Henry's replies start long after the click that triggered them — by the
+      // time a model has finished, the user gesture has expired and Chromium
+      // blocks playback. Without this, spoken replies are silent whenever the
+      // reply takes more than a moment. Paid 1.7.0 sets the same override
+      // (main/index.ts:193-196).
+      autoplayPolicy: 'no-user-gesture-required',
     },
   });
 

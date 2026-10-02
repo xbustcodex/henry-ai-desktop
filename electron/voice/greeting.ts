@@ -162,7 +162,12 @@ export function registerVoiceGreetingHandlers(db: Database.Database): void {
         if (shouldSpeak) {
           const cached = await readCacheFile(file);
           if (!cached) {
-            const res = await speak(db, { text, engine: engine === 'auto' ? undefined : engine });
+            // Speech synthesis reads "H.E.N.R.Y" as five letters. Normalise
+            // the spoken form so the greeting says the name rather than
+            // spelling it. The displayed text is left alone.
+            const { withSpokenName } = await import('../../src/henry/spokenName') as typeof import('../../src/henry/spokenName');
+            const spokenText = withSpokenName(text, row?.value);
+            const res = await speak(db, { text: spokenText, engine: engine === 'auto' ? undefined : engine });
             // A macOS `say` (or any device-rendering engine) returns no buffer:
             // it already spoke. That is success, not an error — it used to
             // throw "No speech engine is available" on every macOS launch.
