@@ -207,6 +207,7 @@ const pendingActions: Map<string, PendingAction> = new Map();
 let eventLog: SyncEvent[] = [];
 let currentPort = 4242;
 let serverRunning = false;
+let lastServerError: string | null = null;
 let tunnelUrl: string | null = null;
 let tunnelProcess: import('child_process').ChildProcess | null = null;
 
@@ -7328,12 +7329,20 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
 
     // ── Take a screenshot ────────────────────────────────────────────────────
     if (/^(?:take a? screenshot|screenshot|capture screen|snap(?:shot)?)$/.test(lowerText)) {
-      const { execSync: _scx } = await import('child_process') as typeof import('child_process');
+      // screencapture and `open -R` are macOS-only. On Windows this silently
+      // produced no file and still replied that one was saved. screenshotCmd
+      // already carries the per-platform command (PowerShell on Windows).
+      const { screenshotCmd, revealFile } = await import('./platformCommands') as typeof import('./platformCommands');
       const _scDate = (() => { const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+'_'+String(d.getHours()).padStart(2,'0')+String(d.getMinutes()).padStart(2,'0'); })();
-      const _scPath = require('os').homedir() + '/Desktop/henry_screenshot_' + _scDate + '.png';
-      _scx('screencapture -x "' + _scPath + '"', {timeout:5000,shell:'/bin/bash'});
-      _scx('open -R "' + _scPath + '"', {timeout:3000,shell:'/bin/bash'});
-      sendReply('\uD83D\uDCF7 Screenshot saved: **henry_screenshot_' + _scDate + '.png**\n\nDesktop > revealed in Finder'); return;
+      const _desk = path.join(os.homedir(), IS_WIN ? 'Desktop' : 'Desktop');
+      const _scPath = path.join(_desk, 'henry_screenshot_' + _scDate + '.png');
+      const _scOut = tryExec(screenshotCmd(_scPath), 15000);
+      if (!fs.existsSync(_scPath)) {
+        sendReply('\u274C Screenshot failed — no file was created. Check that screen capture is permitted.');
+        return;
+      }
+      try { tryExec(revealFile(_scPath), 8000); } catch { /* reveal is a nicety */ }
+      sendReply('\uD83D\uDCF7 Screenshot saved: **henry_screenshot_' + _scDate + '.png**'); return;
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -8618,8 +8627,8 @@ const _rbDir = path.join(henryDir, 'backups') + '/';
         "CODING: Write complete, production-quality code ALWAYS. No stubs. TypeScript (typed, modern), Python (pythonic, documented), SQL (Henry uses SQLite3 — table schema: personal_tasks(id,title,status,priority,created_at), goals(id,title,status,priority_score), habits(id,name,active), transactions(id,date,amount,type,category), memory_facts(id,fact,category,importance)). For debugging: state the bug, the root cause, then the EXACT fix with line numbers if possible. For architecture: ASCII diagrams + tradeoffs.",
         "MAKER INTELLIGENCE: Use only business facts the user shares in conversation or stored in the DB. Henry can also generate 3D STL files from text: say make stl: [description]",
         "COMPUTER CAPABILITIES: Henry can read local files (say: read file: /path), clipboard, directories (say: list ~/Desktop), search web (say: search web for: query), system info, run Python/shell (say: python run: or run:). HENRY DB PATH: ${db.name} -- use this real path when writing Python code that accesses Henry data. Henry source: ~/Documents/henry-ai-desktop/electron/ipc/syncBridge.ts",
-        "RESPONSE STYLE: Be direct. Do it, then report what you did in plain English. NEVER output fake action blocks like computer:openApp() or computer:runShell() — those are not real. NEVER tell Topher to do something himself when you can do it with run: or open [App]. NEVER invent client names, project names, or job details. If you did something: say what you did in one sentence. If you cannot do it: say why in one sentence and what to do instead. No filler, no fake syntax, no hallucinated projects.",
-        "NEVER output tool calls, function calls, XML tags, or structured commands. You are a CHAT assistant only — plain conversational text. Never write: computer:openApp(), <tool_call>, or any JSON/code commands.",
+        "RESPONSE STYLE: Be direct. Do it, then report what you did in plain English. NEVER output fake action blocks like computer:openApp() or computer:runShell() — those are not real. NEVER tell Topher to do something himself when you can do it with run: or open [App]. NEVER invent client names, project names, or job details. If you did something: say what you did in one sentence. If you cannot do it: say why in one sentence and what to do instead. No filler, no fake syntax, no hallucinated projects. " +
+        "GROUNDING: You may only describe the contents of a page, file, or search result that a tool actually returned in this conversation. Opening a link does not tell you what is on it — a tool result containing no content means you did not read it. Never write 'According to <site>', quote, summarise, or state facts about content you have not actually been shown. If a tool failed or returned nothing, say the fetch failed and offer to retry; do not fill the gap with what you expect the page to say.",
         "EXECUTION: When asked to run/execute code, start your reply with 'python run:' or 'run:' so Henry's engine executes it. Never just SHOW code when the user says RUN. Computer actions (open app, read file, etc.) are handled by Henry's local router automatically.",
         
         factsBlock ? `── WHAT YOU REMEMBER ──\n${factsBlock}` : "── WHAT YOU REMEMBER ──\nNothing yet — early conversation.",
@@ -9478,7 +9487,24 @@ export function startSyncServer(port = 4242, host?: string): SyncServerState {
     }).catch(() => {});
   });
 
-  server.on('error', (err) => {
+  // A stale Henry from a previous run can still hold the port while it shuts
+  // down. Retrying with backoff lets this instance take over instead of
+  // silently having no server at all — which is what made every panel action
+  // fail with a bare "Failed to fetch" while the UI still reported sync as
+  // running.
+  let listenAttempts = 0;
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    serverRunning = false;
+    if (err.code === 'EADDRINUSE' && listenAttempts < 6) {
+      const delay = 1000 * listenAttempts;
+      listenAttempts += 1;
+      console.warn(`[SyncBridge] Port ${currentPort} busy (try ${listenAttempts}/6), retrying in ${delay}ms`);
+      setTimeout(() => {
+        try { server?.listen(port, bindHost); } catch { /* error handler fires again */ }
+      }, delay);
+      return;
+    }
+    lastServerError = err.message;
     console.error('[SyncBridge] Server error:', err);
   });
 
@@ -9496,7 +9522,10 @@ export function stopSyncServer(): void {
 
 export function getSyncState(): SyncServerState {
   return {
-    running: !!server,
+    // `!!server` was true even when the port was taken and the server never
+    // listened, so the UI reported sync as healthy while every renderer fetch
+    // failed. serverRunning is only set inside the listen callback.
+    running: serverRunning,
     port: currentPort,
     localIp: getLocalIp(),
     pairToken,

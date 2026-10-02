@@ -15,6 +15,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { app, shell } from 'electron';
+import { probeTool, describeProbe } from './toolProbe';
 import type Database from 'better-sqlite3';
 
 const BREW = '/opt/homebrew/bin/brew';
@@ -34,6 +35,15 @@ export interface CheckResult {
   ok: boolean;
   detail?: string;
   version?: string;
+  /**
+   * Which of the four states this check actually established. Left undefined
+   * for checks that are not dependency probes and answer definitively.
+   * A probe that could not run reports 'probe-failed' or 'unresolved', and
+   * the runner never offers to install anything for those — telling someone
+   * to install software we merely failed to find is worse than saying
+   * nothing.
+   */
+  state?: 'installed' | 'missing' | 'unresolved' | 'probe-failed';
 }
 
 export interface FixResult {
@@ -56,10 +66,45 @@ export interface DiagnosticReport {
 }
 
 // ── Tool checker helper ────────────────────────────────────────────────────
-function toolVersion(cmd: string, versionFlag = '--version'): string | null {
-  try {
-    return execSync(`${cmd} ${versionFlag} 2>/dev/null`, { encoding: 'utf8', env: ENV, timeout: 5000 }).trim().split('\n')[0] || null;
-  } catch { return null; }
+/**
+ * Locate a dependency and read its version.
+ *
+ * This used to be `execSync(`${cmd} --version 2>/dev/null`)`. On Windows
+ * execSync runs through cmd.exe, which has no /dev/null, so every probe died
+ * with "The system cannot find the path specified", the error was swallowed,
+ * and healthy installs of Node, Git and Python were reported as missing with
+ * an offer to install them. It was also synchronous, which froze the Electron
+ * main process — up to 5s per tool — and that is what made the installed app
+ * go "Not Responding" while a health check ran.
+ *
+ * probeTool is async, uses no shell redirection, and reports four distinct
+ * outcomes so a probe that could not run is never presented as "not
+ * installed".
+ */
+async function toolProbe(cmd: string, versionFlag = '--version') {
+  return probeTool(cmd.replace(/^["']|["']$/g, ''), { versionFlag });
+}
+
+/** Convenience for checks that only care whether it is really absent. */
+async function toolMissing(cmd: string, label: string, versionFlag = '--version') {
+  const p = await toolProbe(cmd, versionFlag);
+  return p.state === 'missing' ? { ok: false, state: p.state, detail: `${label} not installed` }
+    : { ok: true, state: p.state, version: p.version, detail: describeProbe(p, label) };
+}
+
+/** Run a shell command without blocking the Electron main process. */
+function runAsync(cmd: string, timeoutMs = 5000): Promise<{ stdout: string; stderr: string; code: number }> {
+  return new Promise((resolve, reject) => {
+    exec(cmd, { timeout: timeoutMs, windowsHide: true, maxBuffer: 4 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err && (err as NodeJS.ErrnoException & { killed?: boolean }).killed) {
+          reject(new Error(`timed out after ${timeoutMs}ms`));
+          return;
+        }
+        if (err && !stdout && !stderr) { reject(err); return; }
+        resolve({ stdout: String(stdout || ''), stderr: String(stderr || ''), code: err ? 1 : 0 });
+      });
+  });
 }
 
 function toolExists(cmd: string): boolean {
@@ -139,12 +184,16 @@ async function installViaPackageManager(pkg: string): Promise<FixResult> {
       });
     });
   } else if (platform === 'win32') {
-    // Windows: prefer winget, fallback to choco, then manual
+    // Windows: prefer winget, fallback to choco, then manual.
+    // winget package IDs are namespaced (Git.Git, not "git"); the bare names
+    // this used to pass are not valid IDs, so the install could never succeed
+    // even on a machine where winget was present.
+    const wingetId = WINGET_IDS[pkg];
     return new Promise(resolve => {
-      exec(`winget install --id ${pkg} --silent --accept-source-agreements --accept-package-agreements`, { env: ENV, timeout: 120_000 }, (err) => {
+      exec(`winget install --id ${wingetId ?? pkg} --silent --accept-source-agreements --accept-package-agreements`, { env: ENV, timeout: 120_000, windowsHide: true }, (err) => {
         if (!err) return resolve({ success: true, message: `Installed ${pkg} via winget` });
         // Try chocolatey
-        exec(`choco install ${pkg} -y`, { env: ENV, timeout: 120_000 }, (err2) => {
+        exec(`choco install ${pkg} -y`, { env: ENV, timeout: 120_000, windowsHide: true }, (err2) => {
           if (err2) resolve({ success: false, message: `Auto-install failed. Try: winget install ${pkg} or choco install ${pkg}` });
           else resolve({ success: true, message: `Installed ${pkg} via chocolatey` });
         });
@@ -153,6 +202,16 @@ async function installViaPackageManager(pkg: string): Promise<FixResult> {
   }
   return { success: false, message: `Auto-install not supported on this platform for ${pkg}` };
 }
+
+/** Real winget identifiers. The bare package names used before are not IDs. */
+const WINGET_IDS: Record<string, string> = {
+  node: 'OpenJS.NodeJS.LTS',
+  git: 'Git.Git',
+  ffmpeg: 'Gyan.FFmpeg',
+  python3: 'Python.Python.3.12',
+  'yt-dlp': 'yt-dlp.yt-dlp',
+  cloudflared: 'Cloudflare.cloudflared',
+};
 
 // Get Henry workspace directory
 function getHenryDir(): string {
@@ -187,8 +246,10 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
       description: 'Package manager — used to install everything else (macOS only)',
       check: async () => {
         if (!isDarwin()) return { ok: true, detail: 'Not applicable on this platform' };
-        const v = toolVersion(BREW);
-        return v ? { ok: true, version: v } : { ok: false, detail: 'Homebrew not found' };
+        const p = await toolProbe(BREW);
+        return p.state === 'installed'
+          ? { ok: true, state: p.state, version: p.version }
+          : { ok: false, state: p.state, detail: describeProbe(p, 'Homebrew') };
       },
       // brew can't auto-install itself — give user a one-liner
     },
@@ -199,8 +260,7 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
       category: 'required',
       description: "JavaScript runtime for Henry's backend",
       check: async () => {
-        const v = toolVersion('node');
-        return v ? { ok: true, version: v } : { ok: false, detail: 'Node.js not installed' };
+        return toolMissing('node', 'Node.js');
       },
       fix: async () => installViaPackageManager('node'),
     },
@@ -211,21 +271,17 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
       category: 'optional',
       description: 'Secure tunnel so mobile works from anywhere (optional — LAN pairing works without it)',
       check: async () => {
-        if (isDarwin()) {
-          const v = toolVersion('cloudflared');
-          return v ? { ok: true, version: v } : { ok: true, detail: 'cloudflared not installed — mobile only works on home WiFi (optional)' };
-        }
-        if (isLinux()) {
-          try { execSync('cloudflared --version', { encoding: 'utf8', env: ENV, timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }); return { ok: true, version: 'cloudflared' }; } catch {
-            try { execSync('which cloudflared', { encoding: 'utf8', env: ENV, timeout: 3000 }); return { ok: true, version: 'cloudflared' }; } catch {
-              return { ok: true, detail: 'cloudflared not installed — optional for remote tunnel. LAN pairing works without it. Install manually if needed: sudo apt-get install cloudflared' };
-            }
-          }
-        }
-        // Windows or other platforms
-        try { execSync('cloudflared --version', { encoding: 'utf8', env: ENV, timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }); return { ok: true, version: 'cloudflared' }; } catch {
-          return { ok: true, detail: 'cloudflared not installed — optional for remote companion' };
-        }
+        // Optional: being absent is a perfectly healthy state, so this always
+        // reports ok. It no longer shells out three times per platform, which
+        // was blocking the main process for up to 9s.
+        const p = await toolProbe('cloudflared');
+        if (p.state === 'installed') return { ok: true, state: p.state, version: p.version };
+        const hint = isDarwin() ? 'brew install cloudflared' : isLinux() ? 'sudo apt-get install cloudflared' : 'winget install Cloudflare.cloudflared';
+        return {
+          ok: true,
+          state: p.state,
+          detail: `${describeProbe(p, 'cloudflared')} — optional. LAN pairing works without it; install with: ${hint}`,
+        };
       },
       // No auto-fix for optional cloudflared
     },
@@ -236,8 +292,7 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
       category: 'required',
       description: 'Version control — used for Henry updates',
       check: async () => {
-        const v = toolVersion('git');
-        return v ? { ok: true, version: v } : { ok: false, detail: 'Git not installed' };
+        return toolMissing('git', 'Git');
       },
       fix: async () => installViaPackageManager('git'),
     },
@@ -249,8 +304,10 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
       category: 'recommended',
       description: 'Audio/video processing — required for voice features and media generation',
       check: async () => {
-        const v = toolVersion('ffmpeg', '-version');
-        return v ? { ok: true, version: v.split('\n')[0] } : { ok: false, detail: 'ffmpeg not installed — voice processing unavailable' };
+        const p = await toolProbe('ffmpeg', '-version');
+        return p.state === 'installed'
+          ? { ok: true, state: p.state, version: p.version?.split('\n')[0] }
+          : { ok: false, state: p.state, detail: `${describeProbe(p, 'ffmpeg')} — voice processing unavailable` };
       },
       fix: async () => installViaPackageManager('ffmpeg'),
     },
@@ -345,8 +402,10 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
       category: 'optional',
       description: 'Video downloader — for media capture features',
       check: async () => {
-        const v = toolVersion('yt-dlp');
-        return v ? { ok: true, version: v } : { ok: false, detail: 'yt-dlp not installed — optional for video downloads' };
+        const p = await toolProbe('yt-dlp');
+        return p.state === 'installed'
+          ? { ok: true, state: p.state, version: p.version }
+          : { ok: false, state: p.state, detail: `${describeProbe(p, 'yt-dlp')} — optional for video downloads` };
       },
       fix: async () => installViaPackageManager('yt-dlp'),
     },
@@ -358,8 +417,17 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
       category: 'recommended',
       description: 'Used for AI scripts, data processing, and Henry utilities',
       check: async () => {
-        const v = toolVersion('python3');
-        return v ? { ok: true, version: v } : { ok: false, detail: 'Python 3 not installed' };
+        // On Windows the launcher is `python`, not `python3`.
+        const first = await toolProbe('python3');
+        if (first.state !== 'missing') {
+          return first.state === 'installed'
+            ? { ok: true, state: first.state, version: first.version }
+            : { ok: false, state: first.state, detail: describeProbe(first, 'Python 3') };
+        }
+        const alt = await toolProbe('python');
+        return alt.state === 'installed'
+          ? { ok: true, state: alt.state, version: alt.version }
+          : { ok: false, state: first.state, detail: `${describeProbe(first, 'Python 3')}` };
       },
       fix: async () => installViaPackageManager('python3'),
     },
@@ -379,8 +447,15 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
           `${HOME}/.local/bin/claude`,
         ];
         for (const c of candidates) {
-          const v = toolVersion(`"${c}"`);
-          if (v) return { ok: true, volume: v, detail: c === 'claude' ? undefined : c };
+          const p = await probeTool('claude', { pathHint: c }).catch(() => null);
+          if (p && p.state === 'installed') {
+            return { ok: true, state: p.state, version: p.version, detail: c === 'claude' ? undefined : c };
+          }
+        }
+        // Not in the known locations — ask PATH properly before concluding.
+        const onPath = await toolProbe('claude');
+        if (onPath.state === 'installed') {
+          return { ok: true, state: onPath.state, version: onPath.version };
         }
         return {
           ok: false,
@@ -572,15 +647,25 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
             // Windows: PowerShell screenshot capability
             const tmp = `${os.tmpdir()}/henry_health_check.png`;
             const cmd = `powershell -NoProfile -Command "Add-Type -AssemblyName System.Drawing; $bmp = New-Object System.Drawing.Bitmap(100, 100); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.FillRectangle([System.Drawing.Brushes]::White, 0, 0, 100, 100); $bmp.Save('${tmp}'); $bmp.Dispose()"`;
-            const { execSync } = require('child_process');
-            execSync(cmd, { timeout: 5000, stdio: 'ignore' });
+            // This used to be a blocking execSync with a 5s timeout, run as
+            // part of the diagnostic that starts 5 seconds after launch. It
+            // froze the main process — and therefore every renderer fetch and
+            // the loopback sync server — for the duration.
             let ok = false;
-            if (fs.existsSync(tmp)) {
-              const stat = fs.statSync(tmp);
-              ok = stat.size > 5000;
+            try {
+              await runAsync(cmd, 8000);
+              if (fs.existsSync(tmp)) ok = fs.statSync(tmp).size > 5000;
+            } catch {
+              // PowerShell could not be run at all — that is a failed probe,
+              // not proof that screen capture is unavailable.
+              return {
+                ok: false,
+                state: 'probe-failed',
+                detail: 'Could not run the PowerShell screen-capture probe. This does not mean capture is unavailable.',
+              };
             }
             try { fs.unlinkSync(tmp); } catch { /* */ }
-            return ok ? { ok: true, detail: 'PowerShell screenshot available' } : { ok: false, detail: 'Screen capture check failed' };
+            return ok ? { ok: true, state: 'installed', detail: 'PowerShell screenshot available' } : { ok: false, state: 'installed', detail: 'Screen capture probe ran but produced no image' };
           }
 
           // macOS: try Electron's API first, then functional check
@@ -764,23 +849,34 @@ export async function runDiagnostic(autoFix = true, db: Database.Database): Prom
     const category = check.category; // Store to avoid type narrowing issues
     const isConfig = category === 'configuration';
     const isRequired = category === 'required';
-    const result = await check.check(db).catch(e => ({ ok: false, detail: String(e) }));
+    const result: CheckResult = await check.check(db).catch(e => ({
+      ok: false,
+      state: 'probe-failed' as const,
+      detail: `check could not complete: ${String(e)}`,
+    }));
+    // A probe that merely failed to run is not evidence of absence. Only a
+    // definitive 'missing' justifies telling the user to install something —
+    // that is what made Henry offer to reinstall Node and Git on a machine
+    // that already had both.
+    const indeterminate = result.state === 'probe-failed' || result.state === 'unresolved';
     const entry: DiagnosticReport['checks'][0] = {
       id: check.id,
       name: check.name,
       category: check.category,
       status: result.ok
         ? 'ok'
-        : isRequired
-          ? 'error'
-          : isConfig
-            ? 'ok'
-            : 'warning',
+        : indeterminate
+          ? 'warning'
+          : isRequired
+            ? 'error'
+            : isConfig
+              ? 'ok'
+              : 'warning',
       detail: result.detail,
-      version: (result as CheckResult).version,
+      version: result.version,
     };
 
-    if (!result.ok && autoFix && check.fix && !isConfig) {
+    if (!result.ok && !indeterminate && autoFix && check.fix && !isConfig) {
       try {
         const fixResult = await check.fix(db);
         if (fixResult.success) {

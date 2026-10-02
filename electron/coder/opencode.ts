@@ -103,22 +103,43 @@ export function buildCoderChildEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-/** Every place the `opencode` binary realistically lives. */
+/**
+ * Binary names this CLI ships under.
+ *
+ * The same OpenCode CLI installs as `opencode` on most systems and as `omp`
+ * in others — the vendor's own bundle puts omp.exe in %LOCALAPPDATA%\omp and
+ * puts that folder on PATH. Probing only the literal name `opencode` made a
+ * perfectly working install (105 Zen models available) report itself as
+ * absent from the packaged app.
+ */
+const CLI_NAMES = ['opencode', 'omp'] as const;
+
+/** Every place the CLI realistically lives, under any of its binary names. */
 function candidateBinaries(): string[] {
   const home = os.homedir();
-  return [
-    'opencode', // resolved against the extended PATH
-    path.join(home, '.opencode', 'bin', 'opencode'),
-    path.join(home, '.local', 'bin', 'opencode'),
-    path.join(home, '.bun', 'bin', 'opencode'),
-    path.join(home, '.volta', 'bin', 'opencode'),
-    '/opt/homebrew/bin/opencode',
-    '/usr/local/bin/opencode',
-    '/usr/bin/opencode',
-    ...(process.platform === 'win32'
-      ? [path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'npm', 'opencode.cmd')]
-      : []),
-  ];
+  const isWin = process.platform === 'win32';
+  const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
+  const localAppData = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+  const out: string[] = [];
+  for (const name of CLI_NAMES) {
+    // bare name first: resolved against the extended PATH, so an install in
+    // any PATH folder is found without this code knowing where that is
+    out.push(name);
+    out.push(path.join(home, '.opencode', 'bin', name));
+    out.push(path.join(home, '.omp', 'bin', name));
+    out.push(path.join(home, '.local', 'bin', name));
+    out.push(path.join(home, '.bun', 'bin', name));
+    out.push(path.join(home, '.volta', 'bin', name));
+    if (isWin) {
+      out.push(path.join(appData, 'npm', `${name}.cmd`));
+      out.push(path.join(localAppData, name, `${name}.exe`));
+    } else {
+      out.push('/opt/homebrew/bin/' + name);
+      out.push('/usr/local/bin/' + name);
+      out.push('/usr/bin/' + name);
+    }
+  }
+  return out;
 }
 
 export async function detectOpencodeCli(refresh = false): Promise<OpencodeCliInfo> {
@@ -136,8 +157,9 @@ export async function detectOpencodeCli(refresh = false): Promise<OpencodeCliInf
   cached = {
     available: false,
     error:
-      'opencode not found. Install it (https://opencode.ai) and make sure `opencode` is on PATH, ' +
-      'or run Henry from a terminal that has your version manager on PATH.',
+      `OpenCode CLI not found. Tried: ${CLI_NAMES.join(', ')}. Install it (https://opencode.ai), ` +
+      'or make sure its folder is on PATH for the Henry window — a shell alias or version-manager ' +
+      'shim that only exists inside your terminal will not be visible here.',
   };
   return cached;
 }
