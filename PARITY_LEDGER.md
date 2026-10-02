@@ -15,8 +15,14 @@ PAID EVIDENCE -> OUR CURRENT -> GAP -> IMPLEMENTATION -> AUTOMATED TEST
               -> LIVE TEST -> INSTALLED-PACKAGE TEST -> CLOSED
 ```
 
-`STATUS` values: `missing` · `partial` · `complete` · `different` (implemented another way) ·
-`commercial` (excluded by boundary).
+**Status vocabulary (terminal states are explicit):**
+`missing` · `partial` · `complete` · `different` (implemented another way) ·
+`hardened/superset` (ours exceeded the reference) · `excluded by design` (intentional terminal
+state — upstream feature disabled upstream) · `commercial boundary` (excluded, identify only).
+
+**Card gate:** a card is not complete until its rows are verified on a **freshly installed Windows
+package**. Build/install is batched per card, not per row, to avoid rebuilding the same package
+dozens of times — but no row is CLOSED from source inspection or unit tests alone.
 
 Evidence base: **699 original TypeScript files recovered from the paid 1.7.0 shipped sourcemaps**
 (58 app files) at `/tmp/paid/src/`; minified renderer bundle at
@@ -102,7 +108,7 @@ Source: `contracts.ts:39-215`, `main/creators-store.ts` (190 lines), renderer `c
 | 3.6 | Activation: trigger phrase | `triggerPhrases[]`, default "what's the status of my app" | none | phrase triggers demo | phrase matcher | | | | missing |
 | 3.7 | Activation: keyboard shortcut | `⌘⇧J` (paid is mac-only; we need cross-platform) | none | shortcut | Ctrl+Shift+J / configurable | | | | missing |
 | 3.8 | Activation: click standby | "double clap or click to activate" standby screen | none | standby screen | standby view, click to start | | | | missing |
-| 3.9 | Clap to wake | `clapToActivate` — **paid forces this OFF**: "ambient false positives were replaying the greeting at random" | none | — | **do not copy the broken mechanism**; if built, require hysteresis + debounce + explicit opt-in | | | | **excluded by design** |
+| 3.9 | Clap to wake | `clapToActivate` — **paid forces this OFF**: "ambient false positives were replaying the greeting at random" (`contracts.ts:305-309`) | none | — | **EXCLUDED BY DESIGN — terminal state, not a missing feature.** Upstream shipped it and force-disabled it due false-positive activation. Deliberately not reproduced. | n/a | n/a | n/a | **EXCLUDED BY DESIGN** |
 | 3.10 | Power-on intro | `playIntro`, "cinematic activation moment… theme and a spoken greeting" | none | intro sequence | intro animation + greeting | | | | missing |
 | 3.11 | Media store (`henry-media://`) | `CreatorsStore`, randomised names, kinds audio/image/file | none | media store + protocol | store + custom protocol | | | | missing |
 | 3.12 | File reveal as real OS windows | `creators:open-media`, "opens in the OS default viewer"; `fileStaggerMs` cascade | none | open media | open + stagger | | | | missing |
@@ -127,7 +133,7 @@ plus the syncBridge tool router. **Retain our extra tools.**
 | 4.5 | File System Tools | `list_files`, `search_files`, `inspect_file`, `read_file`, `load_file`, `write_file`, `replace_file`, `move_file`, `copy_file`, `publish_file` (`tool-registry.ts:151-289`) | repo-scoped only | **8 portable tools missing**; `load_file` = multimodal, `publish_file` = attach produced file | missing |
 | 4.6 | Git Integration | — | `repo.ts` | keep | complete |
 | 4.7 | GitHub Research Tools | — | none | portable | missing |
-| 4.8 | Python Tools (Jailed) | paid jailed | ours unrestricted | **ours is weaker on safety — must not downgrade** | partial (safety) |
+| 4.8 | Python Tools | paid runs them **jailed**; ours runs them unrestricted | ours unrestricted | **ours is LESS isolated than paid — a real weakness, not a parity gap** | **HARDENED / SUPERSET** — add a jailed execution boundary, keep our existing useful capability. Do NOT replace with paid's implementation. Row cannot close until tested for BOTH legitimate execution AND escape/containment attempts. |
 | 4.9 | Network Tools | `files.ts` fetch | `web.ts` | keep | complete |
 | 4.10 | Sandbox | sandbox config | partial | compare | partial |
 | 4.11 | Process / System Tools | `processes.ts` | ours | keep | complete |
@@ -271,7 +277,7 @@ guarding, `_denyDangerous`).
 | 11.9 | Privacy Controls | analytics consent | ours local-only analytics | keep local | complete |
 | 11.10 | Logs & Debug Tools | paid `dev-log.ts` | ours | keep | partial |
 | 11.11 | **Typed settings + change event** | zod 24-field schema + `settings:changed` broadcast from 4 sites | untyped `Record<string,string>`, no event | **largest structural gap** | missing |
-| 11.12 | **Zod validation on every IPC channel** | every channel parsed both ways | bare `unknown` | **root enabler of several hand-patched bugs** | missing |
+| 11.12 | **Zod validation on every IPC channel** | every channel parsed both ways | bare `unknown` | **root enabler of several hand-patched bugs** | missing — **may be brought forward** when a card implementation actually depends on it; record the dependency in this row |
 | 11.13 | App quit | `app:quit` | none | trivial | missing |
 | 11.14 | Startup failure screen | `U9` with restart | `StartupFailureBanner` | partial | partial |
 | 11.15 | Auth / licensing / credits / telemetry | `auth:*`, `billing:*`, PostHog | none | — | **commercial** |
