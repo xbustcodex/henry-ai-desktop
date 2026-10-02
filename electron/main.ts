@@ -10,6 +10,7 @@ import { registerFilesystemHandlers } from './ipc/filesystem';
 import { registerAttachmentHandlers } from './ipc/attachments';
 import { registerMediaLibraryHandlers } from './ipc/mediaLibrary';
 import { registerMarketplaceHandlers } from './ipc/marketplace';
+import { registerSourceFileHandlers } from './ipc/sourceFiles';
 import { registerHenryLocalBrainGatewayIpc } from './ipc/henryLocalBrainGateway';
 import { registerOpencodeBridgeHandlers, stopOpencodeBridge } from './ipc/opencodeBridge';
 import { registerRuntimeHandlers, recordStartupFailure, clearStartupFailure, setRuntimeWindowGetter } from './ipc/runtimeDiagnostics';
@@ -486,6 +487,10 @@ app.whenReady().then(() => {
   registerAttachmentHandlers(db);
   registerMediaLibraryHandlers(db, getMainWindow);
   registerMarketplaceHandlers(db, getMainWindow);
+  // These four channels were bridged in preload and called by the self-repair
+  // tools, but never registered here, so every invoke rejected and
+  // henry_read_source_file / henry_write_source_file could never work.
+  registerSourceFileHandlers();
   // Was never registered, so the renderer's optional local-gateway probe always
   // returned undefined and the gateway URL was never used.
   registerHenryLocalBrainGatewayIpc(db);

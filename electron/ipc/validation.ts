@@ -124,76 +124,136 @@ export function assertPayloadSize(channel: string, payload: unknown): void {
  * the baseline hardening, and that is a deliberate choice: an over-eager schema
  * that rejects a valid call is a regression, and a regression across 333
  * channels is not something to introduce in one pass.
+ *
+ * Precise schemas, written from the REAL handler signatures and real callers.
+ *
+ * Every channel name here was read off the handler registration and the
+ * preload bridge — the first draft of this file guessed names like
+ * "filesystem:read" for channels that are actually "fs:readFile", and would
+ * have silently guarded nothing.
+ *
+ * Deliberately NOT `.strict()` where a caller sends fields the handler ignores:
+ *   - `computer:desktopMode` — HQPanel sends `fullscreen`, the handler never
+ *     reads it. Rejecting it would break a live call. The handler is the bug,
+ *     not the caller, and it is recorded rather than papered over.
+ *   - `google:*` — the preload substitutes empty-string credentials when the
+ *     renderer omits them, so `{clientId: '', clientSecret: ''}` must remain
+ *     valid or every existing call site breaks.
  */
+
+/** Coordinates and the rest of the numeric geometry actually reach a shell
+ *  command on macOS (osascript interpolates them), so they must be numbers. */
+const finiteNumber = z.number().finite();
+
+/** A required, non-blank, length-bounded string. */
 const nonEmpty = (max = 4096) => z.string().trim().min(1).max(max);
 
-/** A filesystem path. Content is NOT interpreted here — path safety is a
- *  separate concern with its own, stricter checks (`_pathSafety`). This only
- *  guarantees it is a usable string and not a megabyte of junk. */
-const pathString = nonEmpty(4096);
+/** Coordinates and other geometry reach a shell command on macOS, so they must
+ *  be finite numbers rather than whatever the renderer sent. */
 
 export const channelSchemas: Record<string, z.ZodTypeAny> = {
   // ── Shell / process execution ──────────────────────────────────────────
-  'computer:runShell': z.object({
-    command: nonEmpty(32_000),
-    timeout: z.number().int().min(100).max(600_000).optional(),
-  }).strict(),
+  'computer:runShell': z
+    .object({
+      command: nonEmpty(32_000),
+      timeout: z.number().int().min(100).max(600_000).optional(),
+    })
+    .passthrough(),
 
   // ── Computer control ───────────────────────────────────────────────────
-  'computer:openUrl': z.object({}).passthrough().or(z.string().max(8192)).or(nonEmpty(8192)),
-  'computer:openApp': z.object({ appName: nonEmpty(512) }).strict(),
-  'computer:screenshot': z.object({
-    region: z.object({
-      x: z.number().int(), y: z.number().int(),
-      w: z.number().int().positive().max(20_000),
-      h: z.number().int().positive().max(20_000),
-    }).strict().optional(),
-  }).strict().default({}),
+  // Was an injection: x/y interpolate straight into an AppleScript string and
+  // preload typed them as Record<string, unknown>, so a crafted renderer could
+  // smuggle arbitrary AppleScript. Numbers only now.
+  'computer:click': z
+    .object({
+      x: finiteNumber,
+      y: finiteNumber,
+      button: z.enum(['primary', 'right', 'left', 'middle']).optional(),
+    })
+    .strict(),
 
-  // ── Filesystem ─────────────────────────────────────────────────────────
-  'filesystem:read': z.object({ path: pathString }).passthrough(),
-  'filesystem:write': z.object({ path: pathString, content: z.string().max(64 * 1024 * 1024) }).passthrough(),
-  'filesystem:delete': z.object({ path: pathString }).passthrough(),
-  'filesystem:list': z.object({ path: pathString.optional() }).passthrough(),
+  'computer:move': z.object({ x: finiteNumber, y: finiteNumber }).passthrough(),
+  'computer:drag': z.object({ x: finiteNumber, y: finiteNumber }).passthrough(),
+  'computer:scroll': z.object({ amount: z.number().int().max(20_000) }).passthrough(),
+  'computer:type': z.object({ text: z.string().max(32_000) }).passthrough(),
+  'computer:key': z.object({ key: nonEmpty(64) }).passthrough(),
+  'computer:openApp': z.object({ appName: nonEmpty(512) }).passthrough(),
+  'computer:screenshot': z
+    .object({
+      region: z
+        .object({
+          x: finiteNumber, y: finiteNumber,
+          w: z.number().int().positive().max(20_000),
+          h: z.number().int().positive().max(20_000),
+        })
+        .passthrough()
+        .optional(),
+    })
+    .passthrough(),
+  // Not strict: HQPanel sends `fullscreen`, which the handler ignores.
+  'computer:desktopMode': z.object({ enable: z.boolean().optional(), fullscreen: z.boolean().optional() }).passthrough(),
+
+  // ── Filesystem (real channel names) ────────────────────────────────────
+  'fs:readDirectory': z.object({ dirPath: z.string().max(4096).optional() }).passthrough(),
+  'fs:readFile': z.object({ filePath: z.string().max(4096).optional() }).passthrough(),
+  'fs:pathExists': z.object({ filePath: nonEmpty(4096) }).passthrough(),
+  'fs:writeFile': z
+    .object({ path: nonEmpty(4096), content: z.string().max(64 * 1024 * 1024) })
+    .passthrough(),
 
   // ── Provider configuration / credentials ───────────────────────────────
-  'providers:save': z.object({
-    id: nonEmpty(64),
-    name: z.string().max(200),
-    apiKey: z.string().max(4096).optional(),
-    api_key: z.string().max(4096).optional(),
-    enabled: z.union([z.boolean(), z.number()]),
-    models: z.string().max(1_000_000).optional(),
-  }).strict(),
+  'providers:save': z
+    .object({
+      id: nonEmpty(64),
+      name: z.string().max(200),
+      apiKey: z.string().max(4096).optional(),
+      api_key: z.string().max(4096).optional(),
+      enabled: z.union([z.boolean(), z.number()]),
+      models: z.string().max(1_000_000).optional(),
+    })
+    .passthrough(),
 
   // ── Settings ───────────────────────────────────────────────────────────
-  'settings:save': z.object({
-    key: nonEmpty(128),
-    // Values are strings today. JSON-encoded settings ride in here too, so the
-    // length is bounded but the type is NOT narrowed to a scalar — changing
-    // that would silently reject existing callers.
-    value: z.string().max(8 * 1024 * 1024),
-  }).strict(),
+  // Values are strings today, including JSON-encoded settings. The type is not
+  // narrowed to a scalar — that would silently reject existing callers.
+  'settings:save': z
+    .object({ key: nonEmpty(128), value: z.string().max(8 * 1024 * 1024) })
+    .passthrough(),
 
-  // ── Creator demo / orb (added by this programme) ───────────────────────
-  'creators:saveDemo': z.unknown(),
-  'creators:saveOrb': z.unknown(),
-  'creators:importMedia': z.object({
-    paths: z.array(nonEmpty(4096)).max(64),
-    kind: z.enum(['audio', 'image', 'file']),
-  }).strict(),
+  // ── Google OAuth ───────────────────────────────────────────────────────
+  // Empty strings are valid: preload sends them when the renderer omits creds.
+  'google:startAuth': z
+    .object({
+      clientId: z.string().max(2048),
+      clientSecret: z.string().max(2048),
+      scopes: z.array(z.string().max(512)).max(64).optional(),
+    })
+    .passthrough(),
+  'google:getToken': z.object({ clientId: z.string().max(2048).optional(), clientSecret: z.string().max(2048).optional() }).passthrough(),
+  'google:refreshToken': z.object({ clientId: z.string().max(2048).optional(), clientSecret: z.string().max(2048).optional() }).passthrough(),
+
+  // ── Creator demo / orb ─────────────────────────────────────────────────
+  'creators:importMedia': z
+    .object({
+      paths: z.array(nonEmpty(4096)).max(64),
+      kind: z.enum(['audio', 'image', 'file']),
+    })
+    .strict(),
   'creators:deleteMedia': z.object({ fileName: nonEmpty(256) }).strict(),
   'creators:openMedia': z.object({ fileName: nonEmpty(256) }).strict(),
   'creators:launchStage': z.object({ mode: z.enum(['voice', 'chat']) }).strict(),
 
   // ── Automation notifications ───────────────────────────────────────────
-  'notification:notifyRun': z.object({
-    runId: z.number().int().nonnegative(),
-    title: z.string().max(300),
-    success: z.boolean(),
-    detail: z.string().max(2000).optional(),
-    mode: z.enum(['all', 'failures', 'none']).optional(),
-  }).strict(),
+  'notification:notifyRun': z
+    .object({
+      runId: z.number().int().nonnegative(),
+      title: z.string().max(300),
+      success: z.boolean(),
+      detail: z.string().max(2000).optional(),
+      mode: z.enum(['all', 'failures', 'none']).optional(),
+    })
+    // Strict: both ends are ours, and nothing legitimate sends extra fields.
+    .strict(),
 };
 
 /** Channels whose payload must never be a bare string. */
@@ -262,6 +322,33 @@ export function guarded<Req, Res>(
       throw e;
     }
     return handler(clean as Req);
+  };
+}
+
+/**
+ * Same, for handlers written as `(event, payload)` — which is every
+ * `ipcMain.handle` signature. The event is passed through untouched; only the
+ * payload is validated.
+ */
+export function guardedEvent<Req, Res>(
+  channel: string,
+  handler: (event: unknown, payload: Req) => Promise<Res> | Res,
+): (event: unknown, payload: unknown) => Promise<Res | ValidationFailure> {
+  return async (event: unknown, payload: unknown) => {
+    let clean: unknown;
+    try {
+      clean = validateRequest(channel, payload);
+    } catch (e) {
+      if (e instanceof ValidationError) {
+        console.warn(
+          `[ipc:${channel}] rejected payload:`,
+          e.issues.map((i) => `${i.path} ${i.message}`).join('; '),
+        );
+        return validationFailure(e);
+      }
+      throw e;
+    }
+    return handler(event, clean as Req);
   };
 }
 

@@ -15,6 +15,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { classifyCommand } from './_commandSafety';
+import { guardedEvent } from './validation';
 import { detectLinuxSession, isWaylandSession } from './sessionDetect';
 import { launchApplication, openUrl } from '../../src/platform/launcher';
 import { discoverInstalledApps, InstalledApp } from '../../src/platform/installedApps';
@@ -98,7 +99,7 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
   // capability probe use the SAME backend ladder. It used to shell out to
   // `scrot || import` while the probe advertised a four-backend list, so a
   // "ready" capability could describe a backend this handler never ran.
-  ipcMain.handle('computer:screenshot', async (_event, params: { region?: { x: number; y: number; w: number; h: number } } = {}) => {
+  ipcMain.handle('computer:screenshot', guardedEvent('computer:screenshot', async (_event, params: { region?: { x: number; y: number; w: number; h: number } } = {}) => {
     try {
       const { captureScreenshot } = await import('../../src/platform/screenshot');
       const result = await captureScreenshot(params.region);
@@ -118,7 +119,7 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
       console.error('[computer:screenshot]', message);
       return { success: false, base64: null, error: message };
     }
-  });
+  }));
 
   // ── Close a window by title ────────────────────────────────────────────
   // HQPanel used to build `pkill -f "<title>"` in the renderer and POST it to
@@ -148,7 +149,7 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
   });
 
   // ── Open App ──────────────────────────────────────────────────────────
-  ipcMain.handle('computer:openApp', async (_event, appName: string) => {
+  ipcMain.handle('computer:openApp', guardedEvent('computer:openApp', async (_event, appName: string) => {
     try {
       const result = await launchApplication(appName);
       return {
@@ -160,7 +161,7 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
       console.error('[computer:openApp]', e instanceof Error ? e.message : String(e));
       throw e;
     }
-  });
+  }));
 
   // ── Open URL in default browser ───────────────────────────────────────
   ipcMain.handle('computer:openUrl', async (_event, url: string) => {
@@ -191,7 +192,7 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
   });
 
   // ── Run shell command (with allowlist safety) ─────────────────────────
-  ipcMain.handle('computer:runShell', async (_event, params: { command: string; timeout?: number }) => {
+  ipcMain.handle('computer:runShell', guardedEvent('computer:runShell', async (_event, params: { command: string; timeout?: number }) => {
     try {
       const verdict = classifyCommand(params.command);
       if (verdict.blocked) {
@@ -207,7 +208,7 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
       console.error('[computer:runShell]', e instanceof Error ? e.message : String(e));
       throw e;
     }
-  });
+  }));
 
   // ── Get installed apps ──────────────────────────────────────────────────
   ipcMain.handle('computer:listApps', async () => {
@@ -1116,7 +1117,7 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
   });
 
   // ── Click at coordinates (requires Accessibility) ─────────────────────
-  ipcMain.handle('computer:click', async (_event, params: { x: number; y: number; button?: string }) => {
+  ipcMain.handle('computer:click', guardedEvent('computer:click', async (_event, params: { x: number; y: number; button?: string }) => {
     try {
       if (platform !== 'darwin') {
         return { success: false, error: 'Mouse control via AppleScript is macOS only.' };
@@ -1131,7 +1132,7 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
       console.error('[computer:click]', e instanceof Error ? e.message : String(e));
       throw e;
     }
-  });
+  }));
 
   // ── Get system info ───────────────────────────────────────────────────
   ipcMain.handle('computer:systemInfo', async () => {
