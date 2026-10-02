@@ -654,28 +654,79 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
           }
 
           if (isWindows()) {
-            // Windows: PowerShell screenshot capability
+            // Two defects in the old probe, both found by running it on a real
+            // Windows machine:
+            //
+            //  1. `$bmp.Save(path)` with no explicit format throws
+            //     MethodInvocationException — yet PowerShell still exits 0, so
+            //     the exit status could never detect it, and it left a
+            //     DIRECTORY at the path, which existsSync reported as success.
+            //  2. The "is it a real image" test was `size > 5000`. A flat white
+            //     100x100 PNG compresses to a few hundred bytes, so even a
+            //     perfectly good capture could never clear that threshold —
+            //     the check was guaranteed to fail.
+            //
+            // So: capture the real screen, save with an explicit format, and
+            // confirm it is a real file rather than guessing from its size. The
+            // script prints OK/ERR itself because the exit code lies.
             const tmp = `${os.tmpdir()}/henry_health_check.png`;
-            const cmd = `powershell -NoProfile -Command "Add-Type -AssemblyName System.Drawing; $bmp = New-Object System.Drawing.Bitmap(100, 100); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.FillRectangle([System.Drawing.Brushes]::White, 0, 0, 100, 100); $bmp.Save('${tmp}'); $bmp.Dispose()"`;
-            // This used to be a blocking execSync with a 5s timeout, run as
-            // part of the diagnostic that starts 5 seconds after launch. It
-            // froze the main process — and therefore every renderer fetch and
-            // the loopback sync server — for the duration.
-            let ok = false;
+            const cmd =
+              `powershell -NoProfile -Command ` +
+              `"$ErrorActionPreference='Stop';` +
+              `try {` +
+              `Add-Type -AssemblyName System.Drawing;` +
+              `Add-Type -AssemblyName System.Windows.Forms;` +
+              `$vs = [System.Windows.Forms.SystemInformation]::VirtualScreen;` +
+              `$bmp = New-Object System.Drawing.Bitmap($vs.Width, $vs.Height);` +
+              `$g = [System.Drawing.Graphics]::FromImage($bmp);` +
+              `$g.CopyFromScreen($vs.Left, $vs.Top, 0, 0, $bmp.Size);` +
+              `$bmp.Save('${tmp}', [System.Drawing.Imaging.ImageFormat]::Png);` +
+              `$g.Dispose(); $bmp.Dispose();` +
+              `Write-Output 'HENRY_PROBE_OK';` +
+              `} catch { Write-Output ('HENRY_PROBE_ERR:' + $_.Exception.Message) }"`;
+
+            let out = '';
+            let ranOk = false;
             try {
-              await runAsync(cmd, 8000);
-              if (fs.existsSync(tmp)) ok = fs.statSync(tmp).size > 5000;
+              const r = await runAsync(cmd, 12_000);
+              out = String(r.stdout || '');
+              ranOk = out.includes('HENRY_PROBE_OK');
             } catch {
-              // PowerShell could not be run at all — that is a failed probe,
-              // not proof that screen capture is unavailable.
+              // PowerShell could not be run at all — a failed probe, NOT proof
+              // that screen capture is unavailable.
               return {
                 ok: false,
                 state: 'probe-failed',
-                detail: 'Could not run the PowerShell screen-capture probe. This does not mean capture is unavailable.',
+                detail: 'Could not run the PowerShell screen-capture probe. This does not mean screen capture is unavailable.',
               };
             }
-            try { fs.unlinkSync(tmp); } catch { /* */ }
-            return ok ? { ok: true, state: 'installed', detail: 'PowerShell screenshot available' } : { ok: false, state: 'installed', detail: 'Screen capture probe ran but produced no image' };
+
+            let real = false;
+            try {
+              const st = fs.statSync(tmp);
+              // isFile, not exists: the broken probe used to leave a directory.
+              real = st.isFile() && st.size > 0;
+            } catch {
+              real = false;
+            }
+            try {
+              if (fs.existsSync(tmp)) {
+                if (fs.statSync(tmp).isFile()) fs.unlinkSync(tmp);
+                else fs.rmdirSync(tmp);   // tidy up the stray directory
+              }
+            } catch { /* best effort */ }
+
+            if (ranOk && real) {
+              return { ok: true, state: 'installed', detail: 'Screen capture works — a real screenshot was taken and read back.' };
+            }
+            const reason = out.includes('HENRY_PROBE_ERR:')
+              ? out.split('HENRY_PROBE_ERR:')[1].trim().slice(0, 160)
+              : real ? '' : 'no image file was produced';
+            return {
+              ok: false,
+              state: ranOk ? 'installed' : 'probe-failed',
+              detail: `Screen capture probe could not complete${reason ? `: ${reason}` : ''}. This is not the same as screen capture being unavailable.`,
+            };
           }
 
           // macOS: try Electron's API first, then functional check
@@ -709,7 +760,17 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
           return { success: false, message: 'Failed to install any screenshot backend. Try manually: sudo apt install scrot' };
         }
         if (isWindows()) {
-          return { success: true, message: 'Screen capture available on Windows' };
+          // The old fix returned success:true without doing anything, which is
+          // why the panel showed "Screen capture available on Windows" directly
+          // beneath "probe ran but produced no image". Windows includes screen
+          // capture, so there is nothing to install — say what is actually true
+          // instead of pretending to have fixed it.
+          return {
+            success: false,
+            message:
+              'Nothing to install — Windows already includes screen capture. ' +
+              'Check that PowerShell can load System.Drawing and Windows.Forms, and that antivirus is not blocking it.',
+          };
         }
         // Only open system preferences on macOS
         if (process.platform === 'darwin') {
@@ -886,7 +947,12 @@ export async function runDiagnostic(autoFix = true, db: Database.Database): Prom
       version: result.version,
     };
 
-    if (!result.ok && !indeterminate && autoFix && check.fix && !isConfig) {
+    // Optional tools are allowed to be absent, so never try to install one on
+    // launch: that is what produced "Auto-install failed. Try: winget install
+    // yt-dlp" for a tool nothing depends on. Anything that actually needs it
+    // says so in its own description.
+    const isOptional = category === 'optional';
+    if (!result.ok && !indeterminate && !isOptional && autoFix && check.fix && !isConfig) {
       try {
         const fixResult = await check.fix(db);
         if (fixResult.success) {
