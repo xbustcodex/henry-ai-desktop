@@ -25,6 +25,7 @@ import { quickbooksTools } from "./quickbooks";
 import { bookTools } from "./book";
 import { repoTools } from "./repo";
 import { machineTools } from "./machines";
+import { fileTools } from "./files";
 
 export function registerAllTools(registry: ToolRegistry): void {
   registry.registerAll([
@@ -41,5 +42,7 @@ export function registerAllTools(registry: ToolRegistry): void {
     ...quickbooksTools(),
     ...repoTools(),
     ...machineTools(),
+  
+        ...fileTools,
   ]);
 }

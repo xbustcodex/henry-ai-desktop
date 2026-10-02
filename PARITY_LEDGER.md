@@ -46,7 +46,7 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 | 2 Chat & Models | 9 | 5 | 0 | 0 | 0 |
 | 1 UI & Core | 10 | 10 | 0 | 0 | 0 |
 | 3 Creators & Media | 14 | 13 | 0 | 0 | 0 |
-| 4 Agents & Tools | 20 | 1 | 0 | 10 | 4 |
+| 4 Agents & Tools | 20 | 2 | 0 | 9 | 4 |
 | 5 Automation | 9 | 0 | 0 | 5 | 0 |
 | 6 Voice & Input | 13 | 0 | 0 | 6 | 2 |
 | 7 Computer Control | 16 | 0 | 0 | 3 | 0 |
@@ -130,7 +130,7 @@ plus the syncBridge tool router. **Retain our extra tools.**
 | 4.2 | Agent Roles (4+) | agent-core | ours | keep | complete |
 | 4.3 | Tool Execution | `tool-registry.ts` | ours | keep | complete |
 | 4.4 | Shell / Terminal | `processes.ts` | ours `shell.ts` | keep | complete |
-| 4.5 | File System Tools | `list_files`, `search_files`, `inspect_file`, `read_file`, `load_file`, `write_file`, `replace_file`, `move_file`, `copy_file`, `publish_file` (`tool-registry.ts:151-289`) | repo-scoped only | **8 portable tools missing**; `load_file` = multimodal, `publish_file` = attach produced file | missing |
+| 4.5 | File System Tools | 10 tools: `list_files`, `search_files`, `inspect_file`, `read_file`, `load_file`, `write_file`, `replace_file`, `move_file`, `copy_file`, `publish_file` (`tool-registry.ts:151-289`) | `electron/agent/tools/files.ts` — all ten added; `repo_read`/`repo_edit` kept | — | additive, not a replacement: our repo tools stay narrower and approval-gated; the new ones are confined to home, writes behind `confirm` | **23 tests**: capability + traversal + absolute paths + refuse-clobber + atomic replace leaves no temp + every `confirm` tool has a prompt | — | **installed pkg: 52 tools registered (was 42); all 10 present; write/replace/move = `confirm`, reads = `silent`; `repo_*` intact** | **CLOSED** |
 | 4.6 | Git Integration | — | `repo.ts` | keep | complete |
 | 4.7 | GitHub Research Tools | — | none | portable | missing |
 | 4.8 | Python Tools | paid runs them **jailed** | `electron/ipc/pythonRunner.ts` | **was LESS isolated than paid, AND completely broken on Windows** — it staged to a hardcoded `/tmp/henry_<ts>.py` and ran with `shell: '/bin/zsh'`, so neither path exists on Windows, and the blocking `execSync` froze the main process for up to 12s | **HARDENED / SUPERSET** — our own jail: pre-execution source screening (14 escape classes refused before staging), scrubbed env, private cwd under tmpdir, POSIX rlimits (CPU/AS/FSIZE/NPROC/NOFILE), wall-clock timeout with SIGKILL, hard output cap, async, cross-platform interpreter. Paid's implementation not used. | **23 tests**: 14 escapes refused + legitimate exec, real script errors, timeout, no env leaks, private cwd, output cap | — | installed build boots with it; Python 3.12.10 resolves from the packaged app | **HARDENED / SUPERSET** — **PARTIAL**: jail proven by tests; the chat entry point is not yet verified end to end because "python run:" is routed to the coder engine before it reaches this branch |
