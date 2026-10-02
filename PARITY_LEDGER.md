@@ -270,7 +270,7 @@ guarding, `_denyDangerous`).
 | 11.2 | API Key Management | `auth:redeem-*` | ours encrypted `_keyStorage` | keep ours (ours is better: local encrypted) | different (better) |
 | 11.3 | System Diagnostics | `runtime:status-changed` push | sync `runtime:get-status` | **no push — renderer can't learn runtime died** | missing |
 | 11.4 | Environment Detection | paid | ours `toolProbe` quad-state | — | **complete (fixed)** |
-| 11.5 | **Dependency Checks** | paid | ours `toolProbe`: installed/missing/unresolved/probe-failed, never auto-fixes on probe failure | **fixed + verified on installed pkg 2026-10-02: node v24.21.0, git 2.55.0, ffmpeg, python3 all ok, zero phantom installs** | **CLOSED** |
+| 11.5 | **Dependency Checks** | paid | ours `toolProbe`: installed/missing/unresolved/probe-failed, never auto-fixes on probe failure; sqlite check now uses `getDbFilePath()` **fixed + verified on installed pkg 2026-10-02: node v24.21.0, git 2.55.0, ffmpeg, python3 all ok, zero phantom installs** | **CLOSED** |
 | 11.6 | Update System | `autoUpdater` | ours | keep | complete |
 | 11.7 | Export / Import | paid | ours | keep | complete |
 | 11.8 | Security Settings | `secure-values.ts` | ours `_keyStorage` | keep ours | different (better) |
@@ -291,11 +291,33 @@ guarding, `_denyDangerous`).
 | Windows lag / "Not Responding" | root cause fixed (`e15d5ad`); **not re-verified under concurrent use on a fresh install** |
 | Windows dependency detection | fixed (`e15d5ad`), verified once; ffmpeg/python report `ok` with empty version |
 | OpenCode/Zen | discovery fixed (`e15d5ad`), parsing fixed (`f0eb355`); **not yet packaged/verified together** |
-| ~~`sqlite3: Database file missing`~~ | **CLOSED** — check tested `$HOME/henry.db` but the DB is at `<userData>/henry-workspace/henry.db`; now uses one source of truth (`04df661`). Needs installed-package re-verify |
+| ~~`sqlite3: Database file missing`~~ | **CLOSED** — check tested `$HOME/henry.db` but the DB is at `<userData>/henry-workspace/henry.db`; now one source of truth (`04df661`). **Re-verified on the fresh install: sqlite3 no longer appears among failing checks.** |
 | Routines fail: `Model "deepseek-r1:7b" isn't loaded in Ollama` | undiagnosed — Ollama not running in the last test session |
 | ffmpeg/python3 report `ok` with an **empty version string** | open — installed but version unread; needs tightening |
 | Two contradictory `screen_recording` rows | undiagnosed |
 
 ## Legend
-`missing` · `partial` · `complete` · `different` (ours is better/other) · `commercial` (excluded by
-boundary) · `live-verified` (installed package) · `pending` (blocked on an upstream row)
+`missing` · `partial` · `complete` · `different` (ours is better/other) ·
+`hardened/superset` · `excluded by design` (terminal) · `commercial boundary` ·
+`live-verified` (installed package) · `pending` (blocked on an upstream row)
+
+---
+
+## Verification log
+
+**2026-10-02 — freshly installed Windows package, commit `79619ad` + sqlite3 fix.**
+`md5 123b9c8654de59bd5ff32620a0d64f74`, installed via NSIS to
+`%LOCALAPPDATA%\Programs\Henry AI`.
+
+| Check | Result |
+|---|---|
+| node | ok — v24.21.0 |
+| git | ok — git version 2.55.0.windows.3 |
+| ffmpeg / python3 | ok (version string empty — open item) |
+| sqlite3 | **ok** (was `fix_failed` on every run) |
+| remaining non-ok | whisper_cpp, yt_dlp, claude_cli (all genuinely absent), screen_recording |
+| OpenCode | `omp/18.3.2`, 777 models, 0 polluted ids, 108 Zen |
+| Zen provider row | renders in Settings with key layout |
+| loopback sync | HTTP 401 (listening, correctly rejecting unauthenticated) |
+| boot log handler errors | 0 |
+| concurrent stress | see Windows lag row above — PASS |
