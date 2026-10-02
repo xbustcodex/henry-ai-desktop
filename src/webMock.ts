@@ -1112,6 +1112,7 @@ const henryAPI: Window['henryAPI'] = {
     if (opts?.active_only) return goals.filter((g) => g.status !== 'done');
     return goals;
   },
+  deleteGoal: async () => ({ deleted: true }),
   updateGoal: async (id, updates) => {
     const goals = getStore<Record<string, unknown>[]>('henry:goals', []);
     const idx = goals.findIndex((g) => g.id === id);

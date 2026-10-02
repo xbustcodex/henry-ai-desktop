@@ -567,6 +567,20 @@ export function registerMemoryHandlers(database: Database.Database) {
     }
   });
 
+  // Goals could be created, edited and archived, but never removed — so a
+  // goal you did not want was stuck in the table forever. Deleting is
+  // irreversible, so the panel asks first.
+  ipcMain.handle('memory:deleteGoal', async (_e, id: string) => {
+    try {
+      if (typeof id !== 'string' || !id) return { deleted: false, error: 'A goal id is required.' };
+      const info = db.prepare('DELETE FROM goals WHERE id = ?').run(id);
+      return { deleted: info.changes > 0 };
+    } catch (e: unknown) {
+      console.error('[memory:deleteGoal]', e instanceof Error ? e.message : String(e));
+      return { deleted: false, error: 'Could not delete that goal.' };
+    }
+  });
+
   ipcMain.handle('memory:getGoals', async (_e, opts: { status?: string; limit?: number } = {}) => {
     try {
       let sql = 'SELECT * FROM goals WHERE 1=1';

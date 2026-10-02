@@ -717,6 +717,7 @@ declare global {
     saveGoal: (goal: Record<string, unknown>) => Promise<{ id: string }>;
     getGoals: (opts?: Record<string, unknown>) => Promise<Array<Record<string, unknown>>>;
     updateGoal: (id: string, updates: Record<string, unknown>) => Promise<{ updated: boolean }>;
+    deleteGoal: (id: string) => Promise<{ deleted: boolean; error?: string }>;
 
     // ── Memory — Commitments ──────────────────────────────────
     saveCommitment: (c: Record<string, unknown>) => Promise<{ id: string }>;

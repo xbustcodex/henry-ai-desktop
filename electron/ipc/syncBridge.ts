@@ -879,8 +879,8 @@ async function handleRequest(
     }
     if (urlPath === '/sync/unlink-device-internal' && req.method === 'POST') {
       const body = await readBody<{id: string}>(req);
-      if (body?.id) unlinkDevice(body.id);
-      jsonResponse(res, 200, { ok: true });
+      const result = body?.id ? unlinkDevice(body.id) : { removed: false };
+      jsonResponse(res, 200, { ok: result.removed, removed: result.removed });
       return;
     }
     if (urlPath === '/sync/get-tunnel-url') {
@@ -9547,11 +9547,25 @@ export function revokePairToken(): void {
   pairTokenExpiry = 0;
 }
 
-export function unlinkDevice(deviceId: string): void {
-  linkedDevices.delete(deviceId);
-  for (const [token, id] of companionTokens.entries()) {
-    if (id === deviceId) companionTokens.delete(token);
+/**
+ * Revoke a paired device.
+ *
+ * This used to only mutate the in-memory maps and return nothing. Since
+ * loadCompanionTokens() restores the maps from SQLite on every launch, the
+ * revocation was silently undone by a restart — and both callers answered
+ * `{ok:true}` regardless, so the UI reported success for a device that was
+ * still paired. Now it persists and reports what actually happened.
+ */
+export function unlinkDevice(deviceId: string): { removed: boolean } {
+  let removed = linkedDevices.delete(deviceId);
+  for (const [token, id] of Array.from(companionTokens.entries())) {
+    if (id === deviceId) {
+      companionTokens.delete(token);
+      removed = true;
+    }
   }
+  if (removed) saveCompanionTokens();
+  return { removed };
 }
 
 export function addPendingAction(action: PendingAction): void {
@@ -9621,8 +9635,8 @@ export function registerSyncBridgeIpc(): void {
   });
 
   ipcMain.handle('henry:sync:unlink-device', (_e, deviceId: string) => {
-    unlinkDevice(deviceId);
-    return { ok: true };
+    const result = unlinkDevice(deviceId);
+    return { ok: result.removed, removed: result.removed };
   });
 
   ipcMain.handle('henry:sync:push-event', (_e, event: Omit<SyncEvent, 'id' | 'timestamp'>) => {

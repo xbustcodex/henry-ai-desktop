@@ -513,6 +513,7 @@ contextBridge.exposeInMainWorld('henryAPI', {
   saveGoal: (goal: Record<string, unknown>) => ipcRenderer.invoke('memory:saveGoal', goal),
   getGoals: (opts?: Record<string, unknown>) => ipcRenderer.invoke('memory:getGoals', opts || {}),
   updateGoal: (id: string, updates: Record<string, unknown>) => ipcRenderer.invoke('memory:updateGoal', id, updates),
+  deleteGoal: (id: string) => ipcRenderer.invoke('memory:deleteGoal', id),
   getCommitments: (opts?: Record<string, unknown>) => ipcRenderer.invoke('memory:getCommitments', opts || {}),
   saveCommitment: (c: Record<string, unknown>) => ipcRenderer.invoke('memory:saveCommitment', c),
   resolveCommitment: (id: string) => ipcRenderer.invoke('memory:resolveCommitment', id),

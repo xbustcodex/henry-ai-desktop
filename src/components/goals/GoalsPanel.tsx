@@ -7,6 +7,7 @@
 import { useState, useEffect } from 'react';
 import { sendToHenry } from '../../actions/store/chatBridgeStore';
 import { addCommitment as addToStore } from '../../henry/commitmentStore';
+import { toast, confirmDialog } from '../ui/Toast';
 import { useStore } from '../../store';
 
 const getApi = () => (window as any).henryAPI as any;
@@ -68,6 +69,22 @@ export default function GoalsPanel() {
     setGoals(active);
     setAllGoals(all);
   }
+  async function removeGoal(goal: Goal) {
+    // Irreversible, so it is confirmed rather than done on a single click.
+    const ok = await confirmDialog(
+      `"${goal.title}" will be deleted permanently. Mark it abandoned instead if you want to keep the history.`,
+      { confirmLabel: 'Delete', cancelLabel: 'Keep', destructive: true }
+    );
+    if (!ok) return;
+    const res = await getApi()?.deleteGoal?.(goal.id);
+    if (res && res.deleted === false) {
+      toast.error(res.error || 'Could not delete that goal.');
+      return;
+    }
+    toast.success('Goal deleted.');
+    await loadGoals();
+  }
+
   async function coachGoal(goal: Goal) {
     if (coachingBusy) return;
     setShowCoach(true);
@@ -256,6 +273,11 @@ export default function GoalsPanel() {
                       Mark {s}
                     </button>
                   ))}
+                  <button onClick={() => void removeGoal(selected)}
+                    title="Delete this goal permanently"
+                    className="text-[11px] px-3 py-1.5 rounded-lg border border-henry-error/30 text-henry-error/80 hover:text-henry-error hover:bg-henry-error/10 transition-all ml-auto">
+                    Delete
+                  </button>
                 </div>
               </div>
             )}
