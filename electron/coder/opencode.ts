@@ -330,17 +330,75 @@ export interface OpencodeModel {
   isZen: boolean;
   /** True when the id ends in -free. */
   isFree: boolean;
+  /** Provider group the id was listed under, e.g. "opencode-zen". */
+  group: string;
 }
 
-function classifyModel(id: string): OpencodeModel {
+/**
+ * Parse `opencode models` / `omp models` output into real model identifiers.
+ *
+ * The CLI prints a grouped table, for example:
+ *
+ *   opencode-zen (105)
+ *   | ~anthropic/claude-fable-latest        |    1M |  128K | low,high | yes |
+ *   |  anthropic/claude-fable-5            |    1M |  128K | low,high | yes |
+ *
+ * This used to keep every line containing "/" as the model id, so all 559 ids
+ * came back as the entire table row — box-drawing borders, context windows and
+ * reasoning-effort lists included — and none of them could be sent to the
+ * bridge. A "~" marks the group's highlighted entry and is not part of the id.
+ *
+ * Older builds printed one bare id per line, so plain lines are still accepted.
+ */
+function parseModelList(stdout: string): OpencodeModel[] {
+  const out: OpencodeModel[] = [];
+  const seen = new Set<string>();
+  let group = '';
+  for (const raw of stdout.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    // Group header: a provider name followed by a model count, e.g. "opencode-zen (105)"
+    const header = /^([A-Za-z0-9_.-]+)\s*\((\d+)\)\s*$/.exec(line);
+    if (header) {
+      group = header[1];
+      continue;
+    }
+    // Box drawing: table rules and borders carry no model.
+    if (/^[┌├└─═\s|\u2502]+$/.test(line)) continue;
+
+    // Table row: the model is the first column. Borders are box-drawing
+    // U+2502 as well as ASCII '|', so both have to be accepted.
+    const cells = line.split(/[|\u2502]/).map((c) => c.trim()).filter(Boolean);
+    const first = cells[0];
+    if (!first) continue;
+    // The column heading row, e.g. "| model | context | ...".
+    if (/^models?$/i.test(first)) continue;
+
+    const id = first.replace(/^~/, '').trim();
+    if (!id || /[│|]/.test(id)) continue;
+    const key = `${group}\u0000${id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(classifyModel(id, group || undefined));
+  }
+  return out;
+}
+
+function classifyModel(id: string, group?: string): OpencodeModel {
   const slash = id.indexOf('/');
   const provider = slash > 0 ? id.slice(0, slash) : 'unknown';
   const name = slash > 0 ? id.slice(slash + 1) : id;
+  // "opencode-zen (105)" is the group heading for the Zen catalogue; ids inside
+  // it are namespaced by their upstream provider, so the provider has to come
+  // from the group or every Zen model looks like a third-party one.
+  const bucket = (group || provider).toLowerCase();
   return {
     id,
     provider,
     name,
-    isZen: provider === 'opencode',
+    group: group || provider,
+    isZen: bucket.includes('zen') || provider === 'opencode',
     isFree: /-free$/.test(name),
   };
 }
@@ -370,11 +428,7 @@ export async function listOpencodeModels(timeoutMs = 90_000): Promise<{
       timeout: timeoutMs,
       maxBuffer: 8 * 1024 * 1024,
     });
-    const models = stdout
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter((l) => l.includes('/'))
-      .map(classifyModel)
+    const models = parseModelList(stdout)
       .sort((a, b) => {
         // zen first, then free, then alphabetical
         if (a.isZen !== b.isZen) return a.isZen ? -1 : 1;
