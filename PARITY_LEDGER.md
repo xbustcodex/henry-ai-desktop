@@ -51,7 +51,7 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 | 6 Voice & Input | 13 | 3 | 0 | 3 | 2 |
 | 7 Computer Control | 16 | 0 | 0 | 3 | 0 |
 | 8 Companion | 9 | 0 | 0 | 3 | 0 |
-| 9 Files & Memory | 14 | 0 | 0 | 4 | 0 |
+| 9 Files & Memory | 14 | 1 | 0 | 3 | 0 |
 | 10 Integrations | 14 | 2 | 0 | 2 | 4 |
 | 11 Settings & System | 15 | 2 | 0 | 2 | 3 |
 
@@ -228,7 +228,7 @@ guarding, `_denyDangerous`).
 | # | Row | PAID EVIDENCE | OUR CURRENT | GAP | STATUS |
 |---|---|---|---|---|---|
 | 9.1 | File Attachments | ours | ours | keep | complete |
-| 9.2 | Document Parsing / multimodal | `load_file` puts an image/PDF/OOXML **into the model turn** (`tool-registry.ts:191-203`); bytes deliberately not persisted in the transcript | `electron/ipc/contentParts.ts`, per-provider converters in `electron/ipc/ai.ts`, `src/henry/messageBuilder.ts` | was **not implemented**: `Message.content` was a string throughout, no `image_url`/`inlineData` anywhere, and `file_load`'s base64 was stringified into the tool text — so the model never saw a picture | Content parts end to end: OpenAI/Groq/bridge use `image_url`, Anthropic uses base64 source blocks, Google uses `inlineData`, Ollama uses a separate `images` array. Attachments hydrate the newest user turn only. Tool results lift images out of the JSON text. **An image is never silently dropped** — a non-vision model gets an explicit note | **12 builder tests** (image attached, non-image announced, only the target turn hydrated, unreadable/oversized skipped, cap per turn, throwing getter survives) + the guard's shape/mime/size checks | — | **installed pkg: guard accepts parts; a real PNG round-trips save→read-back as a `data:image/png;base64,` URL; Ollama received the image and answered `Multimodal data provided, but model does not support multimodal requests.`, which surfaced to the renderer as a clear error** | **PARTIAL — pipeline verified to the provider boundary; the final proof (a vision model describing the picture) needs a vision model, and none is installed locally** |
+| 9.2 | Document Parsing / multimodal | `load_file` puts an image/PDF/OOXML **into the model turn** `(tool-registry.ts:191-203)`; bytes deliberately not persisted in the transcript | `contentParts.ts`, per-provider converters in `ai.ts`, `messageBuilder.ts`, **`ollamaCapabilities.ts`** | was **not implemented**: `Message.content` was a string throughout and `file_load`'s base64 was stringified into the tool text, so the model never saw a picture | Content parts end to end: `image_url` (OpenAI/Groq/bridge), base64 source blocks (Anthropic), `inlineData` (Google), separate `images` array (Ollama). Attachments hydrate the newest user turn only. Tool results lift images out of the JSON text. **An image is never silently dropped** — Ollama vision is checked via `/api/show` capabilities and a model without it is told so explicitly | **12 builder tests + 12 vision-gate tests** (capability lookup, caching, sibling models, unknown model, lookup failure, note content, no bytes sent) | — | **Ollama path END-TO-END VERIFIED — see evidence below** | **CLOSED (Ollama live-verified). Anthropic / Google / opencode-bridge: adapter-tested, provider-live-unverified** |
 | 9.3 | Memory Search | paid `toLocaleLowerCase().includes()` | ours FTS5 + 5-factor | **ours better** | different (better) |
 | 9.4 | Knowledge Base | paid pages | ours memory | keep | partial |
 | 9.5 | Vector Store | paid | ours FTS5 not vectors | portable; assess | missing |
@@ -433,24 +433,73 @@ invented routes in the first place.
 
 ---
 
-## Card 9.2 — verification boundary, stated plainly
 
-The multimodal pipeline is implemented and verified **up to the provider boundary**, on the
-installed package:
 
-| Step | Evidence |
+---
+
+## Card 9.2 — Ollama path, live evidence (2026-10-02)
+
+**Method.** `moondream:latest` (1.74 GB) was pulled into Ollama **solely as a temporary validation
+model**. It is not bundled, not a declared dependency, and not Henry's default. `companion_model`
+was switched only for the run and restored to `llama3.2:3b` afterwards (verified: `restored:
+"llama3.2:3b"`).
+
+**Test image.** Generated deterministically: a 256x256 PNG, a filled disc of RGB(0,128,255) centred on
+RGB(255,255,255). The prompt was "Describe the image." The filename was `card92-check.png`, which
+conveys nothing about colour or shape.
+
+### Through the normal user attachment workflow in the installed package
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Henry recognises the attachment as an image content part | **yes** — chip rendered `card92-check.png / 951 B` after `DOM.setFileInputFiles` on the real `<input type=file>` |
+| 2 | Content survives persistence / read-back | **yes** — `saveAttachment` → `getAttachment` returned a `data:image/png;base64,…` URL |
+| 3 | Ollama adapter sends the image natively | **yes** — sent in Ollama's own `images` array of raw base64 |
+| 4 | Vision model identifies content from pixels | **yes** — moondream: *"I see a blue square with a diagonal line"* and, in chat, *"a rectangular blue screen"*. It reports **blue** — the disc's actual colour. Shape naming is imprecise, which is a property of a 1.74 GB model, not of the transport |
+| 5 | Answer returns through the normal stream and renders | **yes** — the reply appeared as a rendered assistant message under `🧠 Advisor` in the transcript |
+| 6 | Base64 does not leak into visible text or context | **yes** — `base64Leaked: false` on every run; no `iVBORw0KGgo` anywhere in the transcript |
+
+### The defect this run exposed, and the fix
+
+With a **text-only** model (`llama3.2:3b`, capabilities `['completion','tools']`) the first live run
+produced:
+
+> *"I see a square of **yellow**."*
+
+for a **blue** disc. Ollama accepted the request, silently ignored the bytes, and the model
+described an image it never saw — precisely the failure this card exists to prevent, and precisely
+what my own "never drop silently" note was supposed to stop. It did not fire, because Henry sent
+the image unconditionally and never checked whether the model could see.
+
+**Fix:** `electron/ipc/ollamaCapabilities.ts` asks Ollama itself via `POST /api/show`, whose
+`capabilities` array carries `"vision"` for moondream and not for llama3.2:3b. That is authoritative
+in a way a model-name guess is not — `llama3.2-vision` and `llama3.2:3b` are different models.
+Results are cached per base+model. When vision is absent the image bytes are **not sent** and the
+model is told so. Verified live, same model, same image:
+
+> *"I'm unable to view the attached image as this model does not support vision. I can only respond
+> based on text-based input and do not have the capability to access or view visual content."*
+
+### Text-only conversation regression
+
+Unchanged after the multimodal work:
+
+| Prompt | Reply |
 |---|---|
-| Content parts pass the request guard | was `Message content must be a string (got object)`; now accepts and validates parts |
-| Bad image parts rejected | `Image content part must carry a \`mimeType\` like "image/png"` |
-| Attachments store and read back | real PNG saved → returned as `data:image/png;base64,…` |
-| Adapter converts and sends | Ollama received the image in its `images` array |
-| Provider response surfaces | Ollama's `Multimodal data provided, but model does not support multimodal requests.` reached the renderer |
+| "Say OK." | "How can I assist you today?" |
+| "What is 2+2? One number only." | "4" |
 
-**What is NOT verified:** a vision model actually describing the picture. Every model installed
-locally (`llama3.2:3b`, `gpt-oss:20b`, `deepseek-coder:6.7b`, `deepseek-r1:1.5b`,
-`qwen2.5-coder:7b`, `qwen2.5-coder:3b`) is text-only. Completing this needs a vision model pulled
-into Ollama — a multi-gigabyte change to the user's setup, so it is asked for rather than done.
+### Method note
 
-Also unverified by the same boundary: Anthropic, Google and the opencode bridge, none of which
-have a key configured on this machine. Their converters are covered by the same shape tests but
-have not been sent to the real endpoint.
+An intermediate run appeared to show the text-only model answering *"I see a blue circle"* — an
+apparently correct answer from a model with no vision. That was **test contamination**, not a
+product result: the poll loop matched keywords still on screen from the preceding vision turn, and
+the model was plausibly continuing conversation context. Re-tested with an isolated per-model call,
+the gate fires correctly. Recorded because it is exactly the kind of false positive this card is
+supposed to eliminate.
+
+### Still unverified, deliberately
+
+**Anthropic, Google and the opencode/bridge adapters remain adapter-tested / provider-live-unverified.**
+Their converters have shape-test coverage and share the same gate architecture, but no key or
+vision-capable remote model was configured for this run, and none is claimed as verified.

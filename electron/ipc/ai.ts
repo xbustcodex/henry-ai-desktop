@@ -14,6 +14,7 @@ import type Database from 'better-sqlite3';
 import type { ModelTool } from '../agent/types';
 import type { ModelCompletion, RunnerMessage } from '../agent/toolRunner';
 import { toText, partition, dataUrl, isImagePart, type ContentMessage, type MessageContent, type MessagePart } from './contentParts';
+import { ollamaSupportsVision, buildOllamaMessage } from './ollamaCapabilities';
 
 type WindowGetter = () => BrowserWindow | null;
 
@@ -352,16 +353,21 @@ function toGoogleContents(messages: AiMessage[]): unknown[] {
     });
 }
 
-/**
- * Ollama's chat API carries images as a separate `images` array of raw base64,
- * with `content` staying plain text.
- */
-function toOllamaMessages(messages: AiMessage[]): unknown[] {
+
+/** Ollama chat messages, with images only when the model can actually see. */
+async function buildOllamaMessages(
+  base: string,
+  model: string,
+  messages: AiMessage[]
+): Promise<unknown[]> {
+  const hasImage = messages.some(
+    (m) => Array.isArray(m.content) && partition(m.content).images.length > 0
+  );
+  const canSee = hasImage ? await ollamaSupportsVision(base, model) : true;
   return messages.map((m) => {
     if (typeof m.content === 'string') return { role: m.role, content: m.content };
     const { text, images } = partition(m.content);
-    if (images.length === 0) return { role: m.role, content: text };
-    return { role: m.role, content: text, images: images.map((i) => i.data) };
+    return buildOllamaMessage(m.role, text, images.map((i) => i.data), canSee);
   });
 }
 
@@ -505,7 +511,7 @@ async function callOllamaProvider(params: AiRequest): Promise<{
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: params.model,
-      messages: toOllamaMessages(params.messages),
+      messages: await buildOllamaMessages(base, params.model, params.messages),
       stream: false,
       options: {
         temperature: params.temperature ?? 0.7,
