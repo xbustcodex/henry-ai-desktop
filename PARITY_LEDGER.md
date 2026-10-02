@@ -228,7 +228,7 @@ guarding, `_denyDangerous`).
 | # | Row | PAID EVIDENCE | OUR CURRENT | GAP | STATUS |
 |---|---|---|---|---|---|
 | 9.1 | File Attachments | ours | ours | keep | complete |
-| 9.2 | Document Parsing | `load_file` (image/PDF/OOXML → model) | none | **multimodal gap** | missing |
+| 9.2 | Document Parsing / multimodal | `load_file` puts an image/PDF/OOXML **into the model turn** (`tool-registry.ts:191-203`); bytes deliberately not persisted | `file_load` returns `{kind:'image', mime, base64}` — **but nothing consumes it as an image** | **NOT IMPLEMENTED. Verified: `Message.content` is `string` throughout (`src/types/index.ts:159`); there is no `image_url` / `input_image` / `type:'image'` anywhere in `electron/ipc/ai.ts`, and the tool runner does not special-case an image result either. So `file_load`'s base64 is currently stringified into the tool text and the model never sees the picture.** Text/PDF extraction DOES work and reaches the model as text. | **BLOCKED ON SCOPE — see note below. Do not half-do this.** | | | | **MISSING (with cause identified)** |
 | 9.3 | Memory Search | paid `toLocaleLowerCase().includes()` | ours FTS5 + 5-factor | **ours better** | different (better) |
 | 9.4 | Knowledge Base | paid pages | ours memory | keep | partial |
 | 9.5 | Vector Store | paid | ours FTS5 not vectors | portable; assess | missing |
@@ -329,3 +329,32 @@ guarding, `_denyDangerous`).
 * **Chat routing:** `python run:` is intercepted by the coder engine before the sync bridge's Python branch runs. The jail is correct and tested; its chat entry point still needs an end-to-end check. Record before closing 4.8.
 * **Coder reports "no engine available"** when Ollama is not running on the machine. Environment condition, not a regression — but the message is unhelpful and should name the cause.
 * **`opencodeTest` returns "model is required"** when called with no model. That is a correct, if terse, response.
+
+---
+
+## 9.2 — why this one is not done yet, and what it needs
+
+Multimodal input is not a panel that can be added. The entire message pipeline is
+`content: string`:
+
+- `Message.content` is a plain string (`src/types/index.ts:159`)
+- the AI request path carries strings only
+- all six provider adapters (`callOpenAI`, `callAnthropic`, `callGoogle`, `callGroq`,
+  `callOllamaProvider`, `callOpencode`) send text
+- the SQLite `messages` table stores `content` as text
+
+Supporting images means changing the message type, the request shape, every
+provider adapter, the streaming parser, and storage — and each adapter spells
+image parts differently (`image_url` for OpenAI, a `source` block for Anthropic,
+`inlineData` for Gemini, an OpenAI-compatible array for Ollama and the opencode
+bridge).
+
+Doing that piecemeal would put five providers that work today at risk. It needs
+to be one deliberate change with per-provider verification, not a sweep item.
+
+**Already working:** text and PDF extraction (`file_load` returns the text of a
+PDF by inflating its content streams), `file_inspect`, and the whole Files card
+except actually *seeing* a picture.
+
+**Recommended:** take this as its own piece of work, behind the same gate as a
+card — implement, build, install, verify each provider that supports vision.
