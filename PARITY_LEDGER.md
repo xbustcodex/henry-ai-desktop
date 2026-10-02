@@ -48,7 +48,7 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 | 3 Creators & Media | 14 | 13 | 0 | 0 | 0 |
 | 4 Agents & Tools | 20 | 2 | 0 | 9 | 4 |
 | 5 Automation | 9 | 1 | 0 | 4 | 0 |
-| 6 Voice & Input | 13 | 2 | 0 | 4 | 2 |
+| 6 Voice & Input | 13 | 3 | 0 | 3 | 2 |
 | 7 Computer Control | 16 | 0 | 0 | 3 | 0 |
 | 8 Companion | 9 | 0 | 0 | 3 | 0 |
 | 9 Files & Memory | 14 | 0 | 0 | 5 | 0 |
@@ -174,7 +174,7 @@ plus the syncBridge tool router. **Retain our extra tools.**
 | 6.3 | Voice Commands | voice router | ours intents | keep + extend | partial |
 | 6.4 | Wake Word | paid claims wake word | none | assess; must not reproduce broken clap | missing |
 | 6.5 | Voice Panel (All OS) | renderer voice panel | ours Voice section | compare | partial |
-| 6.6 | Voice Transcription | `voiceSilenceMs`, `micSensitivity`, `micMuted` | push-to-talk only | **no VAD endpointing — biggest UX unlock** | missing |
+| 6.6 | Voice Transcription | `voiceSilenceMs` 400–5000 (default 900), `micSensitivity` 0–1, `micMuted` | `src/henry/voiceEndpointing.ts` | **was push-to-talk only — you had to release the button yourself, so hands-free was impossible** | AnalyserNode watches real RMS; ends on speech-then-silence; window RESTARTS if speech resumes; speech must be detected first (no empty turns); hard max utterance so a stuck mic cannot record forever; clamped to paid's ranges, persisted, switchable off | **13 tests**: silent tap never submits, resume restarts the window, continuous noise still ends, fires once, stop() detaches, no-WebAudio fallback | — | **installed pkg: "Stop recording when you stop talking" + silence slider + sensitivity slider + guidance all render** | **CLOSED** |
 | 6.7 | Audio Recording | recorder | ours | keep | complete |
 | 6.8 | Live Caption (Typewriter) | `captionMode` | none | Card 3.5 | missing |
 | 6.9 | Voice Integrations | ElevenLabs + OpenAI + Kokoro | ElevenLabs | OpenAI/Kokoro | partial |

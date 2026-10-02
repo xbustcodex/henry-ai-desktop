@@ -28,6 +28,8 @@ import DeviceLinkPanel from './DeviceLinkPanel';
 import HealthPanel from './HealthPanel';
 import GoogleConnectionPanel from './GoogleConnectionPanel';
 import { isMacOS, getPlatformName } from '../../utils/platform';
+import type { EndpointingSettings } from '../../henry/voiceEndpointing';
+import { getEndpointingSettings, saveEndpointingSettings } from '../../henry/voice';
 
 import {
   CODER_ENGINE_LABELS,
@@ -633,6 +635,11 @@ function VoiceSection() {
   const updateSetting = useStore((s) => s.updateSetting);
   const setProviders = useStore((s) => s.setProviders);
 
+  const [endpoint, setEndpointState] = useState<EndpointingSettings>(getEndpointingSettings());
+  const setEndpoint = async (next: EndpointingSettings) => {
+    setEndpointState(next);
+    await saveEndpointingSettings(next);
+  };
   const [stt, setStt] = useState<HenryVoiceSttStatus | null>(null);
   const [tts, setTts] = useState<HenryVoiceTtsStatus | null>(null);
   const [setupBusy, setSetupBusy] = useState(false);
@@ -803,6 +810,53 @@ function VoiceSection() {
             </button>
           </div>
           {listenResult && <p className="text-[11px] text-henry-text-dim mt-1.5">{listenResult}</p>}
+        </div>
+
+        {/* ── Hands-free endpointing ── */}
+        <div className="border-t border-henry-border/20 pt-3">
+          <label className={labelCls}>Hands-free ending</label>
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-xs text-henry-text">
+              <input
+                type="checkbox"
+                checked={endpoint.enabled}
+                onChange={(e) => void setEndpoint({ ...endpoint, enabled: e.target.checked })}
+              />
+              Stop recording when you stop talking
+            </label>
+            {endpoint.enabled && (
+              <>
+                <label className="block text-[11px] text-henry-text-muted">
+                  Ends after {endpoint.silenceMs}ms of quiet
+                  <input
+                    type="range"
+                    min={400}
+                    max={5000}
+                    step={100}
+                    value={endpoint.silenceMs}
+                    onChange={(e) => void setEndpoint({ ...endpoint, silenceMs: Number(e.target.value) })}
+                    className="w-full mt-1"
+                  />
+                </label>
+                <label className="block text-[11px] text-henry-text-muted">
+                  Microphone sensitivity — {Math.round(endpoint.sensitivity * 100)}%
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={endpoint.sensitivity}
+                    onChange={(e) => void setEndpoint({ ...endpoint, sensitivity: Number(e.target.value) })}
+                    className="w-full mt-1"
+                  />
+                </label>
+                <p className="text-[10px] text-henry-text-muted">
+                  Raise this in a noisy room; lower it if Henry cuts you off while you are still
+                  thinking.
+                </p>
+              </>
+            )}
+          </div>
         </div>
 
         {/* ── Speaking (TTS) ── */}

@@ -15,6 +15,12 @@
 import { create } from 'zustand';
 import { speak as legacySpeak, cancelTTS as legacyCancel } from './ttsService';
 import { useStore } from '../store';
+import {
+  DEFAULT_ENDPOINTING,
+  sanitizeEndpointing,
+  watchForEnd,
+  type EndpointingSettings,
+} from './voiceEndpointing';
 
 export type VoiceUiState = 'idle' | 'listening' | 'transcribing' | 'speaking';
 
@@ -112,6 +118,40 @@ export async function runVoiceSetup(
 let activeRecorder: MediaRecorder | null = null;
 let activeStream: MediaStream | null = null;
 let recordedChunks: Blob[] = [];
+/** Live voice-activity watcher, detached whenever recording stops. */
+let endpointWatch: { stop: () => void } | null = null;
+
+/**
+ * Endpointing settings, read from the settings table and cached.
+ *
+ * Kept local and forgiving: if settings cannot be read the defaults apply, so
+ * a settings problem degrades to "ends on the button", never to "cannot
+ * record".
+ */
+let endpointSettings: EndpointingSettings = { ...DEFAULT_ENDPOINTING };
+
+async function loadEndpointSettings(): Promise<EndpointingSettings> {
+  try {
+    const all = await window.henryAPI.getSettings?.();
+    const raw = (all as Record<string, string> | undefined)?.['voice_endpointing'];
+    endpointSettings = sanitizeEndpointing(raw ? JSON.parse(raw) : null);
+  } catch {
+    endpointSettings = { ...DEFAULT_ENDPOINTING };
+  }
+  return endpointSettings;
+}
+
+export function getEndpointingSettings(): EndpointingSettings {
+  return { ...endpointSettings };
+}
+
+export async function saveEndpointingSettings(next: unknown): Promise<EndpointingSettings> {
+  endpointSettings = sanitizeEndpointing(next);
+  await window.henryAPI
+    .saveSetting?.('voice_endpointing', JSON.stringify(endpointSettings))
+    .catch(() => { /* cosmetic; next launch falls back to the last saved value */ });
+  return getEndpointingSettings();
+}
 
 function pickMimeType(): string {
   if (typeof MediaRecorder === 'undefined') return '';
@@ -158,6 +198,7 @@ export async function startVoiceRecording(): Promise<void> {
     throw new Error('Could not start the microphone: ' + (err instanceof Error ? err.message : String(err)));
   }
 
+  const settings = await loadEndpointSettings();
   const mimeType = pickMimeType();
   const mr = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
   recordedChunks = [];
@@ -168,6 +209,16 @@ export async function startVoiceRecording(): Promise<void> {
   activeRecorder = mr;
   activeStream = stream;
   useVoiceStore.getState().setState('listening');
+
+  // End the utterance on its own when the speaker stops talking. Speech has to
+  // have been heard first, so a silent tap does not submit an empty turn.
+  if (settings.enabled) {
+    endpointWatch = watchForEnd(stream, settings, () => {
+      // stopVoiceRecording resolves the same promise the button path uses, so
+      // hands-free and push-to-talk share one code path.
+      void stopVoiceRecording();
+    });
+  }
 }
 
 /** Stop recording and hand back the captured audio blob (null if nothing usable). */
@@ -177,6 +228,8 @@ export function stopVoiceRecording(): Promise<Blob | null> {
     const stream = activeStream;
     activeRecorder = null;
     activeStream = null;
+    endpointWatch?.stop();
+    endpointWatch = null;
     if (!mr || mr.state === 'inactive') {
       stream?.getTracks().forEach((t) => t.stop());
       useVoiceStore.getState().setState('idle');
