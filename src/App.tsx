@@ -3,7 +3,7 @@ import Layout from './components/layout/Layout';
 import SetupWizard from './components/wizard/SetupWizard';
 import ElectronAutoSetup from './components/wizard/ElectronAutoSetup';
 import ClipboardAIToast from './components/ClipboardAIToast';
-import ToastHost from './components/ui/Toast';
+import ToastHost, { toast } from './components/ui/Toast';
 import ErrorBoundary from './components/ErrorBoundary';
 import { useStore } from './store';
 import type { Task } from './types';
@@ -181,6 +181,46 @@ export default function App() {
 
   // Content Creators — Ctrl+Shift+J to open the stage, plus trigger phrases.
   useEffect(() => installCreatorsActivation(), []);
+
+  // A click on a finished-routine notification used to go nowhere: the main
+  // process routed it correctly and nobody was listening. Collect anything that
+  // arrived before this effect ran, then follow live clicks.
+  useEffect(() => {
+    const api = window.henryAPI;
+    if (typeof api?.onNotificationOpenRequest !== 'function') return;
+
+    const openRun = (runId: number) => {
+      // Take the user to the Automations surface, where the run lives.
+      try { useStore.getState().setCurrentView?.('routines' as never); } catch { /* ignore */ }
+      try {
+        localStorage.setItem(
+          'henry:focus-automation-run',
+          JSON.stringify({ runId, at: Date.now() })
+        );
+      } catch { /* ignore */ }
+      toast.info(`Opening run #${runId}`);
+    };
+
+    let disposed = false;
+    void (async () => {
+      // Drain anything clicked while this effect was still mounting.
+      try {
+        for (;;) {
+          const pending = await api.notificationConsumeOpenRequest?.();
+          if (!pending || disposed) break;
+          openRun(pending.runId);
+        }
+      } catch { /* the queue is best-effort */ }
+    })();
+
+    const off = api.onNotificationOpenRequest((req) => {
+      if (!disposed && typeof req?.runId === 'number') openRun(req.runId);
+    });
+    return () => {
+      disposed = true;
+      off?.();
+    };
+  }, []);
 
   // Theme must be applied before anything paints, or the first frame flashes
   // the default accent.

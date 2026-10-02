@@ -1499,6 +1499,10 @@ const henryAPI: Window['henryAPI'] = {
   googleHasCredentials: async () => ({ hasCredentials: false }),
   googleDisconnect: async () => ({ ok: true }),
 
+  syncStartTunnel: async () => ({ ok: false, url: null, error: 'Tunnels need the Henry desktop app.' }),
+  syncStopTunnel: async () => ({ ok: true }),
+  syncGetTunnelUrl: async () => ({ ok: false, url: null }),
+
   onSettingsChanged: () => () => {},
 
   // ── Runtime status (web stubs) ────────────────────────────────────────────

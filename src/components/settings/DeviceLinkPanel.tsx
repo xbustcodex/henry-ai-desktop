@@ -99,16 +99,43 @@ export default function DeviceLinkPanel() {
   async function handleStartTunnel() {
     setTunnelLoading(true);
     try {
-      const result = await syncFetch('/sync/start-tunnel', {});
-      if (result?.url) setTunnelUrl(result.url);
-      else toast.error('cloudflared not installed.\nRun: brew install cloudflared\nThen restart Henry.');
-    } catch { toast.error('Failed to start tunnel'); }
-    finally { setTunnelLoading(false); }
+      // These POSTed '/sync/start-tunnel' and '/sync/stop-tunnel', neither of
+      // which is a route syncBridge serves — so both 404'd, the .catch swallowed
+      // it, and the panel always reported "cloudflared not installed" no matter
+      // what was actually installed. The working API is the IPC pair.
+      const started = await window.henryAPI.syncStartTunnel?.();
+      const url = (started as { url?: string } | null)?.url
+        || (await window.henryAPI.syncGetTunnelUrl?.())?.url
+        || null;
+      if (url) {
+        setTunnelUrl(url);
+      } else {
+        // Say what is actually true: the channel ran, but cloudflared is not
+        // usable on this machine.
+        toast.error(
+          `cloudflared is not available on this machine.\n` +
+          (isWindows()
+            ? 'Install it with: winget install Cloudflare.cloudflared'
+            : 'Install it with: sudo apt-get install cloudflared')
+        );
+      }
+      await loadState();
+    } catch (e) {
+      toast.error('Failed to start tunnel: ' + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setTunnelLoading(false);
+    }
   }
 
   async function handleStopTunnel() {
-    await syncFetch('/sync/stop-tunnel', {});
+    try {
+      await window.henryAPI.syncStopTunnel?.();
+    } catch {
+      // The tunnel process is the goal here; a failed teardown call should not
+      // leave the UI claiming it is still up.
+    }
     setTunnelUrl(null);
+    await loadState();
   }
 
   async function generateCode() {

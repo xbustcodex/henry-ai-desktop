@@ -817,6 +817,13 @@ declare global {
     onRuntimeStatusChanged: (cb: (s: RuntimeStatus) => void) => () => void;
 
     onSettingsChanged: (cb: (e: { key: string; value: string }) => void) => () => void;
+    // Exposed by preload since the tunnel feature landed, but never declared —
+    // which is part of why the DeviceLinkPanel fell back to POSTing routes
+    // that do not exist.
+    syncStartTunnel: () => Promise<{ ok: boolean; url?: string | null; error?: string } | null>;
+    syncStopTunnel: () => Promise<{ ok: boolean } | null>;
+    syncGetTunnelUrl: () => Promise<{ ok: boolean; url?: string | null } | null>;
+
     creatorsGetDemo: () => Promise<CreatorDemo>;
     creatorsSaveDemo: (demo: CreatorDemo) => Promise<{ ok: boolean; demo: CreatorDemo }>;
     creatorsGetOrb: () => Promise<OrbSettings>;

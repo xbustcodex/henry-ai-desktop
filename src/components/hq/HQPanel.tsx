@@ -196,8 +196,14 @@ export default function HQPanel() {
       const cmdMatch = fullText.match(/```(?:bash|sh|shell|zsh)?\s*\n([\s\S]+?)```/);
       if (cmdMatch && getApi()?.computerRunShell) {
         getApi()?.computerRunShell({ command: cmdMatch[1].trim(), timeout: 15000 }).then((r: any) => {
-          if (r?.stdout) {
-            setChatLog(l => [...l, { role: 'system', text: '⚙️ Result: ' + r.stdout.trim().slice(0, 500) }]);
+          // The handler returns `output` (computer.ts:203). This read `stdout`,
+          // which the handler never returns, so auto-run from a code fence never
+          // showed its result even when the command worked.
+          const text = r?.output ?? r?.stdout;
+          if (text) {
+            setChatLog(l => [...l, { role: 'system', text: '⚙️ Result: ' + String(text).trim().slice(0, 500) }]);
+          } else if (r && r.success === false) {
+            setChatLog(l => [...l, { role: 'system', text: '⚙️ Failed: ' + String(r.error || 'no output').slice(0, 300) }]);
           }
         }).catch(() => {});
       }
@@ -580,8 +586,12 @@ function ProcessList() {
 
   useEffect(() => {
     const load = async () => {
-      const r = await (window as any).henryAPI?.computerListProcesses?.().catch(() => null);
-      if (Array.isArray(r)) setProcs(r.slice(0, 80));
+      // The handler returns `{ processes: string[] }` (computer.ts:294). This
+      // did Array.isArray(r), which is always false for an object, so the
+      // process list never populated and computerKillProcess was unreachable.
+      const r: any = await (window as any).henryAPI?.computerListProcesses?.().catch(() => null);
+      const list = Array.isArray(r) ? r : Array.isArray(r?.processes) ? r.processes : [];
+      if (list.length) setProcs(list.slice(0, 80));
     };
     load();
     const t = setInterval(load, 8000);
