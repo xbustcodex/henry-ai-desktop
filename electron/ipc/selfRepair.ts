@@ -16,6 +16,7 @@ import path from 'path';
 import os from 'os';
 import { app, shell } from 'electron';
 import { probeTool, describeProbe } from './toolProbe';
+import { getDbFilePath } from './database';
 import type Database from 'better-sqlite3';
 
 const BREW = '/opt/homebrew/bin/brew';
@@ -234,7 +235,11 @@ function isWindows(): boolean {
 
 export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
   const henryDir = getHenryDir();
-  const henryDbPath = path.join(os.homedir(), 'henry.db');
+  // Ask the database module where it actually lives. This hardcoded
+  // $HOME/henry.db, but Henry stores it under Electron's userData directory,
+  // so the check reported "Database file missing" and offered to repair a
+  // healthy database on every run.
+  const henryDbPath = getDbFilePath();
 
   return [
 
@@ -544,9 +549,14 @@ export function HEALTH_CHECKS(db: Database.Database): HealthCheck[] {
       check: async () => {
         // Check DB file health - the sqlite3 CLI is NOT required for database operation
         // Henry uses better-sqlite3 (native Node.js binding) which works without the CLI
+        if (!henryDbPath) {
+          // Not knowing where the database is is not the same as it being
+          // absent. Never offer to "repair" something we could not look at.
+          return { ok: false, state: 'probe-failed', detail: 'Database location is not known yet — could not verify. This does not mean the database is missing.' };
+        }
         const dbExists = fs.existsSync(henryDbPath);
         if (!dbExists) {
-          return { ok: false, detail: 'Database file missing — will recreate on restart' };
+          return { ok: false, state: 'missing', detail: `Database file not found at ${henryDbPath} — will recreate on restart` };
         }
         try {
           const stat = fs.statSync(henryDbPath);

@@ -3,8 +3,23 @@ import path from 'path';
 
 let db: Database.Database;
 
+let dbFilePath = '';
+
+/**
+ * The real on-disk path of Henry's database.
+ *
+ * The health check used to assume `$HOME/henry.db`, which is not where the
+ * database lives — it is under Electron's userData directory — so the check
+ * *always* reported "Database file missing" and offered to repair a perfectly
+ * healthy database. Exposed from here so there is one source of truth.
+ */
+export function getDbFilePath(): string {
+  return dbFilePath;
+}
+
 export function initDatabase(dataDir: string): Database.Database {
   const dbPath = path.join(dataDir, 'henry.db');
+  dbFilePath = dbPath;
   db = new Database(dbPath);
 
   // Enable WAL mode for better performance
