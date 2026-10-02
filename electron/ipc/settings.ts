@@ -11,6 +11,7 @@
 import { ipcMain } from 'electron';
 import type Database from 'better-sqlite3';
 import { encryptKey, decryptKey, migrateProviderKeys } from './_keyStorage';
+import { guardedEvent } from './validation';
 import { setOpencodeZenCredential } from '../coder/opencode';
 import { log } from '../lib/log';
 
@@ -31,15 +32,22 @@ export function registerSettingsHandlers(db: Database.Database, getMainWindow?: 
     } catch (e) { console.error('[settings:getAll]', e); return {}; }
   });
 
-  ipcMain.handle('settings:save', (_, data: { key: string; value: string }) => {
+  ipcMain.handle('settings:save', guardedEvent('settings:save', (_event, data: { key: string; value: string }) => {
     try {
       db.prepare(
         `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
       ).run(data.key, data.value);
+      // Tell the renderer a setting changed. Previously nothing was notified,
+      // so panels had to poll or simply miss the update.
+      try {
+        getMainWindow?.()?.webContents.send('settings:changed', { key: data.key, value: data.value });
+      } catch (e) {
+        console.warn('[settings:save] could not broadcast change', e);
+      }
       return true;
     } catch (e) { console.error('[settings:save]', e); return false; }
-  });
+  }));
 
   // ── Providers ───────────────────────────────────────────────
 

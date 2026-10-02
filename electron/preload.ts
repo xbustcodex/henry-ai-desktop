@@ -737,6 +737,11 @@ contextBridge.exposeInMainWorld('henryAPI', {
     ipcRenderer.on('runtime:status-changed', l);
     return () => ipcRenderer.removeListener('runtime:status-changed', l);
   },
+  onSettingsChanged: (cb: (e: { key: string; value: string }) => void) => {
+    const l = (_e: unknown, payload: { key: string; value: string }) => cb(payload);
+    ipcRenderer.on('settings:changed', l);
+    return () => ipcRenderer.removeListener('settings:changed', l);
+  },
   voiceSttStatus: (opts?: { refresh?: boolean }) => ipcRenderer.invoke('voice:sttStatus', opts),
   voiceSttSetup: () => ipcRenderer.invoke('voice:sttSetup'),
   onVoiceSttSetupProgress: (cb: (p: unknown) => void) => {

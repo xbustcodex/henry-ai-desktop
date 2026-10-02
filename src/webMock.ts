@@ -1499,6 +1499,8 @@ const henryAPI: Window['henryAPI'] = {
   googleHasCredentials: async () => ({ hasCredentials: false }),
   googleDisconnect: async () => ({ ok: true }),
 
+  onSettingsChanged: () => () => {},
+
   // ── Runtime status (web stubs) ────────────────────────────────────────────
   runtimeGetError: async () => ({ message: null, bootFailed: false, databaseOk: true }),
   onRuntimeStatusChanged: () => () => {},

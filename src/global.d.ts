@@ -816,6 +816,7 @@ declare global {
     googleDisconnect: () => Promise<{ ok: boolean }>;
     onRuntimeStatusChanged: (cb: (s: RuntimeStatus) => void) => () => void;
 
+    onSettingsChanged: (cb: (e: { key: string; value: string }) => void) => () => void;
     creatorsGetDemo: () => Promise<CreatorDemo>;
     creatorsSaveDemo: (demo: CreatorDemo) => Promise<{ ok: boolean; demo: CreatorDemo }>;
     creatorsGetOrb: () => Promise<OrbSettings>;
