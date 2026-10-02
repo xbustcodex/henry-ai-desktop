@@ -47,7 +47,7 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 | 8 Companion | 9 | 0 | 0 | 3 | 0 |
 | 9 Files & Memory | 14 | 0 | 0 | 5 | 0 |
 | 10 Integrations | 14 | 0 | 0 | 4 | 4 |
-| 11 Settings & System | 15 | 0 | 0 | 4 | 3 |
+| 11 Settings & System | 15 | 1 | 0 | 3 | 3 |
 
 ---
 
@@ -264,7 +264,7 @@ guarding, `_denyDangerous`).
 | 11.2 | API Key Management | `auth:redeem-*` | ours encrypted `_keyStorage` | keep ours (ours is better: local encrypted) | different (better) |
 | 11.3 | System Diagnostics | `runtime:status-changed` push | sync `runtime:get-status` | **no push — renderer can't learn runtime died** | missing |
 | 11.4 | Environment Detection | paid | ours `toolProbe` quad-state | — | **complete (fixed)** |
-| 11.5 | **Dependency Checks** | paid | ours `toolProbe`: installed/missing/unresolved/probe-failed, never auto-fixes on probe failure | **fixed; needs installed-package re-verify** | **partial** |
+| 11.5 | **Dependency Checks** | paid | ours `toolProbe`: installed/missing/unresolved/probe-failed, never auto-fixes on probe failure | **fixed + verified on installed pkg 2026-10-02: node v24.21.0, git 2.55.0, ffmpeg, python3 all ok, zero phantom installs** | **CLOSED** |
 | 11.6 | Update System | `autoUpdater` | ours | keep | complete |
 | 11.7 | Export / Import | paid | ours | keep | complete |
 | 11.8 | Security Settings | `secure-values.ts` | ours `_keyStorage` | keep ours | different (better) |
@@ -285,8 +285,9 @@ guarding, `_denyDangerous`).
 | Windows lag / "Not Responding" | root cause fixed (`e15d5ad`); **not re-verified under concurrent use on a fresh install** |
 | Windows dependency detection | fixed (`e15d5ad`), verified once; ffmpeg/python report `ok` with empty version |
 | OpenCode/Zen | discovery fixed (`e15d5ad`), parsing fixed (`f0eb355`); **not yet packaged/verified together** |
-| `sqlite3: Database file missing` on every diagnostic run | undiagnosed |
-| Routines fail: `Model "deepseek-r1:7b" isn't loaded in Ollama` | undiagnosed |
+| ~~`sqlite3: Database file missing`~~ | **CLOSED** — check tested `$HOME/henry.db` but the DB is at `<userData>/henry-workspace/henry.db`; now uses one source of truth (`04df661`). Needs installed-package re-verify |
+| Routines fail: `Model "deepseek-r1:7b" isn't loaded in Ollama` | undiagnosed — Ollama not running in the last test session |
+| ffmpeg/python3 report `ok` with an **empty version string** | open — installed but version unread; needs tightening |
 | Two contradictory `screen_recording` rows | undiagnosed |
 
 ## Legend
