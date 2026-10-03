@@ -198,8 +198,14 @@ These are real, recorded in their ledger rows, and must not be quietly closed:
    if nothing in `src/` subscribes, an agent turn still displays as one block. A channel
    with no consumer is not a feature. This is the **fourth** instance of that pattern here,
    after the knowledge tools, the `knowledge:*` preload surface, and the opencode bridge.
-3. **`confirmDeleteOutsideHome`** — if it still has no call site, the Security panel contains
-   a switch that changes UI state only.
+3. ~~**`confirmDeleteOutsideHome`**~~ — **resolved.** Investigation showed the setting had
+   no semantics to have: `evaluateDeleteRequest` refuses an outside-home target
+   unconditionally before `confirmed` is consulted, and `confineToHome` never produces one,
+   so an outside-home delete has exactly one possible answer. Rather than manufacture a call
+   site that could weaken confinement to make the toggle appear live, the toggle was
+   **removed** and the switch deleted from the policy, panel, types and web mock. The seven
+   `computer:*` file-channel schemas were kept — they are an independent, mutation-proven fix,
+   and see §2.6 for why they turned out to be the *only* validation those channels received.
 
 ---
 
@@ -215,3 +221,31 @@ These are real, recorded in their ledger rows, and must not be quietly closed:
 - A rejection from an IPC call is a fact about **the call that was made**, not proof of a
   defect. Two false findings in this run — one committed as a regression — came from reading
   a rejection without reproducing it. Check the preload signature before calling.
+
+
+### 2.6 The preload bridge is the API surface — and was not
+
+`electron/preload.ts` exposed a generic escape hatch:
+
+```ts
+invoke: (channel: string, ...args: unknown[]) => ipcRenderer.invoke(channel, ...args)
+```
+
+That single line made **every** registered IPC channel reachable from the renderer regardless
+of whether preload named it, which made the per-channel bridges decorative and reduced
+`installIpcBoundary` to the only validation any channel received.
+
+It was discovered while working on `confirmDeleteOutsideHome`: `computer:fileDelete` is a
+genuinely destructive channel with **no named preload bridge**, reachable only through this
+line, and with no `channelSchemas` entry at all. The schemas added for it were therefore not
+defence in depth behind a named API — they were the only validation it received.
+
+All three renderer callers of `invoke` used channels that already had named bridges; they
+reached for the passthrough because `invoke` is not declared in `global.d.ts`, so the `as any`
+they already used let it slip through untyped. All three were migrated and the passthrough
+deleted.
+
+**Consequence for review:** with the escape hatch gone, the IPC boundary is no longer
+defence-in-depth. It is the boundary. A channel without a schema has, in effect, only the
+baseline `sanitizePayload` and whatever the handler checks for itself. Coverage is measured by
+`scripts/ipc-coverage.mjs`, not asserted.

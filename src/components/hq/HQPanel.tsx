@@ -103,7 +103,7 @@ export default function HQPanel() {
   useEffect(() => {
     const loadApps = async () => {
       try {
-        const r = await getApi()?.invoke('computer:listApps').catch(() => null);
+        const r = await getApi()?.computerListApps().catch(() => null);
         if (r?.apps) setDiscoveredApps(r.apps);
       } catch {}
     };

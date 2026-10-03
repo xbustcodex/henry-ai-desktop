@@ -235,6 +235,60 @@ export const channelSchemas: Record<string, ChannelSchema> = {
   'fs:writeFile': z
     .object({ path: nonEmpty(4096), content: z.string().max(64 * 1024 * 1024) })
     .passthrough(),
+ 
+  // ── Computer file operations ───────────────────────────────────────────
+  // These have NO named bridge in preload, which used to look like they were
+  // unreachable. They are not: `preload.ts` exposes a generic
+  // `invoke(channel, ...args)` for panels that need direct IPC, so every
+  // registered handler is renderer-reachable by channel-name string. With no
+  // schema here these channels got the baseline (size, depth, prototype
+  // poisoning) and NOTHING else — their handlers' ad-hoc `typeof` checks were
+  // the entire validation surface. `computer:fileDelete` is the destructive one.
+  'computer:newFolder': z.object({ path: nonEmpty(4096) }).passthrough(),
+  'computer:fileBrowse': z
+    .object({
+      path: z.string().max(4096).optional(),
+      showHidden: z.boolean().optional(),
+      limit: z.number().int().min(1).max(100_000).optional(),
+    })
+    .passthrough(),
+  'computer:fileSearch': z
+    .object({
+      query: nonEmpty(1024),
+      root: z.string().max(4096).optional(),
+      includeHidden: z.boolean().optional(),
+      content: z.boolean().optional(),
+      maxDepth: finiteNumber.optional(),
+      maxResults: finiteNumber.optional(),
+    })
+    .passthrough(),
+  // A transfer is two paths, and BOTH are confined before anything is moved —
+  // see the handlers. `overwrite` is a real clobber switch, so it is a boolean
+  // here rather than being coerced out of whatever the renderer sent.
+  'computer:fileCopy': z
+    .object({ from: nonEmpty(4096), to: nonEmpty(4096), overwrite: z.boolean().optional() })
+    .passthrough(),
+  'computer:fileMove': z
+    .object({ from: nonEmpty(4096), to: nonEmpty(4096), overwrite: z.boolean().optional() })
+    .passthrough(),
+  // A new NAME, never a path: separators and device names are refused by the
+  // handler, and the schema bounds it here so a megabyte-long "name" never
+  // reaches the filesystem layer at all.
+  'computer:fileRename': z.object({ path: nonEmpty(4096), newName: nonEmpty(255) }).passthrough(),
+  // The destructive one. `confirmed` is the renderer's claim that a human said
+  // yes — and it is exactly that, a claim. It buys consent for a target INSIDE
+  // home; it cannot buy permission, because `confineToHome` refuses to produce
+  // an outside-home path at all and `evaluateDeleteRequest` independently
+  // refuses any target whose real location is outside home. That is why no
+  // switch is needed or possible here, and why one was removed.
+  'computer:fileDelete': z
+    .object({
+      path: nonEmpty(4096),
+      recursive: z.boolean().optional(),
+      permanent: z.boolean().optional(),
+      confirmed: z.boolean().optional(),
+    })
+    .passthrough(),
 
   // ── Provider configuration / credentials ───────────────────────────────
   'providers:save': z
@@ -980,7 +1034,7 @@ export function confirmationRequired(channel: string): ConfirmationRequired {
     error: 'This action needs your confirmation before it can run.',
   };
 }
-
+ 
 /**
  * How the boundary consults the security policy.
  *

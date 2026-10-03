@@ -55,7 +55,17 @@ function mediaDir(): string {
 }
 
 function resolveStoredPath(storedName: string): string {
-  if (!/^[A-Za-z0-9._-]+$/.test(storedName) || storedName.includes('..')) {
+  // `..` is load-bearing here and is NOT covered by the regex: `.` sits inside
+  // `[A-Za-z0-9._-]`, so `..` matches the pattern perfectly well. It needs its
+  // own clause, without which a corrupt row resolves to the parent of the media
+  // directory and `media:delete` unlinks whatever sits beside it.
+  //
+  // `.` is refused for the same reason from the other direction: `path.join(dir,
+  // '.')` is `dir` itself, so it names the media DIRECTORY rather than a file in
+  // it. It stays inside the root, so it is not an escape — but it is still not a
+  // file name, and handing it to `unlinkSync` produces a failure the caller
+  // would otherwise read as success.
+  if (!/^[A-Za-z0-9._-]+$/.test(storedName) || storedName.includes('..') || storedName === '.') {
     throw new Error('Invalid media reference.');
   }
   return path.join(mediaDir(), storedName);
@@ -206,8 +216,18 @@ export function registerMediaLibraryHandlers(
   ipcMain.handle('media:delete', (_e, id: string) => {
     try {
       const row = db.prepare('SELECT stored_name FROM media_library WHERE id = ?').get(id) as { stored_name: string } | undefined;
-      if (row) {
-        try { fs.unlinkSync(resolveStoredPath(row.stored_name)); } catch { /* already gone */ }
+      // Resolved OUTSIDE the unlink try/catch, deliberately.
+      //
+      // `fs.unlinkSync` throws ENOENT when the file is genuinely already gone,
+      // and that is worth ignoring. But it was also catching what
+      // `resolveStoredPath` throws for an invalid stored name, which is a
+      // REFUSAL and not an "already gone". Swallowing it meant a hostile or
+      // corrupt `stored_name` deleted the library row and returned `{ok:true}`
+      // for a file that was never touched — the caller was told the delete
+      // succeeded while the bytes stayed on disk.
+      const target = row ? resolveStoredPath(row.stored_name) : null;
+      if (target) {
+        try { fs.unlinkSync(target); } catch { /* already gone */ }
       }
       db.prepare('DELETE FROM media_library WHERE id = ?').run(id);
       return { ok: true };

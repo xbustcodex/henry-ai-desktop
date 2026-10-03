@@ -336,8 +336,22 @@ contextBridge.exposeInMainWorld('henryAPI', {
 
   // ── Memory — Legacy (backward-compatible) ─────────────────
   saveFact: (fact: Record<string, unknown>) => ipcRenderer.invoke('memory:saveFact', fact),
-  // Generic invoke — for panels that need direct IPC access
-  invoke: (channel: string, ...args: unknown[]) => ipcRenderer.invoke(channel, ...args),
+  // REMOVED: `invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args)`.
+  //
+  // That generic escape hatch made every one of the registered IPC channels
+  // reachable from the renderer regardless of whether preload named it, which
+  // made the per-channel bridges decorative and reduced installIpcBoundary to
+  // the only validation any channel received — including destructive ones like
+  // `computer:fileDelete`, which had no named bridge and was reachable purely
+  // through this line. The seven `computer:*` file-channel schemas added in the
+  // same pass were consequently the sole validation for those channels, not
+  // defence in depth behind a named API.
+  //
+  // All three callers were migrated to the named bridges that already existed
+  // for those channels: HQPanel `computer:listApps` → `computerListApps`, and
+  // HealthPanel `henry:diagnostic:last`/`run` → `getLastDiagnostic`/`runDiagnostic`.
+  // They reached for `invoke` only because it is not declared in global.d.ts, so
+  // the `as any` they already used let it slip through untyped.
   // Reminders (SQLite persistent)
   remindersList: () => ipcRenderer.invoke('reminders:list'),
   remindersSave: (r: Record<string,unknown>) => ipcRenderer.invoke('reminders:save', r),

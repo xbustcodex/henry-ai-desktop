@@ -1280,6 +1280,14 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
     // Delete protection, in order: refuse protected targets unconditionally,
     // then require confirmation, then trash rather than unlink. See
     // evaluateDeleteRequest in src/platform/fileOps.ts.
+    //
+    // There is deliberately NO policy switch in front of this. `confinedPath`
+    // refuses to produce an outside-home path, and `evaluateDeleteRequest`
+    // independently refuses any target whose real location is outside home —
+    // both unconditionally, before `confirmed` is consulted. So an outside-home
+    // delete has exactly one possible answer, and a "confirm before deleting
+    // outside home" toggle could only have been either a no-op or a licence to
+    // delete anywhere. It was removed rather than wired to something.
     const resolved = confinedPath(params?.path);
     if (!resolved.ok) return { ok: false, error: resolved.error };
     const decision = files.evaluateDeleteRequest({

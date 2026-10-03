@@ -256,6 +256,14 @@ export function knowledgeTools(): ToolDefinition[] {
         properties: {
           query: { type: 'string', description: 'What to recall, in natural language.' },
           k: { type: 'number', description: 'Max memories to return (default 8).' },
+          types: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              "Restrict to these personal_memory.memory_type values — " +
+              "['lesson'] returns only recorded lessons and standing preferences, " +
+              "which is the direct way to ask 'what has the user told me to always do?'.",
+          },
         },
         required: ['query'],
         additionalProperties: false,
@@ -272,7 +280,9 @@ export function knowledgeTools(): ToolDefinition[] {
           if (kb.store.stats().chunks === 0) {
             await recall.reindexAllMemory();
           }
-          const result = await recall.recall(query, k);
+          const result = await recall.recall(query, k, {
+            types: Array.isArray(params.types) ? params.types.map(String) : undefined,
+          });
           return ok({
             query,
             count: result.memories.length,
@@ -280,9 +290,19 @@ export function knowledgeTools(): ToolDefinition[] {
             note: result.note,
             memories: result.memories.map((m) => ({
               table: m.table,
+              // Carried so the caller can tell a lesson from a passing
+              // preference without re-reading the detail text.
+              memoryType: m.memoryType,
+              trigger: m.trigger,
               label: m.label,
               detail: m.detail,
               score: Number(m.score.toFixed(4)),
+              ranking: {
+                semantic: Number(m.ranking.semantic.toFixed(4)),
+                significance: Number(m.ranking.significance.toFixed(4)),
+                priority: Number(m.ranking.priority.toFixed(4)),
+                triggerSignal: Number(m.ranking.triggerSignal.toFixed(4)),
+              },
             })),
           });
         } catch (e) {

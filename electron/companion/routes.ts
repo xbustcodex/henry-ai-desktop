@@ -17,7 +17,13 @@
  *   GET  /sync/companion/memory-graph — alias, descriptive name
  *   GET  /sync/companion/voice        — voice profile + the TTS params to use
  *   GET  /sync/companion/search       — cross-device memory search (8.8)
+ *   POST /sync/companion/search-result— a peer answering that search (8.8)
  *   GET  /sync/companion/summaries    — latest daily/weekly rollup (8.7)
+ *
+ * `deps.authenticatedDeviceId` is required, not advisory. syncBridge already
+ * refuses an untokened request before it ever calls this function; requiring
+ * the caller's identity here means a future caller that forgets that step gets
+ * a 401 rather than the entire companion surface.
  *
  * Returns true when the request was handled, so the caller can `return`.
  */
@@ -27,10 +33,15 @@ import type Database from 'better-sqlite3';
 import { buildMemoryGraph } from '../ipc/memoryGraph';
 import { getMemoryRecallService } from '../knowledge/handlers';
 import type { CompanionProfileService } from './personality';
+import type { PeerSearchBridge, PeerSearchOutcome } from './peerSearch';
 
 export interface CompanionRouteDeps {
   db: Database.Database;
   companion: CompanionProfileService;
+  /** The paired device this request came from. Absent ⇒ refused. */
+  authenticatedDeviceId?: string;
+  /** How to reach the other paired devices. Absent ⇒ peer leg reports absent. */
+  peerSearch?: PeerSearchBridge;
 }
 
 /** Minimal response writer, structurally compatible with syncBridge's. */
@@ -97,6 +108,7 @@ export const COMPANION_ROUTE_PATHS = [
   '/sync/companion/voice',
   '/sync/companion/search',
   '/sync/companion/summaries',
+  '/sync/companion/search-result',
 ] as const;
 
 export async function handleCompanionRoute(
@@ -109,6 +121,13 @@ export async function handleCompanionRoute(
   if (!urlPath.startsWith('/sync/companion/')) return false;
   if (!COMPANION_ROUTE_PATHS.includes(urlPath as (typeof COMPANION_ROUTE_PATHS)[number])) {
     json(res, 404, { error: 'Unknown companion route' });
+    return true;
+  }
+  // Defence in depth. syncBridge validates the device token before calling this
+  // function, so in production this branch is unreachable — which is the point:
+  // a future caller that reaches here without an identity is refused, not served.
+  if (!deps.authenticatedDeviceId) {
+    json(res, 401, { error: 'Unauthorized' });
     return true;
   }
 
@@ -199,7 +218,72 @@ export async function handleCompanionRoute(
           return true;
         }
         const result = await recall.recall(query, limit);
-        json(res, 200, { query, ...result });
+
+        // The peer leg. This is what makes the route cross-device rather than
+        // a local search wearing a cross-device label: every other connected
+        // device is actually asked, and each answer — or failure to answer —
+        // is reported.
+        const bridge = deps.peerSearch;
+        const peers = bridge?.connectedDevices(deps.authenticatedDeviceId) ?? [];
+        const outcomes: PeerSearchOutcome[] = bridge
+          ? await Promise.all(peers.map((id) => bridge.search(id, query, limit)))
+          : [];
+        const remoteMemories = outcomes.flatMap((o) =>
+          o.hits.map((hit) => ({
+            ...hit,
+            // The device that holds this memory. Without it a hit from a phone
+            // is indistinguishable from one on the desktop.
+            deviceId: o.deviceId,
+            label: `${hit.label} (on ${o.deviceId})`,
+          })),
+        );
+        const unreachable = outcomes.filter((o) => o.status !== 'answered');
+
+        json(res, 200, {
+          query,
+          ...result,
+          crossDevice: {
+            peersAsked: peers.length,
+            peersAnswered: outcomes.filter((o) => o.status === 'answered').length,
+            peersUnreachable: unreachable.map((o) => o.deviceId),
+            outcomes: outcomes.map((o) => ({ deviceId: o.deviceId, status: o.status, hits: o.hits.length, note: o.note })),
+            memories: remoteMemories,
+          },
+          // Never let "nobody was there" read as "nothing matched". If a peer
+          // could not be searched, the response says so in words.
+          note: [
+            result.note,
+            ...(peers.length === 0
+              ? ['No other device is connected, so this searched this device only.']
+              : unreachable.length
+                ? unreachable.map((o) => o.note).filter((n): n is string => Boolean(n))
+                : []),
+          ]
+            .filter(Boolean)
+            .join(' ') || undefined,
+        });
+        return true;
+      }
+
+      // ── A paired device answering a cross-device search (8.8) ──────────
+      case '/sync/companion/search-result': {
+        if (req.method !== 'POST') {
+          json(res, 405, { error: 'POST required' });
+          return true;
+        }
+        const body = await readJsonBody(req);
+        if (!body) {
+          json(res, 400, { error: 'Bad request' });
+          return true;
+        }
+        const outcome = deps.peerSearch?.deliver(body, deps.authenticatedDeviceId);
+        if (!outcome) {
+          json(res, 503, { error: 'Peer search is not available' });
+          return true;
+        }
+        // A reply that matched nothing pending is reported as such rather than
+        // accepted, so a stale or forged answer cannot look successful.
+        json(res, outcome.accepted ? 202 : 404, outcome.accepted ? { accepted: true } : { error: outcome.reason });
         return true;
       }
 

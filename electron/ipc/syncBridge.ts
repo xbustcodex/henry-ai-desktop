@@ -66,6 +66,10 @@ import { PAIR_HTML as REMOTE_PAIR_HTML, CONTROL_HTML as REMOTE_CONTROL_HTML } fr
 // graph, cross-device search). Mounted below, AFTER the device-token gate.
 import { handleCompanionRoute } from '../companion/routes';
 import { getCompanionProfileService } from '../companion/handlers';
+// Cross-device memory search (row 8.8). The desktop can push to a paired
+// device but could never ask one a question, so the peer leg of the search
+// needs this correlation layer over the SSE stream.
+import { PeerSearchRegistry, type PeerSearchBridge } from '../companion/peerSearch';
 
 /* === henry-remote-control v2-pencil === */
 import {
@@ -406,6 +410,32 @@ function pushToDevice(targetDeviceId: string, event: Omit<SyncEvent,'id'|'timest
     }
   }
 }
+
+/**
+ * Cross-device memory search (row 8.8), over the SSE stream paired devices
+ * already hold. `pushToDevice` only ever pushed, so the desktop could tell a
+ * phone something but could not ask it anything; this registry correlates a
+ * question with the answer that device posts back on
+ * `POST /sync/companion/search-result`.
+ *
+ * `memory_search_request` / `memory_search_result` are not yet in the
+ * `SyncEventType` union in src/sync/types.ts — that addition is required for
+ * the companion app to implement its half, and the cast below is the one place
+ * it is felt here.
+ */
+const peerSearchRegistry = new PeerSearchRegistry({
+  send: (deviceId, event) =>
+    pushToDevice(deviceId, event as unknown as Omit<SyncEvent, 'id' | 'timestamp' | 'fromDevice'>),
+  isConnected: (deviceId) => sseClients.some((c) => c.deviceId === deviceId),
+});
+
+const peerSearchBridge: PeerSearchBridge = {
+  connectedDevices: (exceptDeviceId) => [
+    ...new Set(sseClients.map((c) => c.deviceId).filter((id) => id !== exceptDeviceId)),
+  ],
+  search: (deviceId, query, limit) => peerSearchRegistry.request(deviceId, query, limit),
+  deliver: (body, fromDevice) => peerSearchRegistry.deliver(body, fromDevice),
+};
 
 
 function pushToAll(event: SyncEvent): void {
@@ -1518,6 +1548,11 @@ self.addEventListener('fetch', (event) => {
     const handled = await handleCompanionRoute(req, res, urlPath, url, {
       db: _db as import('better-sqlite3').Database,
       companion: getCompanionProfileService(),
+      // The token was validated above; this is the identity it resolved to,
+      // handed on so routes.ts can refuse an anonymous caller and leave the
+      // asking device out of its own cross-device search.
+      authenticatedDeviceId: deviceId,
+      peerSearch: peerSearchBridge,
     });
     if (handled) return;
   }

@@ -1210,7 +1210,6 @@ export interface HenrySecurityPolicy {
   confirmSilentTools: boolean;
   redactLogs: boolean;
   allowLanSync: boolean;
-  confirmDeleteOutsideHome: boolean;
   appLock: boolean;
   persistConversations: boolean;
   persistMemory: boolean;

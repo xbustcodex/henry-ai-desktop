@@ -7,9 +7,11 @@
  * 404 for anything else under the prefix, and never leaks a token or a pairing
  * secret in a response body.
  *
- * The end-to-end "no token, no route" assertion lives in syncBridge and
- * depends on the insertion point in that file, so the guard test below is a
- * structural check on the module contract that must hold for it to be safe.
+ * `handleCompanionRoute` also refuses any caller that has no
+ * `authenticatedDeviceId`, so the refusal is asserted here behaviourally
+ * rather than inferred from where the mount sits in syncBridge — see
+ * peerSearch.test.ts for the 8.8 case. syncBridge's own token gate remains the
+ * primary check; this is the second one.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -77,7 +79,33 @@ async function call(method: string, path: string, body?: unknown, query = ''): P
     res,
     path,
     new URL(`http://127.0.0.1:4242${path}${query}`),
-    { db: db as never, companion },
+    { db: db as never, companion, authenticatedDeviceId: 'device-phone-1' },
+  );
+  expect(handled).toBe(true);
+  return res;
+}
+
+/**
+ * Call the route surface as a paired device. `handleCompanionRoute` now
+ * requires the identity syncBridge resolved, so the default here is a device
+ * that has already passed the token gate — the situation production is in.
+ */
+async function callAs(
+  method: string,
+  path: string,
+  body?: unknown,
+  query = '',
+  deviceId: string | undefined = 'device-phone-1',
+): Promise<FakeRes> {
+  const req = new FakeReq(method, body);
+  req.pump();
+  const res = new FakeRes();
+  const handled = await handleCompanionRoute(
+    req as never,
+    res,
+    path,
+    new URL(`http://127.0.0.1:4242${path}${query}`),
+    { db: db as never, companion, authenticatedDeviceId: deviceId },
   );
   expect(handled).toBe(true);
   return res;
@@ -185,7 +213,7 @@ describe('Companion routes — context (8.3 / 8.4 / 8.5)', () => {
     });
     const res = new FakeRes();
     await handleCompanionRoute(req as never, res, '/sync/companion/emotion', new URL('http://x/sync/companion/emotion'), {
-      db: db as never, companion,
+      db: db as never, companion, authenticatedDeviceId: 'device-phone-1',
     });
     expect(res.status).toBe(400);
   });

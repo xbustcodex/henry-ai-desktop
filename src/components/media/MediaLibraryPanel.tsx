@@ -76,7 +76,13 @@ export default function MediaLibraryPanel() {
   };
 
   const remove = async (item: MediaItem) => {
-    await window.henryAPI.mediaDelete?.(item.id);
+    const res = await window.henryAPI.mediaDelete?.(item.id);
+    // `mediaDelete` RESOLVES with `{ok:false, error}` for a malformed id, a
+    // file that is already gone, or a permissions error — it does not throw.
+    // Awaiting it and reloading regardless meant the panel re-rendered as if the
+    // delete had worked: the item was still listed, and nothing said why.
+    // `importMedia` and `openItem` above both check `res?.ok`; this one did not.
+    if (!res?.ok) { toast.error(res?.error || 'Could not delete that item.'); return; }
     await load();
   };
 

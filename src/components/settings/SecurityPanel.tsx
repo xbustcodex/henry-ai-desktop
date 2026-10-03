@@ -50,11 +50,6 @@ const CONFIRMATION: SwitchRow[] = [
         : `Off — ${n} tools run without asking. Turn this on to be asked every time.`;
     },
   },
-  {
-    key: 'confirmDeleteOutsideHome',
-    label: 'Confirm deletes outside your home folder',
-    help: 'Asks before Henry removes a file that lives outside your home directory.',
-  },
 ];
 
 /*

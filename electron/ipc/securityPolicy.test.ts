@@ -40,7 +40,6 @@ function freshDb(): FakeDb {
 describe('defaults', () => {
   it('requires confirmation for shell work out of the box', () => {
     expect(DEFAULT_POLICY.confirmShell).toBe(true);
-    expect(DEFAULT_POLICY.confirmDeleteOutsideHome).toBe(true);
   });
 
   it('redacts secrets in logs out of the box', () => {

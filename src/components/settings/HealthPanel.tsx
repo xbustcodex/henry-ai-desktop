@@ -124,7 +124,7 @@ export default function HealthPanel() {
     // Load last report on mount
     void (async () => {
       try {
-        const last = await getApi()?.invoke('henry:diagnostic:last');
+        const last = await getApi()?.getLastDiagnostic();
         if (last) { setReport(last); setLastRun(last.timestamp); }
       } catch { /* no report yet */ }
     })();
@@ -156,7 +156,7 @@ export default function HealthPanel() {
   async function runNow() {
     setRunning(true);
     try {
-      const r = await getApi()?.invoke('henry:diagnostic:run');
+      const r = await getApi()?.runDiagnostic();
       setReport(r); setLastRun(r.timestamp);
     } catch { /* ignore */ }
     setRunning(false);

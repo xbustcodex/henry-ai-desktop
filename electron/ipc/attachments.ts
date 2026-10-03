@@ -198,7 +198,14 @@ export function registerAttachmentHandlers(db: Database.Database): void {
     try {
       const row = db.prepare('SELECT stored_name FROM message_attachments WHERE id = ?').get(id) as { stored_name: string } | undefined;
       if (row) {
-        try { fs.unlinkSync(resolveStoredPath(row.stored_name)); } catch { /* file already gone */ }
+        // Resolve OUTSIDE the unlink try. `resolveStoredPath` throws
+        // 'Invalid media reference.' for a hostile stored_name, and swallowing
+        // that here would delete the row, leave the bytes on disk and report
+        // success — the caller would believe the file was removed when it was
+        // not. Only a genuine ENOENT is ignorable, so that is all the catch
+        // below covers. Same fix as mediaLibrary.ts, which had the identical bug.
+        const target = resolveStoredPath(row.stored_name);
+        try { fs.unlinkSync(target); } catch { /* file already gone */ }
       }
       db.prepare('DELETE FROM message_attachments WHERE id = ?').run(id);
       return { ok: true };

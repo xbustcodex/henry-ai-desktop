@@ -35,7 +35,6 @@ import type Database from 'better-sqlite3';
  * `confirmSilentTools` escalate silent-tier agent tools to the confirm gate
  * `redactLogs`        strip secrets from anything written to the app log
  * `allowLanSync`      bind the companion server to 0.0.0.0 instead of loopback
- * `confirmDeleteOutsideHome`  ask before deleting a path outside the home dir
  * `appLock`           require a PIN before the renderer gets a usable session
  * `persistConversations`      write chat messages to disk at all
  * `persistMemory`     write memory facts/summaries to disk at all
@@ -48,7 +47,6 @@ export type SecurityPolicy = {
   confirmSilentTools: boolean;
   redactLogs: boolean;
   allowLanSync: boolean;
-  confirmDeleteOutsideHome: boolean;
   appLock: boolean;
   persistConversations: boolean;
   persistMemory: boolean;
@@ -87,7 +85,6 @@ export const DEFAULT_POLICY: Readonly<SecurityPolicy> = Object.freeze({
   confirmSilentTools: false,
   redactLogs: true,
   allowLanSync: false,
-  confirmDeleteOutsideHome: true,
   appLock: false,
   persistConversations: true,
   persistMemory: true,

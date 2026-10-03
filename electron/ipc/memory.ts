@@ -20,6 +20,8 @@ import type { HenryLeanMemoryParts } from '../../src/types';
 import { registerKnowledgeHandlers, getMemoryRecallService, type MemoryRecallResult } from '../knowledge/handlers';
 import { registerCompanionHandlers } from '../companion/handlers';
 import { policyFlag } from './securityPolicy';
+import { buildRollup, windowFor, type RollupPeriod } from '../knowledge/rollup';
+import type { SqlDatabase } from '../vector/sql';
 
 let db: Database.Database;
 
@@ -973,6 +975,61 @@ export function registerMemoryHandlers(database: Database.Database) {
     } catch (e: unknown) {
       console.error('[memory:getMemorySummaries]', e instanceof Error ? e.message : String(e));
       return null as any;
+    }
+  });
+
+  /**
+   * Build a daily or weekly rollup from the records this database already
+   * holds, and persist it so `memory:getMemorySummaries` and
+   * `GET /sync/companion/summaries` both have something to return.
+   *
+   * Deterministic end to end: no model call, and `now` is a parameter rather
+   * than a clock read so the same window always yields the same text. That is
+   * what makes the output something a test — or a person — can check instead
+   * of merely take on trust.
+   *
+   * Idempotent by (summary_type, period_label): a second call for the same
+   * window returns the stored row unless `regenerate` is set, so opening the
+   * view twice does not fill the table with copies.
+   *
+   * Honours the `persistMemory` privacy switch: with the switch off the rollup
+   * is still computed and returned, but nothing is written — the same
+   * contract `memory:saveMemorySummary` already follows.
+   */
+  ipcMain.handle('memory:generateRollup', async (_e, opts: {
+    period?: 'daily' | 'weekly'; regenerate?: boolean;
+  } = {}) => {
+    const period: RollupPeriod = opts.period === 'weekly' ? 'weekly_rollup' : 'daily_rollup';
+    try {
+      const window = windowFor(period, new Date());
+      const existing = db
+        .prepare('SELECT * FROM memory_summaries WHERE summary_type = ? AND period_label = ? ORDER BY created_at DESC LIMIT 1')
+        .get(period, window.label) as Record<string, unknown> | undefined;
+      if (existing && !opts.regenerate) {
+        return { id: existing.id, generated: false, persisted: true, rollup: existing };
+      }
+
+      // better-sqlite3's handle and the narrow `SqlDatabase` port share no
+      // exported type; this handle satisfies both `prepare` and `exec`.
+      const rollup = buildRollup(db as unknown as SqlDatabase, period, window);
+      if (!policyFlag('persistMemory')) {
+        return { id: null, generated: true, persisted: false, rollup };
+      }
+
+      const id = crypto.randomUUID();
+      db.prepare(`
+        INSERT INTO memory_summaries
+          (id, summary_type, period_label, summary, linked_memory_ids_json, linked_project_ids_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(id, rollup.summaryType, rollup.periodLabel, rollup.markdown,
+             JSON.stringify(rollup.linkedMemoryIds),
+             JSON.stringify(rollup.linkedProjectIds),
+             new Date().toISOString());
+      return { id, generated: true, persisted: true, rollup: { ...rollup, id } };
+    } catch (e: unknown) {
+      const error = e instanceof Error ? e.message : String(e);
+      console.error('[memory:generateRollup]', error);
+      return { id: null, generated: false, persisted: false, error };
     }
   });
 

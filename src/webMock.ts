@@ -62,7 +62,6 @@ const WEB_SECURITY_DEFAULTS: WebSecurityPolicy = {
   confirmSilentTools: false,
   redactLogs: false,
   allowLanSync: false,
-  confirmDeleteOutsideHome: false,
   appLock: false,
   persistConversations: false,
   persistMemory: false,
