@@ -132,15 +132,39 @@ function toolCallFromObject(obj: unknown): ParsedToolCall | undefined {
 }
 
 /**
+ * Where a piece of text came from. Mining free text for a tool call is only
+ * ever safe on text the MODEL AUTHORED.
+ *
+ * It is not safe on anything the model merely read: a `web_fetch_page` result,
+ * an email body, a file on disk. A page containing
+ * `{"name":"run_shell","arguments":{"command":"..."}}` would otherwise become
+ * an executed command — a retrieved-content prompt-injection execution path
+ * that bypasses every safety tier Henry has, because the tool would arrive as
+ * a legitimate model decision.
+ *
+ * The parameter is required and narrow on purpose: a caller cannot reach this
+ * function without stating which kind of text it holds.
+ */
+export type ToolCallTextSource = 'model-output';
+
+/**
  * Pull tool calls out of free text. Handles the three shapes seen live:
  * the whole message is one JSON object, a ```json fenced block, or a JSON
  * object embedded in surrounding prose. The lifted text is removed from the
  * content so the user does not see raw JSON as the assistant's reply.
+ *
+ * `source` must be 'model-output'. Anything else returns the text untouched
+ * with no tool calls, so a future caller reaching for this on retrieved
+ * content gets a no-op rather than an execution path.
  */
-export function parseInlineToolCalls(text: string): {
+export function parseInlineToolCalls(
+  text: string,
+  source: ToolCallTextSource
+): {
   content: string;
   toolCalls: ParsedToolCall[];
 } {
+  if (source !== 'model-output') return { content: text ?? '', toolCalls: [] };
   if (!text || !text.includes('{')) return { content: text ?? '', toolCalls: [] };
 
   // `span` is the exact text to remove from the reply; `json` is what to parse.

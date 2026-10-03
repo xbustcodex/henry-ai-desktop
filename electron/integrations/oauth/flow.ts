@@ -239,6 +239,51 @@ export async function startCallbackListener(
       return;
     }
 
+    /**
+     * DNS-rebinding defence. The callback ports are fixed and well known, so a
+     * hostile page could resolve its own hostname to 127.0.0.1 and reach this
+     * listener through the browser. Nothing here is secret to a rebinding
+     * attack — the `state` check below is what actually protects the flow — but
+     * a request whose Host is not a loopback literal did not come from the
+     * provider's redirect, and refusing it costs nothing.
+     */
+    const boundPort = (() => {
+      const address = server.address();
+      return typeof address === 'object' && address ? address.port : provider.callbackPort;
+    })();
+    const allowedHosts = new Set([
+      `127.0.0.1:${boundPort}`,
+      `localhost:${boundPort}`,
+      '127.0.0.1',
+      'localhost',
+    ]);
+    if (!req.headers.host || !allowedHosts.has(req.headers.host.toLowerCase())) {
+      res.writeHead(421).end();
+      return;
+    }
+
+    const code = reqUrl.searchParams.get('code');
+    const returnedState = reqUrl.searchParams.get('state');
+
+    /**
+     * `state` is checked FIRST, before `error=` is acted on.
+     *
+     * Ordering matters here, not just style. An `error=` parameter used to be
+     * honoured without one, which let any page the user happened to be visiting
+     * kill an in-progress authorization with a single subresource request to
+     * `http://127.0.0.1:<port>/callback?error=access_denied` — the listener
+     * would be torn down and the flow would fail with "you declined", for a
+     * user who never declined anything. Availability only, but it presents as
+     * a flaky OAuth flow and there is no way for the user to tell the
+     * difference.
+     */
+    if (!statesMatch(expectedState, returnedState)) {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(
+        callbackHtml(false, 'Invalid callback \u2014 this authorization attempt did not match.'),
+      );
+      return;
+    }
+
     const error = reqUrl.searchParams.get('error');
     if (error) {
       const description =
@@ -248,16 +293,6 @@ export async function startCallbackListener(
         callbackHtml(false, `Authorization failed: ${description}`),
       );
       finish(() => rejectCode(new OAuthFlowError(provider.id, description)));
-      return;
-    }
-
-    const code = reqUrl.searchParams.get('code');
-    const returnedState = reqUrl.searchParams.get('state');
-
-    if (!statesMatch(expectedState, returnedState)) {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(
-        callbackHtml(false, 'Invalid callback \u2014 this authorization attempt did not match.'),
-      );
       return;
     }
 

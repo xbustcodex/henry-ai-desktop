@@ -41,6 +41,7 @@ import { ipcMain } from 'electron';
 import {
   installIpcBoundary,
   __resetIpcBoundaryForTest,
+  payloadFingerprint,
   validateRequest,
   ValidationError,
   SHELL_GATED_CHANNELS,
@@ -261,30 +262,135 @@ describe('the security gate stops execution, not just the response', () => {
   });
 });
 
-describe('approvals are single-use', () => {
-  it('accepts one call then refuses the next', () => {
-    expect(consumeChannelApproval('terminal:exec')).toBe(false);
-    expect(armChannelApproval('terminal:exec')).toBe(true);
-    expect(consumeChannelApproval('terminal:exec')).toBe(true);
-    // Replaying would defeat the point of asking the user at all.
-    expect(consumeChannelApproval('terminal:exec')).toBe(false);
+
+
+describe('approvals are bound to the payload, not just the channel', () => {
+  // The attack this closes: approve `ls`, then invoke `rm -rf` on the SAME
+  // channel. A channel-scoped grant would let the second call through.
+  const ls = payloadFingerprint([{ command: 'ls' }]);
+  const rm = payloadFingerprint([{ command: 'rm -rf /' }]);
+
+  it('consumes a grant when the payload matches exactly', () => {
+    armChannelApproval('terminal:exec', ls);
+    expect(consumeChannelApproval('terminal:exec', ls)).toBe(true);
+  });
+
+  it('REFUSES a different payload on the same channel', () => {
+    armChannelApproval('terminal:exec', ls);
+    expect(consumeChannelApproval('terminal:exec', rm)).toBe(false);
+  });
+
+  it('destroys the grant on mismatch, so a later match cannot reuse it', () => {
+    armChannelApproval('terminal:exec', ls);
+    expect(consumeChannelApproval('terminal:exec', rm)).toBe(false);
+    // The consent the user gave was for `ls`; if the payload has already
+    // changed once, we must not later honour that stale consent.
+    expect(consumeChannelApproval('terminal:exec', ls)).toBe(false);
+  });
+
+  it('allows a repeated identical call, but only after a fresh approval', () => {
+    armChannelApproval('terminal:exec', ls);
+    expect(consumeChannelApproval('terminal:exec', ls)).toBe(true);
+    // Single-use is preserved: the second identical call needs its own grant.
+    expect(consumeChannelApproval('terminal:exec', ls)).toBe(false);
+    armChannelApproval('terminal:exec', ls);
+    expect(consumeChannelApproval('terminal:exec', ls)).toBe(true);
+  });
+
+  it('refuses a grant whose payload differs only in an extra field', () => {
+    const base = payloadFingerprint([{ command: 'ls' }]);
+    const tampered = payloadFingerprint([{ command: 'ls', cwd: '/etc' }]);
+    armChannelApproval('terminal:exec', base);
+    expect(consumeChannelApproval('terminal:exec', tampered)).toBe(false);
+  });
+
+  it('does not let one channel\'s grant unlock another', () => {
+    armChannelApproval('terminal:exec', ls);
+    expect(consumeChannelApproval('computer:runShell', ls)).toBe(false);
   });
 
   it('refuses to arm a channel that is not gated', () => {
-    expect(armChannelApproval('settings:getAll')).toBe(false);
-  });
-
-  it('does not let one channel\'s approval unlock another', () => {
-    armChannelApproval('terminal:exec');
-    expect(consumeChannelApproval('computer:runShell')).toBe(false);
+    expect(armChannelApproval('settings:getAll', ls)).toBe(false);
   });
 
   it('drops every grant when the policy changes', () => {
-    armChannelApproval('terminal:exec');
-    armChannelApproval('computer:runShell');
+    armChannelApproval('terminal:exec', ls);
+    armChannelApproval('computer:runShell', rm);
     revokeChannelApprovals();
-    expect(consumeChannelApproval('terminal:exec')).toBe(false);
-    expect(consumeChannelApproval('computer:runShell')).toBe(false);
+    expect(consumeChannelApproval('terminal:exec', ls)).toBe(false);
+    expect(consumeChannelApproval('computer:runShell', rm)).toBe(false);
+  });
+
+  it('ignores key order, so an equivalent payload is not a false mismatch', () => {
+    expect(payloadFingerprint([{ a: 1, b: 2 }])).toBe(payloadFingerprint([{ b: 2, a: 1 }]));
+  });
+
+  it('distinguishes array order, which is semantically significant', () => {
+    expect(payloadFingerprint([['a', 'b']])).not.toBe(payloadFingerprint([['b', 'a']]));
+  });
+
+  it('does not put the command text in the fingerprint', () => {
+    expect(ls).not.toContain('rm');
+    expect(ls).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+/**
+ * The invariant, pinned adversarially: NO two semantically different payloads
+ * may share a fingerprint. Every false mismatch is acceptable — it re-prompts —
+ * but a single false match is a consent bypass.
+ */
+describe('fingerprint invariant — different content never collides', () => {
+  const pairs: Array<[string, unknown[], unknown[]]> = [
+    ['extra field', [{ command: 'ls' }], [{ command: 'ls', timeout: 5000 }]],
+    ['different command', [{ command: 'ls' }], [{ command: 'rm -rf /' }]],
+    ['number vs string', [{ command: 'ls', timeout: 100 }], [{ command: 'ls', timeout: '100' }]],
+    ['trailing whitespace', [{ command: 'ls' }], [{ command: 'ls ' }]],
+    ['array order', [['ls', 'pwd']], [['pwd', 'ls']]],
+    ['nested value', [{ o: { a: 1 } }], [{ o: { a: 2 } }]],
+    ['added nested key', [{ o: { a: 1 } }], [{ o: { a: 1, b: 2 } }]],
+    ['null vs missing', [{ a: null }], [{}]],
+    ['absent trailing arg', [{ command: 'ls' }], [{ command: 'ls' }, undefined]],
+  ];
+
+  for (const [name, a, b] of pairs) {
+    it(`distinguishes ${name}`, () => {
+      expect(payloadFingerprint(a)).not.toBe(payloadFingerprint(b));
+    });
+  }
+
+  it('treats key reordering as equal, so an equivalent call is not re-prompted', () => {
+    expect(payloadFingerprint([{ a: 1, b: 2 }])).toBe(payloadFingerprint([{ b: 2, a: 1 }]));
+    expect(payloadFingerprint([{ o: { a: 1, b: 2 } }])).toBe(
+      payloadFingerprint([{ o: { b: 2, a: 1 } }]),
+    );
+  });
+});
+
+describe('TTL still expires a bound grant', () => {
+  it('refuses a matching payload once the grant has expired', () => {
+    vi.useFakeTimers();
+    try {
+      const fp = payloadFingerprint([{ command: 'ls' }]);
+      armChannelApproval('terminal:exec', fp);
+      // 60s is APPROVAL_TTL_MS; step just past it.
+      vi.advanceTimersByTime(61_000);
+      expect(consumeChannelApproval('terminal:exec', fp)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still honours a grant just before it expires', () => {
+    vi.useFakeTimers();
+    try {
+      const fp = payloadFingerprint([{ command: 'ls' }]);
+      armChannelApproval('terminal:exec', fp);
+      vi.advanceTimersByTime(30_000);
+      expect(consumeChannelApproval('terminal:exec', fp)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

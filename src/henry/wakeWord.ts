@@ -8,9 +8,14 @@
  *      `wakeWordDesktop.ts`. This is the engine that runs on Windows/Linux/macOS
  *      desktop, built from the same capture + whisper path hands-free voice
  *      commands already use.
- *   3. Web `SpeechRecognition` — kept as a last resort for browsers that do
- *      implement it. Chromium in Electron does not, which is why it was never
- *      an answer on desktop.
+ *   3. Web `SpeechRecognition` — kept for environments that genuinely implement it.
+ *
+ * Measured on Electron 31.7.7 rather than assumed: `webkitSpeechRecognition`
+ * IS defined and `start()` does not throw, but the recogniser immediately
+ * reports `not-allowed` and never yields a result. Chromium's speech backend
+ * needs the Google API key that only official Chrome builds carry, and
+ * Electron has none. On desktop this third engine is therefore not a fallback
+ * at all, which is exactly why the local STT engine above has to work.
  *
  * The patterns, the 4s cooldown and the `henry_ambient_note` /
  * `henry_wake_word` events are unchanged, so nothing downstream had to move.
@@ -94,10 +99,22 @@ class WakeWordManager {
       return this._startWeb();
     }
 
-    // Desktop Electron: the mobile plugin does not exist here and Chromium
-    // ships no working SpeechRecognition, so the only engine that actually
-    // runs is the one built on the local whisper pipeline.
+    // Desktop Electron: the mobile plugin does not exist here, and Chromium's
+    // recogniser (measured on 31.7.7) accepts `start()` and then immediately
+    // reports `not-allowed` without ever yielding a result. So there is exactly
+    // one engine that can work, and it is the local whisper pipeline.
     if (await this._startDesktop()) return 'desktop-ok';
+
+    // Falling through to the web engine here would report 'ok' and dispatch
+    // `active: true`, then die a frame later on `not-allowed`. Saying it is
+    // unavailable is both true and the difference between an honest engine
+    // report and a phantom one.
+    if (voiceIpcAvailable()) {
+      window.dispatchEvent(new CustomEvent('henry_wake_state', {
+        detail: { active: false, error: 'no-api' },
+      }));
+      return 'no-api';
+    }
 
     return this._startWeb();
   }
@@ -157,7 +174,10 @@ class WakeWordManager {
 
     this.desktop = createDesktopWakeEngine({
       // One utterance: open the mic, let endpointing end it on silence, hand
-      // back the bytes. This is the hands-free path, not a second recorder.
+      // back the bytes. This is the hands-free path, not a second recorder —
+      // `stopVoiceRecording()` resolves when `startVoiceRecording()`'s
+      // endpointing watcher decides the speaker stopped, so awaiting it here is
+      // what waits for the utterance rather than cutting it off instantly.
       capture: async () => {
         await startVoiceRecording();
         const blob = await stopVoiceRecording();
@@ -167,6 +187,10 @@ class WakeWordManager {
       onTranscript: (text) => this._recordNote(text),
       onWake: (match) => this._fireWake(match.query, match.fullTranscript),
       onUnavailable: (reason) => this._onDesktopUnavailable(reason),
+      // An utterance that never ends — endpointing switched off, a muted mic
+      // that never trips the gate — would otherwise hold the microphone open
+      // indefinitely. Drop it and start listening again.
+      onCaptureTimeout: () => cancelVoiceRecording(),
     });
 
     this._active = true;

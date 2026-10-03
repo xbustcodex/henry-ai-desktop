@@ -16,6 +16,7 @@
  *     left holding the loopback endpoint open
  */
 import { describe, it, expect } from 'vitest';
+import http from 'http';
 import { startCallbackListener, waitForAuthorizationCode } from './flow';
 import type { OAuthProviderConfig } from './types';
 
@@ -36,6 +37,31 @@ function testProvider(): OAuthProviderConfig {
     authScheme: 'Bearer',
     setupHint: 'test only',
   };
+}
+
+/**
+ * A raw request with an arbitrary Host header.
+ *
+ * `fetch` cannot be used here: `Host` is a forbidden header name in the fetch
+ * spec, so undici silently replaces it with the connection's own authority —
+ * which would have made this test pass without ever exercising the check.
+ */
+function rawCallback(
+  port: number,
+  query: string,
+  host: string,
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      { host: '127.0.0.1', port, path: `/callback?${query}`, headers: { Host: host } },
+      (res) => {
+        res.resume();
+        res.once('end', () => resolve(res.statusCode ?? 0));
+      },
+    );
+    req.on('error', reject);
+    req.end();
+  });
 }
 
 /**
@@ -127,6 +153,98 @@ describe('startCallbackListener', () => {
     );
     await expect(listener.waitForCode()).rejects.toThrow(/declined/i);
   });
+
+  /**
+   * The `error=` branch is reached only AFTER `state` is validated.
+   *
+   * It used to be the other way round: any page the user happened to be
+   * visiting could kill an in-progress authorization with one subresource load
+   * of `http://127.0.0.1:9005/callback?error=access_denied`, and the user
+   * would be told they had declined when they had not. The callback ports are
+   * fixed and well known, so that is trivially reachable.
+   */
+  it('ignores an error= callback whose state does not match', async () => {
+    const listener = await startCallbackListener(testProvider(), 'expected-state', 5000);
+    await untilListening(listener.port);
+    let settled = false;
+    const code = listener.waitForCode().then(
+      (v) => {
+        settled = true;
+        return v;
+      },
+      (e) => {
+        settled = true;
+        throw e;
+      },
+    );
+    const guard = code.catch(() => undefined);
+
+    // A hostile subresource load: no `code`, a forged `state`, but a real error.
+    const attack = await fetch(
+      `http://127.0.0.1:${listener.port}/callback?error=access_denied&state=forged`,
+    );
+    expect(attack.status).toBe(200);
+    expect(await attack.text()).toContain('did not match');
+    // The flow must still be alive — not silently torn down.
+    expect(settled).toBe(false);
+
+    // And the genuine callback still lands.
+    await fetch(`http://127.0.0.1:${listener.port}/callback?code=real&state=expected-state`);
+    await expect(code).resolves.toMatchObject({ code: 'real' });
+    await guard;
+  });
+
+  it('ignores an error= callback carrying no state at all', async () => {
+    const listener = await startCallbackListener(testProvider(), 'expected-state', 5000);
+    await untilListening(listener.port);
+
+    const res = await fetch(`http://127.0.0.1:${listener.port}/callback?error=access_denied`);
+    expect(await res.text()).toContain('did not match');
+
+    await fetch(`http://127.0.0.1:${listener.port}/callback?code=real&state=expected-state`);
+    await expect(listener.waitForCode()).resolves.toMatchObject({ code: 'real' });
+  });
+
+  /**
+   * DNS rebinding: a hostile page resolving its own name to 127.0.0.1 would
+   * reach this listener with its own Host header. The state check is what
+   * actually protects the flow; refusing a non-loopback Host is defence in
+   * depth and costs one comparison.
+   */
+  it('refuses a request whose Host is not a loopback literal', async () => {
+    const listener = await startCallbackListener(testProvider(), 'expected-state', 5000);
+    await untilListening(listener.port);
+    let settled = false;
+    const code = listener.waitForCode().then(
+      (v) => {
+        settled = true;
+        return v;
+      },
+      (e) => {
+        settled = true;
+        throw e;
+      },
+    );
+    const guard = code.catch(() => undefined);
+
+    const status = await rawCallback(
+      listener.port,
+      'code=stolen&state=expected-state',
+      'attacker.example.com',
+    );
+    expect(status).toBe(421);
+    expect(settled).toBe(false);
+
+    // A loopback Host in either spelling is accepted, so the check does not
+    // break the real provider redirect.
+    expect(
+      await rawCallback(listener.port, 'code=via-localhost&state=expected-state', 'localhost'),
+    ).toBe(200);
+    await expect(code).resolves.toMatchObject({ code: 'via-localhost' });
+    await guard;
+  });
+
+
 
   it('404s an unrelated path without settling the listener', async () => {
     const listener = await startCallbackListener(testProvider(), 'expected-state', 5000);

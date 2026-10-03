@@ -878,19 +878,17 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
         }
 
       } else if (platform === 'win32') {
-        // Windows: Simulate Ctrl+C using PowerShell SendKeys
+        // Windows: Ctrl+C through the verified Win32 SendInput backend.
+        // This used to go through WScript.Shell.SendKeys, the same string
+        // parser that could not click and mis-parsed `^ % ~ ( ) { }`. Going
+        // through the shared adapter also means the capability report and this
+        // handler exercise the same code path.
         const originalText = clipboard.readText();
 
-        const { execFile } = await import('child_process');
-        await new Promise<void>((resolve) => {
-          execFile('powershell', [
-            '-Command',
-            '$wshell = New-Object -ComObject wscript.shell; $wshell.SendKeys(\'^c\')'
-          ], { timeout: 1000 }, (err) => {
-            if (err) console.warn('[captureSelectedText] PowerShell SendKeys failed:', err.message);
-            resolve();
-          });
-        });
+        const sent = await performKeyPress('ctrl+c');
+        if (!sent.success) {
+          console.warn('[captureSelectedText] Ctrl+C failed:', sent.error);
+        }
 
         await new Promise(r => setTimeout(r, 150));
 

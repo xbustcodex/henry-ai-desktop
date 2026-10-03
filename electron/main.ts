@@ -58,8 +58,12 @@ import {
   installIpcBoundary,
   armChannelApproval,
   SHELL_GATED_CHANNELS,
+  payloadFingerprint,
+  sanitizePayload,
   consumeChannelApproval,
 } from './ipc/validation';
+import { installConsoleCapture, setCaptureDebug } from './ipc/consoleCapture';
+import { initAppLog } from './ipc/appLog';
 import {
   initSecurityPolicy,
   isLocked,
@@ -81,13 +85,15 @@ import {
 // app-lock and shell-confirmation switches take effect on the next invocation
 // without restarting anything.
 installIpcBoundary({
-  isExecutionAllowed: (channel: string) => {
+  isExecutionAllowed: (channel: string, fingerprint: string) => {
     // A locked app refuses everything except the channels the lock screen
     // itself needs. This is the enforcement point for the app lock — the UI
     // merely reflects it, so hiding the panel cannot bypass the lock.
     if (isLocked() && !LOCK_EXEMPT_CHANNELS.has(channel)) return false;
     if (SHELL_GATED_CHANNELS.has(channel)) {
-      if (policyFlag('confirmShell')) return consumeChannelApproval(channel);
+      // The fingerprint ties consent to the exact command about to run, so an
+      // approval granted for one payload cannot authorise a different one.
+      if (policyFlag('confirmShell')) return consumeChannelApproval(channel, fingerprint);
     }
     return true;
   },
@@ -330,6 +336,19 @@ app.whenReady().then(() => {
   }
 
   const db = initDatabase(henryDir);
+
+  // Attach the log store BEFORE the interceptor, otherwise boot-time lines
+  // logged before settings registration are silently dropped — `capture()`
+  // no-ops without a table, so nothing would fail loudly.
+  initAppLog(db);
+
+  // Route the main process's existing console/log output into the redacting app
+  // log. Installed immediately after the database opens so `capture()` has a
+  // store to write to. Without it the Logs panel is empty in production —
+  // nothing calls `capture()` directly, because every existing log line goes
+  // through `log.*` or `console.*`.
+  installConsoleCapture();
+  setCaptureDebug(/^(1|true|yes)$/i.test(process.env.HENRY_DEBUG ?? ''));
 
   createWindow();
 
@@ -1171,16 +1190,26 @@ function registerQuitHandlers(db: Database.Database, getWin: () => BrowserWindow
   });
 
   /**
-   * Record a one-shot approval for a gated channel.
+   * Record a one-shot approval for a gated channel, bound to a payload.
    *
-   * The renderer may only request a grant; it cannot grant one. This handler
-   * exists so the request is auditable and schema-validated, and the actual
-   * decision belongs to the UI that asked the user first.
+   * The renderer may only request a grant; it cannot grant one. The caller
+   * MUST send the exact `args` it intends to invoke with — the grant is bound
+   * to their fingerprint, so approving `ls` and then invoking `rm -rf` on the
+   * same channel is refused and the grant is destroyed.
    */
-  ipcMain.handle('security:approve-channel', (_e, data: { channel: string }) => ({
-    ok: armChannelApproval(data.channel, getWin),
-    channel: data.channel,
-  }));
+  ipcMain.handle('security:approve-channel', (_e, data: { channel: string; args?: unknown[] }) => {
+    const args = Array.isArray(data.args) ? data.args : [];
+    // Sanitise before fingerprinting, for the same reason the boundary does.
+    // Otherwise a renderer sending `{command, timeout: undefined}` would be
+    // approved on its raw shape and rejected on its sanitised one — a silent
+    // false mismatch that re-prompts forever. Both sides must normalise
+    // identically, or consent becomes unpredictable.
+    const normalised = args.map((a) => sanitizePayload(a));
+    return {
+      ok: armChannelApproval(data.channel, payloadFingerprint(normalised), getWin),
+      channel: data.channel,
+    };
+  });
 
   /** Lets the UI disable its Quit button and show "work in progress". */
   ipcMain.handle('app:activeWork', () => ({ activeWork: activeWork() }));

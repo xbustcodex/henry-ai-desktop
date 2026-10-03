@@ -322,7 +322,36 @@ function registerSecurityAndPrivacyHandlers(db: Database.Database): void {
     hasPin: hasPin(),
     locked: isLocked(),
     encryptionAvailable: canEncrypt(),
+    tools: toolTierCounts(),
   }));
+
+  /**
+   * Live tool-tier counts, derived from the registry rather than hardcoded.
+   *
+   * The Security panel says "N tools run without asking". A literal there goes
+   * stale the moment someone adds a tool, and a wrong number in a security
+   * prompt is worse than no number — so it is counted from the same registry
+   * the runner dispatches through. Read lazily because the registry is
+   * populated during boot and is not always importable (tests, pre-boot IPC).
+   */
+  function toolTierCounts(): { silent: number; confirm: number; notify: number; total: number } {
+    const counts = { silent: 0, confirm: 0, notify: 0, total: 0 };
+    try {
+      const { registry } = require('../agent/toolRegistry') as {
+        registry: { describe(): Array<{ safetyLevel: string }> };
+      };
+      for (const t of registry.describe()) {
+        counts.total++;
+        if (t.safetyLevel === 'silent') counts.silent++;
+        else if (t.safetyLevel === 'confirm') counts.confirm++;
+        else counts.notify++;
+      }
+    } catch {
+      // Registry unavailable — the panel renders without a count rather than
+ // with a fabricated one.
+    }
+    return counts;
+  }
 
   /**
    * Flip one switch.

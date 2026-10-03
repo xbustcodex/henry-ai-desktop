@@ -73,6 +73,25 @@ function jsonResponse(payload: unknown, status = 200): unknown {
 
 type FetchInit = { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal };
 
+/** An Ollama-style NDJSON stream response. */
+function ndjsonResponse(records: unknown[]): unknown {
+  const reads = records.map((r) => (typeof r === 'string' ? r : JSON.stringify(r)) + '\n');
+  let i = 0;
+  return {
+    ok: true,
+    status: 200,
+    body: {
+      getReader: () => ({
+        async read() {
+          if (i >= reads.length) return { done: true as const };
+          return { done: false as const, value: enc(reads[i++]) };
+        },
+        releaseLock() {},
+      }),
+    },
+  };
+}
+
 function stubFetch(handler: (rec: Recorded) => unknown): void {
   const impl = vi.fn(async (url: string, init?: FetchInit): Promise<Response> => {
     const rec: Recorded = {
@@ -642,5 +661,94 @@ describe('callAI', () => {
     expect(calculateCost('gpt-4o-mini', 1_000_000, 1_000_000)).toBeCloseTo(0.7875, 6);
     expect(calculateCost('llama3.2:3b', 1_000_000, 1_000_000)).toBe(0);
     expect(calculateCost('unknown-model', 1000, 1000)).toBe(0);
+  });
+});
+describe('callAIWithTools — Ollama streams the tool round when a delta channel exists', () => {
+  const TOOLS: ModelTool[] = [
+    {
+      type: 'function',
+      function: {
+        name: 'file_list',
+        description: 'List files in a directory.',
+        parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+      },
+    },
+  ];
+
+  const TOOL_RECORD = {
+    message: {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{ id: 'call_1', function: { name: 'file_list', arguments: { path: '/tmp' } } }],
+    },
+  };
+
+  it('sends stream:true WITH tools and reports both the deltas and the call', async () => {
+    stubFetch(() =>
+      ndjsonResponse([
+        { message: { content: 'Checking ' } },
+        { message: { content: 'now.' } },
+        TOOL_RECORD,
+        { done: true, prompt_eval_count: 20, eval_count: 7 },
+      ])
+    );
+    const deltas: string[] = [];
+    const result = await callAIWithTools({
+      provider: 'ollama',
+      model: 'llama3.2:3b',
+      apiKey: '',
+      apiUrl: 'http://127.0.0.1:11434',
+      messages: [{ role: 'user', content: 'list /tmp' }],
+      modelTools: TOOLS,
+      onDelta: (t) => deltas.push(t),
+    });
+
+    expect(deltas).toEqual(['Checking ', 'now.']);
+    expect(result.content).toBe('Checking now.');
+    expect(result.toolCalls).toEqual([{ id: 'call_1', name: 'file_list', arguments: { path: '/tmp' } }]);
+    expect(result.usage).toEqual({ input: 20, output: 7 });
+
+    const body = JSON.parse(recorded[0].body!);
+    // The whole point: one request that is BOTH streamed and tool-bearing.
+    expect(body.stream).toBe(true);
+    expect(body.tools).toEqual(TOOLS);
+  });
+
+  it('keeps the buffered round when no delta channel is supplied', async () => {
+    stubFetch(() =>
+      jsonResponse({
+        message: {
+          content: 'Checking now.',
+          tool_calls: [{ id: 'call_1', function: { name: 'file_list', arguments: { path: '/tmp' } } }],
+        },
+        prompt_eval_count: 20,
+        eval_count: 7,
+      })
+    );
+    const result = await callAIWithTools({
+      provider: 'ollama',
+      model: 'llama3.2:3b',
+      apiKey: '',
+      messages: [{ role: 'user', content: 'list /tmp' }],
+      modelTools: TOOLS,
+    });
+    expect(result.toolCalls).toHaveLength(1);
+    const body = JSON.parse(recorded[0].body!);
+    expect(body.stream).toBe(false);
+  });
+
+  it('does not change the plain chat path, which never sends tools', async () => {
+    stubFetch(() => ndjsonResponse([{ message: { content: 'hi' } }, { done: true, eval_count: 1 }]));
+    await invoke('ai:stream', {
+      provider: 'ollama',
+      model: 'llama3.2:3b',
+      apiKey: '',
+      messages: [{ role: 'user', content: 'hi' }],
+      channelId: 'c1',
+    });
+    const body = JSON.parse(recorded[0].body!);
+    expect(body.stream).toBe(true);
+    // Row 2.1's plain chat contract: no tool protocol advertised at all.
+    expect(body.tools).toBeUndefined();
   });
 });

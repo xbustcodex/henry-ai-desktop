@@ -281,7 +281,7 @@ describe('Windows backend — the PowerShell script', () => {
   const { cmd, args } = windowsHelperArgv();
 
   it('launches PowerShell with no shell string', () => {
-    expect(cmd).toBe('powershell');
+    expect(cmd).toBe('powershell.exe');
     expect(args).toContain('-NoProfile');
     expect(args).toContain('-NonInteractive');
     expect(args).toContain('-EncodedCommand');

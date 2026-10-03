@@ -499,8 +499,100 @@ export const channelSchemas: Record<string, ChannelSchema> = {
 
   // ── Security / privacy / logs / quit (see securityPolicy.ts) ───────────
   'security:set': z.object({ key: z.string().max(64), value: z.boolean() }).strict(),
+  // The grant is bound to the payload's fingerprint, so `args` must travel with
+  // the request or the consent cannot be bound to anything specific.
+  'security:approve-channel': z
+    .object({ channel: nonEmpty(128), args: z.array(z.unknown()).max(64).optional() })
+    .strict(),
   'security:unlock': z.object({ pin: z.string().min(4).max(128) }).strict(),
   'security:setPin': z.object({ pin: z.string().min(4).max(128) }).strict(),
+
+  // ── Integrations (provider-agnostic OAuth; see electron/integrations/) ──
+  // Supplied by the Integrations owner against their real handler contracts.
+  //
+  // `integration:setToken` carries a raw pasted credential (a Discord bot
+  // token). It is the one channel where a malformed value is still a secret, so
+  // it is bounded hard and the shape can be nothing but a bot token. The
+  // `min(32)` + charset regex deliberately mirror the handler's own token check,
+  // so a payload rejected at the boundary and a token rejected in the handler
+  // give the same answer rather than two different ones.
+  'integration:connect': z
+    .object({
+      providerId: nonEmpty(64),
+      clientId: z.string().max(2048),
+      clientSecret: z.string().max(2048),
+      scopes: z.array(z.string().max(512)).max(64).optional(),
+    })
+    .strict(),
+  'integration:setToken': z
+    .object({
+      providerId: nonEmpty(64),
+      token: z.string().trim().min(32).max(512).regex(/^[A-Za-z0-9._-]+$/),
+      label: z.string().max(100).optional(),
+    })
+    .strict(),
+  'integration:disconnect': z.object({ providerId: nonEmpty(64) }).strict(),
+  // preload invokes these with no argument at all — `undefined`, not an object.
+  // An object schema would reject every live call; this is the same class of
+  // mistake the file header records for `fs:readDirectory`.
+  'integration:list': noArg,
+  'integration:status': noArg,
+
+  // ── Maker Studio ──────────────────────────────────────────────────────
+  'maker:machines:list': z
+    .object({ type: z.string().max(64).optional(), activeOnly: z.boolean().optional() })
+    .passthrough()
+    .optional(),
+  'maker:machines:save': jsonObject,
+  'maker:materials:list': z
+    .object({
+      category: z.string().max(64).optional(),
+      lowStock: z.boolean().optional(),
+      activeOnly: z.boolean().optional(),
+    })
+    .passthrough()
+    .optional(),
+  'maker:materials:save': jsonObject,
+  'maker:materials:colors': noArg,
+  'maker:runs:list': z
+    .object({
+      machineId: z.string().max(128).optional(),
+      project: z.string().max(256).optional(),
+      limit: z.number().int().min(1).max(1000).optional(),
+    })
+    .passthrough()
+    .optional(),
+  'maker:runs:save': jsonObject,
+  'maker:runs:summary': z
+    .object({ month: z.string().max(32).optional(), machineId: z.string().max(128).optional() })
+    .passthrough()
+    .optional(),
+  'maker:waste:save': jsonObject,
+  'maker:waste:patterns': z
+    .object({ sinceDays: z.number().int().min(1).max(3650).optional() })
+    .passthrough()
+    .optional(),
+  'maker:maintenance:save': jsonObject,
+  'maker:bom:save': jsonObject,
+  'maker:migrate:from-localStorage': jsonObject,
+
+  // ── Quoting ───────────────────────────────────────────────────────────
+  'quote:list': z
+    .object({
+      status: z.string().max(32).optional(),
+      query: z.string().max(512).optional(),
+      limit: z.number().int().min(1).max(1000).optional(),
+    })
+    .passthrough()
+    .optional(),
+  'quote:save': jsonObject,
+  'quote:lineItem:save': jsonObject,
+  'quote:summary': z
+    .object({ sinceDays: z.number().int().min(1).max(3650).optional() })
+    .passthrough()
+    .optional(),
+  // Positional: preload's quoteConvertToRun(quoteId, machineId?).
+  'quote:convertToRun': [nonEmpty(128), z.string().max(128).optional()],
   'privacy:clear': z
     .object({
       what: z
@@ -898,7 +990,7 @@ export function confirmationRequired(channel: string): ConfirmationRequired {
  */
 export interface BoundaryHooks {
  /** Whether `channel` may run right now, given the policy and any approval. */
-  isExecutionAllowed?: (channel: string) => boolean;
+  isExecutionAllowed?: (channel: string, fingerprint: string) => boolean;
 }
 
 /**
@@ -949,7 +1041,9 @@ export function installIpcBoundary(hooks: BoundaryHooks = {}): void {
 
         for (const value of cleaned) assertPayloadSize(channel, value);
 
-        if (hooks.isExecutionAllowed && !hooks.isExecutionAllowed(channel)) {
+        // Fingerprint the SANITISED args — that is what the handler will
+        // actually receive, and therefore what the user must have approved.
+        if (hooks.isExecutionAllowed && !hooks.isExecutionAllowed(channel, payloadFingerprint(cleaned))) {
           return confirmationRequired(channel);
         }
 

@@ -316,17 +316,172 @@ export async function callOllamaToolsRound(params: OllamaToolParams): Promise<Ol
 
   const data = (await response.json!()) as Record<string, unknown>;
   const message = (data?.message ?? {}) as Record<string, unknown>;
-  const rawContent = typeof message.content === 'string' ? message.content : '';
-
-  const structured = parseOpenAIToolCalls(message.tool_calls);
-  const inline = structured.length === 0 ? parseInlineToolCalls(rawContent) : { content: rawContent, toolCalls: [] };
-
-  return {
-    content: inline.content,
-    toolCalls: structured.length > 0 ? structured : inline.toolCalls,
-    usage: {
+  const content = typeof message.content === 'string' ? message.content : '';
+  return finishRound(
+    content,
+    parseOpenAIToolCalls(message.tool_calls),
+    {
       input: typeof data?.prompt_eval_count === 'number' ? data.prompt_eval_count : 0,
       output: typeof data?.eval_count === 'number' ? data.eval_count : 0,
-    },
+    }
+  );
+}
+
+// ── Tool-capable streaming ─────────────────────────────────────────────────
+
+export interface OllamaToolStreamParams extends OllamaToolParams {
+  /**
+   * Called with each content delta as Ollama produces it.
+   *
+   * Optional: omit it and the round behaves exactly like
+   * `callOllamaToolsRound`, just over a stream. The callback exists so the
+   * agent loop can surface the final answer as it is written instead of
+   * holding it until the round closes.
+   */
+  onDelta?: (text: string) => void;
+}
+
+/**
+ * Merge tool calls seen across a stream's records.
+ *
+ * Ollama may repeat a call across records, and may split one call's arguments
+ * over several. De-duplicating by id — or, when there is no id, by name and
+ * argument signature — means a repeated record cannot cause the tool to run
+ * twice for one decision, which is the failure mode a naive per-record append
+ * produces.
+ */
+function mergeToolCalls(into: ParsedToolCall[], incoming: ParsedToolCall[]): void {
+  for (const call of incoming) {
+    const signature = `${call.name}:${JSON.stringify(call.arguments)}`;
+    const duplicate = into.some(
+      (existing) =>
+        (call.id && existing.id === call.id) ||
+        `${existing.name}:${JSON.stringify(existing.arguments)}` === signature
+    );
+    if (!duplicate) into.push(call);
+  }
+}
+
+/**
+ * One `/api/chat` round with BOTH `stream: true` and `tools`.
+ *
+ * This is deliberately a separate function from `streamOllamaChat` rather than
+ * a flag on it. `streamOllamaChat` is the ordinary chat path: its params carry
+ * no tools and its body must keep carrying none, because row 2.1 depends on it
+ * and the plain chat path has no business advertising a tool protocol. Adding
+ * `tools` there would change a contract that is proven working.
+ *
+ * A streamed round can interleave text deltas and a tool call, and both are
+ * preserved: every delta goes to `onDelta`, and every tool call is collected
+ * and returned. Dropping either would be worse than the pause this replaces —
+ * a dropped tool call degrades the agent into a chatty model that never acts,
+ * and it would look like it worked.
+ */
+export async function streamOllamaToolsRound(params: OllamaToolStreamParams): Promise<OllamaToolRound> {
+  const base = resolveOllamaBaseUrl(params.apiUrl);
+  const doFetch = params.fetchImpl ?? (globalThis.fetch as unknown as OllamaFetch);
+
+  let response: OllamaHttpResponse;
+  try {
+    response = await doFetch(`${base}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: params.model,
+        messages: toOllamaToolMessages(params.messages),
+        stream: true,
+        tools: params.modelTools,
+        options: {
+          temperature: params.temperature ?? 0.7,
+          num_predict: params.maxTokens ?? 4096,
+        },
+      }),
+      signal: params.signal,
+    });
+  } catch (err: unknown) {
+    if (isConnectionFailure(err)) throw new Error(ollamaNotRunningError());
+    throw err;
+  }
+
+  if (!response.ok) {
+    if (response.status === 404) throw new Error(modelNotLoadedError(params.model));
+    const errText = await readErrorBody(response);
+    throw new Error(
+      `Ollama returned an error (${response.status}${errText ? ': ' + errText.slice(0, 120) : ''}). ` +
+        'Check the model name in Settings → Engines.'
+    );
+  }
+
+  // Ollama honours `stream: true`, but a build that ignores it answers with one
+  // JSON object. The NDJSON reader handles both: a single line with no trailing
+  // newline still arrives as exactly one complete record.
+  if (!response.body) {
+    const data = (await response.json!()) as Record<string, unknown>;
+    return callRoundFromPayload(data, params.onDelta);
+  }
+
+  let content = '';
+  const toolCalls: ParsedToolCall[] = [];
+  let usage: StreamTokenUsage | undefined;
+
+  await readNdjsonStream(response as NdjsonResponse, (record) => {
+    if (!record || typeof record !== 'object') return;
+    const r = record as Record<string, unknown>;
+    if (typeof r.error === 'string' && r.error) throw new Error(r.error);
+
+    const message = r.message as Record<string, unknown> | undefined;
+    const delta = message?.content;
+    if (typeof delta === 'string' && delta.length > 0) {
+      content += delta;
+      params.onDelta?.(delta);
+    }
+
+    // Tool calls can arrive before, after or interleaved with the text, so
+    // every record is inspected rather than only the terminal one.
+    if (message?.tool_calls !== undefined) {
+      mergeToolCalls(toolCalls, parseOpenAIToolCalls(message.tool_calls));
+    }
+    if (r.done === true) {
+      usage = {
+        input: typeof r.prompt_eval_count === 'number' ? r.prompt_eval_count : 0,
+        output: typeof r.eval_count === 'number' ? r.eval_count : 0,
+      };
+    }
+  });
+
+  return finishRound(content, toolCalls, usage);
+}
+
+/** Pull a tool call out of a whole-payload response, ignoring any stream. */
+function callRoundFromPayload(data: Record<string, unknown>, onDelta?: (text: string) => void): OllamaToolRound {
+  const message = (data?.message ?? {}) as Record<string, unknown>;
+  const content = typeof message.content === 'string' ? message.content : '';
+  if (content) onDelta?.(content);
+  const usage: StreamTokenUsage = {
+    input: typeof data?.prompt_eval_count === 'number' ? data.prompt_eval_count : 0,
+    output: typeof data?.eval_count === 'number' ? data.eval_count : 0,
   };
+  return finishRound(content, parseOpenAIToolCalls(message.tool_calls), usage);
+}
+
+/**
+ * Resolve a round's text against its tool calls.
+ *
+ * The raw-text recovery is preserved here exactly as in the non-streaming
+ * round: qwen2.5-coder:7b emits its whole call as `content` rather than in
+ * `tool_calls`, and recovering it only in the buffered path would look like a
+ * regression on that model the moment the agent loop moved to streaming. It is
+ * applied to the ACCUMULATED text, not per delta — a JSON object split across
+ * three deltas parses as nothing at all if each piece is parsed alone.
+ */
+function finishRound(
+  content: string,
+  structured: ParsedToolCall[],
+  usage?: StreamTokenUsage
+): OllamaToolRound {
+  if (structured.length > 0) return { content, toolCalls: structured, usage };
+  // Only the model's own turn is mined. Tool results are never parsed for
+  // calls — see ToolCallTextSource.
+  const inline = parseInlineToolCalls(content, 'model-output');
+  return { content: inline.content, toolCalls: inline.toolCalls, usage };
 }
