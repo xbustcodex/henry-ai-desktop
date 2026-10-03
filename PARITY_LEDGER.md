@@ -643,3 +643,69 @@ its own piece of work after the burn-down.
 | 4.13 Goals surface vs agent access | PARTIAL |
 | 4.16 self-improvement | MISSING (no implementation) |
 | execution-dependent rows | PARTIAL / UNVERIFIED per their own evidence |
+
+---
+
+## PARTIAL ROW TRIAGE (completion run)
+
+Every row recorded PARTIAL was re-examined and sorted into one of two buckets. The
+distinction is not "hard versus easy" — it is whether the remaining work is local code and
+tests, or whether it needs something that does not exist in this environment.
+
+### ACTIONABLE NOW — local code/test work
+
+All of these are assigned to sub-agents and being completed in this run.
+
+| Row | Gap | Work |
+|---|---|---|
+| 6.11 | Assistant name reached no setting | `assistant_name` in the settings contract, single resolver, Settings field, three competing hardcoded identities routed through it. **Landed — awaiting live test.** |
+| 11.8 | `confirmDeleteOutsideHome` gated nothing | Proved semantically redundant with confinement and **removed the toggle** rather than weakening confinement to make it look live. Two swallowed refusals fixed in the same pass. **Landed.** |
+| 4.16 | Lessons ranked as ordinary memory | Type-aware, trigger-conditioned ranking + a self-healing index. **Landed — awaiting live test.** |
+| 4.17 | Memory tools not proven authoritative | Verified against the real store. **Landed.** |
+| 8.7 | Weekly summary never exercised | **Landed.** |
+| 8.8 | Cross-device search had no peer semantics | Peer-absent reporting instead of a fake empty result. **Landed.** |
+| 11.12 | 176 channels on baseline sanitisation | Measured at 57.0%; the seven destructive `computer:*` file channels had **no schema at all** and are now covered. **Partially landed.** |
+
+### ACTIONABLE NOW — found by the reachability audit, assigned this run
+
+The inventory traced four hops per capability — emitter, bridge, consumer, test — and found
+four dead ends. Two of these are regressions this campaign introduced.
+
+| Row / Area | Gap | Work |
+|---|---|---|
+| **confirmShell gate** | `securityApproveChannel` had **zero callers**, so five gated channels were permanently refused on every default install. HQPanel's shell auto-run and PrinterPanel's G-code were silently dead behind a `.catch(() => {})`. | **Assigned — building the approval flow.** |
+| **appLock** | No unlock UI and no lock screen; enabling the lock bricks the app, because `security:unlock` is exempt precisely so a screen could be built and it never was. | **Assigned — building the lock screen.** |
+| **knowledge:\*** | Bridge present, handlers real, **zero renderer consumers**. Fixing the bridge without the consumer moved the dead end one layer down. | **Assigned — building the panel.** |
+| **Event triggers** | Parser, bus, storm guard and ~14 tests exist; `scheduler.fireEvent` has **zero production callers**, and the renderer cannot create a non-cron Routine. | **Assigned — real emitters + UI.** |
+| `agent:tool-started` / `tool-completed` | Emitted by the runner, no bridge, no consumer. | Batch bridge work. |
+| `destructiveFileConfinement.test.ts` | Proves safety properties for channels with **no named bridge** — green coverage of a feature nobody can reach. | Re-point the shim at a real path or label it main-process-only. |
+| `repo.test.ts` | A test asserting only `ok === false` that passes with the validation deleted; **no happy-path test for `repo_edit` or `repo_status` anywhere**. | Rewrite. |
+
+### EXTERNAL / DEFERRED — cannot be completed locally
+
+| Rows | Prerequisite |
+|---|---|
+| 2.3, 2.4, 11.1 | OpenAI / Anthropic API key. Adapter shape is test-proven; no live call was ever made and none was faked. |
+| 10.1, 10.2 | Google account. Accounts connected before `gmail.send`/`drive.file` were added will 403 — reconnect required. |
+| 10.4 | Discord bot token plus a server with the bot invited and Message Content enabled. |
+| 10.6, 10.11 | Upstream OAuth leg needs a real Google credential. |
+| 6.9 | ElevenLabs API key. |
+| 6.2 | Piper binary for local neural TTS; the engine is implemented and reports honestly when absent. |
+| 6.3, 6.4 | Local STT is installed and live-verified (`whisper-cli` plus a real `ggml-base.en.bin`); the remaining gap is a live microphone session. |
+| 6.8 | Physical microphone for interim/caption results. |
+| 7.3 | Live hardware test drives the **real mouse and keyboard**; acceptance is possible here but must be announced first. |
+| 5.3, 5.4 | A routine must actually execute; that fires real scheduled work and leaves residue, so it is a deliberate decision rather than a silent probe. |
+| 9.10 | Session lifecycle create→resume needs generated session state. |
+| 11.6 | Updater verification means installing a binary. Left to an explicit decision. |
+| 11.14 | Healthy hide-path verified; forcing a boot failure risks corrupting the installation. |
+| **8.1** | **Deferred physical Android QR bug.** LAN discovery, binding and the pair-token guard are fixed; the device still dies after first render and the boundary is undiagnosed. Must not stop other work. |
+
+### Deliberately not exercised
+
+- **`media:delete` / `attachments:delete` write to `app.getPath('userData')`**, which on a
+  Windows redirected or roaming profile is outside `$HOME`. They are confined to their own
+  storage root, not to home, and that is correct as-is. Nothing gates them, and gating them
+  without a working renderer path would produce a dead button rather than a protection.
+- **`src/webMock.ts`** is a deliberate browser fallback, not an unreachable surface.
+- **`computer:*` file channels** have no named bridge by design; they are main-process
+  surfaces reachable by the agent, not by the renderer.
