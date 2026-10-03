@@ -17,19 +17,34 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 
-// Henry asks for exactly these. They must match the scope list in
-// `electron/integrations/oauth/registry.ts` — a panel that under-reports what
-// it requests is a consent screen that lies, and the agent tools would then
-// 403 on a scope the user believes was granted.
-const SCOPES = [
-  { id: 'https://www.googleapis.com/auth/gmail.readonly', label: 'Read Gmail' },
-  { id: 'https://www.googleapis.com/auth/gmail.compose', label: 'Create Gmail drafts' },
-  { id: 'https://www.googleapis.com/auth/gmail.send', label: 'Send email' },
-  { id: 'https://www.googleapis.com/auth/calendar.readonly', label: 'Read Calendar' },
-  { id: 'https://www.googleapis.com/auth/calendar.events', label: 'Create and update Calendar events' },
-  { id: 'https://www.googleapis.com/auth/drive.readonly', label: 'Read Drive' },
-  { id: 'https://www.googleapis.com/auth/drive.file', label: 'Upload files to Drive' },
-];
+/**
+ * The consent list is NOT declared here.
+ *
+ * It is read from `integration:list`, which serves the exact scope set the
+ * provider is configured to request, paired with the label the provider
+ * declared for that scope. A panel that keeps its own list is a consent screen
+ * that drifts from the code: it under-reports what is asked for, the user
+ * approves on a false understanding, and the agent tools then 403 on a scope
+ * the user believes they granted. Deriving it removes that failure mode.
+ */
+interface ScopeInfo {
+  id: string;
+  label: string;
+}
+
+async function loadScopes(): Promise<ScopeInfo[]> {
+  try {
+    const all = await (
+      window as unknown as {
+        henryAPI: { integrationList: () => Promise<Array<{ id: string; scopes: ScopeInfo[] }>> };
+      }
+    ).henryAPI.integrationList();
+    return all.find((p) => p.id === 'google')?.scopes ?? [];
+  } catch {
+    // Better to say nothing than to display a list we cannot vouch for.
+    return [];
+  }
+}
 
 const cardCls = 'bg-henry-surface border border-henry-border/20 rounded-2xl p-4';
 const inputCls =
@@ -42,6 +57,7 @@ export default function GoogleConnectionPanel() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [showSetup, setShowSetup] = useState(false);
+  const [scopes, setScopes] = useState<ScopeInfo[]>([]);
 
   const refresh = useCallback(async () => {
     try {
@@ -54,6 +70,7 @@ export default function GoogleConnectionPanel() {
 
   useEffect(() => {
     void refresh();
+    void loadScopes().then(setScopes);
   }, [refresh]);
 
   const connect = async () => {
@@ -67,7 +84,7 @@ export default function GoogleConnectionPanel() {
       const r = await window.henryAPI.googleStartAuth({
         clientId: clientId.trim(),
         clientSecret: clientSecret.trim(),
-        scopes: SCOPES.map((s) => s.id),
+        scopes: scopes.map((s) => s.id),
       });
       if (r?.ok === false) {
         setMsg(String(r.error ?? 'Could not connect.'));
@@ -151,7 +168,7 @@ export default function GoogleConnectionPanel() {
               <div>
                 <p className="text-[10px] text-henry-text-muted mb-1">Henry will ask for:</p>
                 <ul className="text-[10px] text-henry-text-muted space-y-0.5">
-                  {SCOPES.map((s) => (
+                  {scopes.map((s) => (
                     <li key={s.id}>· {s.label}</li>
                   ))}
                 </ul>

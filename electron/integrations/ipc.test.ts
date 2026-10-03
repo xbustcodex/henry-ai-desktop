@@ -34,6 +34,7 @@ vi.mock('electron', () => ({
 }));
 
 import { registerIntegrationHandlers } from './ipc';
+import { DISCORD_PROVIDER, GOOGLE_PROVIDER } from './oauth/registry';
 import { loadCredential } from './oauth/credentialStore';
 
 class FakeDb {
@@ -78,6 +79,40 @@ describe('integration:list', () => {
       // A description is public by design; a credential field never is.
       expect(JSON.stringify(provider)).not.toMatch(/"(accessToken|refreshToken|clientSecret)"/);
     }
+  });
+
+  /**
+   * The Settings consent list is rendered straight from this reply, so the
+   * thing under test is the contract itself: what the user is shown is exactly
+   * what the provider is configured to request, with a label for each.
+   *
+   * A panel that keeps its own list drifts from the code — it under-reports
+   * what is asked for, and the agent tools then 403 on a scope the user
+   * believes they granted.
+   */
+  it('serves the registry scope set verbatim, each with a human label', async () => {
+    const list = await call<Array<{ id: string; scopes: Array<{ id: string; label: string }> }>>(
+      'integration:list',
+    );
+    for (const provider of list) {
+      const declared = provider.id === 'google' ? GOOGLE_PROVIDER : DISCORD_PROVIDER;
+      expect(provider.scopes.map((s) => s.id)).toEqual(declared.defaultScopes);
+      // No scope may render as a bare URL — an unlabelled scope in a consent
+      // screen is not consent.
+      for (const scope of provider.scopes) {
+        expect(scope.label, `${provider.id}/${scope.id} has no label`).toBeTruthy();
+        expect(scope.label).not.toMatch(/^https?:\/\//);
+      }
+    }
+  });
+
+  it('surfaces the two scopes the agent tools need but the old panel omitted', async () => {
+    // gmail_send_message and drive_upload_file cannot work without these. If
+    // either drops out of the registry the agent silently 403s, so they are
+    // asserted by name rather than left to a reviewer to notice.
+    const google = GOOGLE_PROVIDER.defaultScopes;
+    expect(google).toContain('https://www.googleapis.com/auth/gmail.send');
+    expect(google).toContain('https://www.googleapis.com/auth/drive.file');
   });
 });
 

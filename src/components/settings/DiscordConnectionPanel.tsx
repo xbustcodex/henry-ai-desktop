@@ -75,7 +75,13 @@ export default function DiscordConnectionPanel() {
     const off = bridge().onIntegrationChanged?.((changed: { providerId?: string }) => {
       if (!changed?.providerId || changed.providerId === 'discord') void refresh();
     });
-    return () => off?.();
+    return () => {
+      off?.();
+      // A pasted bot token is a live credential. It has no reason to outlive
+      // the panel, so unmounting wipes it from component state rather than
+      // leaving it in a React tree that may be re-rendered or snapshotted.
+      setToken('');
+    };
   }, [refresh]);
 
   const connect = async () => {
@@ -86,12 +92,15 @@ export default function DiscordConnectionPanel() {
     setBusy(true);
     setMsg('');
     try {
+      // Deliberately not logged, not stashed, and not put in `msg`: once this
+      // call returns the only copy lives in the OS keystore.
       const r = await bridge().integrationSetToken({
         providerId: 'discord',
         token: token.trim(),
       });
-      // Clear the typed token from component state the moment it has been
-      // handed off — it lives in the OS keystore from here.
+      // Wipe the typed token from component state the moment it has been
+      // handed off, success or failure — on failure the user may well close
+      // the panel and come back, and it must not still be sitting in state.
       setToken('');
       if (r?.ok === false) setMsg(String(r.error ?? 'Could not connect Discord.'));
       else {

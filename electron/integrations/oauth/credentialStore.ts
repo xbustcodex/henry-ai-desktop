@@ -21,6 +21,7 @@
 
 import type Database from 'better-sqlite3';
 import { encryptKey, decryptKey } from '../../ipc/_keyStorage';
+import { registerSecret } from '../../ipc/appLog';
 import type { OAuthTokenSet } from './types';
 
 /** Settings-table key for a provider's stored credential. */
@@ -63,7 +64,15 @@ export function loadCredential(
   providerId: string,
   db: Database.Database,
 ): StoredCredential | null {
-  const stored = readSetting(db, credentialKey(providerId));
+  let stored: string;
+  try {
+    stored = readSetting(db, credentialKey(providerId));
+  } catch {
+    // A locked, migrating, or unwritable database is indistinguishable from
+    // "no credential" as far as a caller is concerned — and throwing here would
+    // take down a tool turn over something the user can fix by reconnecting.
+    return null;
+  }
   if (!stored) return null;
   let json: string;
   try {
@@ -95,7 +104,16 @@ export function loadCredential(
   }
 }
 
-/** Write (or overwrite) a provider's credential, encrypted at rest. */
+/**
+ * Write (or overwrite) a provider's credential, encrypted at rest.
+ *
+ * The stored values are also registered with the app log's literal-secret set.
+ * That is belt and braces, and it is needed: `redactLogs`' pattern rules catch
+ * JWTs, Google `ya29.` tokens, and long hex blobs, but a Discord bot token is
+ * an opaque string no heuristic can recognise. Registering the exact value is
+ * the only thing that guarantees it cannot reach a log line, and the policy
+ * flag is honoured by the log layer either way.
+ */
 export function saveCredential(
   providerId: string,
   credential: StoredCredential,
@@ -107,6 +125,9 @@ export function saveCredential(
       credentialKey(providerId),
       encryptKey(JSON.stringify({ ...credential, updatedAt: Date.now() })),
     );
+    registerSecret(credential.tokens.accessToken);
+    registerSecret(credential.tokens.refreshToken);
+    registerSecret(credential.clientSecret);
     return true;
   } catch {
     return false;

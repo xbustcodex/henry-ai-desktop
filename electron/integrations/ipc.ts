@@ -50,16 +50,30 @@ export function registerIntegrationHandlers(
   ipcMain.handle('integration:list', () => {
     return listProviderIds().map((id) => {
       const provider = getProvider(id);
-      return provider
-        ? {
-            id: provider.id,
-            label: provider.label,
-            setupHint: provider.setupHint,
-            scopes: provider.defaultScopes,
-            supportsOAuthFlow: provider.supportsOAuthFlow !== false,
-            requiresClientSecret: provider.requiresClientSecret !== false,
-          }
-        : { id, label: id, setupHint: '', scopes: [], supportsOAuthFlow: true, requiresClientSecret: true };
+      if (!provider) {
+        return {
+          id,
+          label: id,
+          setupHint: '',
+          scopes: [],
+          supportsOAuthFlow: true,
+          requiresClientSecret: true,
+        };
+      }
+      // Scopes come out of the registry, paired with the label the provider
+      // declared for that exact scope. A renderer that keeps its own consent
+      // list will drift from what is actually requested; this one cannot.
+      return {
+        id: provider.id,
+        label: provider.label,
+        setupHint: provider.setupHint,
+        scopes: provider.defaultScopes.map((scope) => ({
+          id: scope,
+          label: provider.scopeLabels?.[scope] ?? scope,
+        })),
+        supportsOAuthFlow: provider.supportsOAuthFlow !== false,
+        requiresClientSecret: provider.requiresClientSecret !== false,
+      };
     });
   });
 

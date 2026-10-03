@@ -94,7 +94,18 @@ export function redact(input: string, extraSecrets: string[] = []): string {
     .replace(/\b(ya29\.)[A-Za-z0-9._-]+/g, '$1[redacted]')
     .replace(/\b(1\/\/)[A-Za-z0-9._-]+/g, '$1[redacted]')
     .replace(/\b[A-Za-z0-9_-]{24,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{20,}\b/g, '[redacted-jwt]')
-    .replace(/\b(Bearer|Bot|token=|access_token=|refresh_token=)\s*\S+/gi, '$1[redacted]');
+    .replace(/\b(Bearer|Bot)\s+\S+/gi, '$1 [redacted]')
+    // A quoted or assigned value under a credential-bearing key. Providers and
+    // proxies both do this in error bodies — `client_secret "..." was rejected`
+    // — and it is the shape a leaked secret most often arrives in.
+    .replace(
+      /(["']?\b(?:client_?secret|access_?token|refresh_?token|id_?token|api_?key|password)\b["']?\s*[:=]\s*)("[^"]*"|'[^']*'|\S+)/gi,
+      '$1[redacted]',
+    )
+    .replace(
+      /\b(client_?secret|access_?token|refresh_?token|id_?token|api_?key|password)\s+("[^"]*"|'[^']*'|\S+)/gi,
+      '$1 [redacted]',
+    );
 }
 
 /** A provider returned something that isn't a token response. */
@@ -411,9 +422,12 @@ export async function requestToken(
     }
     if (!res.ok || data.error) {
       const description = String(data.error_description ?? data.error ?? `HTTP ${res.status}`);
+      // The provider may quote the credential back at us. `extraSecrets` is the
+      // only thing that reliably catches it — no pattern can guess an opaque
+      // secret, but we know exactly which one we just sent.
       throw new OAuthFlowError(
         provider.id,
-        `${provider.label} authorization failed: ${description}`,
+        `${provider.label} authorization failed: ${redact(description, [clientSecret])}`,
         isRevocationResponse(data, res.status),
       );
     }
@@ -429,7 +443,7 @@ export async function requestToken(
       aborted
         ? `${provider.label} token request timed out.`
         : `${provider.label} token request failed: ${
-            redact(e instanceof Error ? e.message : String(e))
+            redact(e instanceof Error ? e.message : String(e), [clientSecret])
           }`,
     );
   } finally {
@@ -532,9 +546,15 @@ export async function connect(input: ConnectInput): Promise<OAuthTokenSet> {
   } catch (e) {
     // The browser never opened, so no callback will arrive — release the port.
     listener.close();
+    // The frame holds the client secret, so it must be named as a known secret
+    // to `redact`. A browser-launch failure that quoted it back would hand a
+    // credential straight to the renderer through the error string.
     throw new OAuthFlowError(
       provider.id,
-      `Could not open the browser: ${redact(e instanceof Error ? e.message : String(e))}`,
+      `Could not open the browser: ${redact(
+        e instanceof Error ? e.message : String(e),
+        [input.clientSecret ?? ''],
+      )}`,
     );
   }
 
@@ -670,9 +690,10 @@ export async function disconnect(
     } catch (e) {
       // Never fails the disconnect: the local row still has to go.
       log.warn(
-        `[oauth:${provider.id}] remote revoke failed: ${
-          redact(e instanceof Error ? e.message : String(e))
-        }`,
+        `[oauth:${provider.id}] remote revoke failed: ${redact(
+          e instanceof Error ? e.message : String(e),
+          [stored.tokens.refreshToken, stored.tokens.accessToken, stored.clientSecret ?? ''],
+        )}`,
       );
     }
   }
