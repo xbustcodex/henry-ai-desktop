@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import GatedChannelHost, { runGatedGcode, runGatedPrint } from './GatedChannelHost';
 import PrinterDiscovery from './PrinterDiscovery';
 
 interface PrinterPort {
@@ -9,7 +10,7 @@ interface PrinterPort {
 
 interface PrinterLog {
   id: string;
-  type: 'sent' | 'response' | 'error' | 'info' | 'disconnected';
+  type: 'sent' | 'response' | 'error' | 'warn' | 'info' | 'disconnected';
   data: string;
   timestamp: number;
 }
@@ -236,11 +237,24 @@ export default function PrinterPanel() {
     try {
       const lines = command.split('\n').filter(Boolean);
       for (const line of lines) {
-        const result = await window.henryAPI.printerSendGcode(line);
+        // `printer:sendGcode` is gated by `confirmShell`. Before the gate had a
+        // consumer, `M115`/`M105` — including the pair `connectToPrinter`
+        // fires on every successful connect — were refused and logged as a
+        // bare "Send failed.", which reads like a printer fault.
+        const outcome = await runGatedGcode<{ success: boolean; error?: string }>(line);
+        if (outcome.status === 'declined') {
+          addLog('warn', `Not sent — you declined: ${line}`);
+          continue;
+        }
+        if (outcome.status === 'blocked') {
+          addLog('error', `${line} — not sent: ${outcome.reason}`);
+          continue;
+        }
+        const result = outcome.response;
         if (!result.success) addLog('error', result.error || 'Send failed.');
       }
-    } catch (e: any) {
-      addLog('error', e.message);
+    } catch (e) {
+      addLog('error', e instanceof Error ? e.message : String(e));
     } finally {
       setSending(false);
     }
@@ -251,14 +265,23 @@ export default function PrinterPanel() {
     setPrinting(true);
     addLog('info', 'Starting print job…');
     try {
-      const result = await window.henryAPI.printerPrintGcode(printGcode);
+      const outcome = await runGatedPrint<{ success: boolean; sent?: number; total?: number; error?: string }>(printGcode);
+      if (outcome.status === 'declined') {
+        addLog('warn', 'Print cancelled — nothing was sent to the printer.');
+        return;
+      }
+      if (outcome.status === 'blocked') {
+        addLog('error', `Print not started: ${outcome.reason}`);
+        return;
+      }
+      const result = outcome.response;
       if (result.success) {
         addLog('info', `Print job started — ${result.sent}/${result.total} commands sent.`);
       } else {
         addLog('error', result.error || 'Print failed.');
       }
-    } catch (e: any) {
-      addLog('error', e.message);
+    } catch (e) {
+      addLog('error', e instanceof Error ? e.message : String(e));
     } finally {
       setPrinting(false);
     }
@@ -270,6 +293,7 @@ export default function PrinterPanel() {
 
   return (
     <div className="h-full flex flex-col bg-henry-bg text-henry-text overflow-hidden">
+      <GatedChannelHost />
       {/* Header */}
       <div className="shrink-0 px-6 py-4 border-b border-henry-border/40 bg-henry-surface/20">
         <div className="flex items-center justify-between">
@@ -447,10 +471,10 @@ export default function PrinterPanel() {
                 )}
 
                 {/* Error/info log — compact, below the wizard */}
-                {log.some((e) => e.type === 'error' || e.type === 'info') && (
+                {log.some((e) => e.type === 'error' || e.type === 'warn' || e.type === 'info') && (
                   <div className="rounded-xl bg-henry-surface/20 border border-henry-border/20 p-3 font-mono text-xs space-y-0.5 max-h-24 overflow-y-auto">
-                    {log.filter((e) => e.type === 'error' || e.type === 'info').slice(-6).map((entry) => (
-                      <div key={entry.id} className={`leading-relaxed ${entry.type === 'error' ? 'text-henry-error' : 'text-henry-text-muted'}`}>
+                    {log.filter((e) => e.type === 'error' || e.type === 'warn' || e.type === 'info').slice(-6).map((entry) => (
+                      <div key={entry.id} className={`leading-relaxed ${entry.type === 'error' ? 'text-henry-error' : entry.type === 'warn' ? 'text-amber-400' : 'text-henry-text-muted'}`}>
                         {entry.data}
                       </div>
                     ))}

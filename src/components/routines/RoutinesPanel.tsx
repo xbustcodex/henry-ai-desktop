@@ -6,8 +6,9 @@ import {
   templateToRoutineInput,
   type RoutineTemplate,
 } from '../../henry/routineTemplates';
+import { ROUTINE_TRIGGER_EVENTS } from '../../henry/routineTriggerEvents';
 import { toast } from '../ui/Toast';
-import { Clock, Play, Plus, Trash2, Loader2, X, History } from 'lucide-react';
+import { Clock, Play, Plus, Trash2, Loader2, X, History, CalendarClock } from 'lucide-react';
 
 /**
  * RoutinesPanel — management UI for Henry's scheduled Routines (design §3).
@@ -17,6 +18,116 @@ import { Clock, Play, Plus, Trash2, Loader2, X, History } from 'lucide-react';
  * `scheduler:*` IPC channels exposed on `window.henryAPI` as
  * listRoutines/addRoutine/toggleRoutine/runRoutineNow/deleteRoutine.
  */
+
+/**
+ * Trigger types the scheduler accepts. Mirrors `TRIGGER_TYPES` in
+ * electron/agent/triggers.ts — the renderer may not import from `electron/`,
+ * so this is the renderer's half of the contract and `buildTriggerSpec` is
+ * what keeps the two in step.
+ */
+const TRIGGER_TYPES = ['cron', 'interval', 'at', 'event'] as const;
+type TriggerType = (typeof TRIGGER_TYPES)[number];
+
+/** What the picker holds while the user is filling it in. */
+interface TriggerDraft {
+  type: TriggerType;
+  cronExpression: string;
+  /** Minutes. The floor is 30s (MIN_INTERVAL_MS); 1 minute is the safe grid. */
+  everyMinutes: string;
+  /** Local `datetime-local` value, e.g. `2026-10-04T07:00`. */
+  runAt: string;
+  event: string;
+}
+
+const EMPTY_TRIGGER: TriggerDraft = {
+  type: 'cron',
+  cronExpression: '0 7 * * *',
+  everyMinutes: '60',
+  runAt: '',
+  event: ROUTINE_TRIGGER_EVENTS[0]?.name ?? '',
+};
+
+/**
+ * Turn the draft into the spec `parseTrigger` expects, or null with the reason
+ * the picker should show. Validating here means the user gets the message
+ * before an IPC round trip, while the same validation still runs on the other
+ * side — this is a convenience, not the guarantee.
+ */
+function buildTriggerSpec(draft: TriggerDraft): { spec: Record<string, unknown> | null; error: string | null } {
+  switch (draft.type) {
+    case 'cron': {
+      const expr = draft.cronExpression.trim();
+      if (!expr) return { spec: null, error: 'A cron trigger needs an expression, e.g. 0 7 * * *.' };
+      return { spec: { type: 'cron', cronExpression: expr }, error: null };
+    }
+    case 'interval': {
+      const minutes = Number(draft.everyMinutes);
+      if (!Number.isFinite(minutes) || minutes < 1) {
+        return { spec: null, error: 'An interval needs at least 1 minute.' };
+      }
+      return { spec: { type: 'interval', everyMs: Math.round(minutes * 60_000) }, error: null };
+    }
+    case 'at': {
+      if (!draft.runAt) return { spec: null, error: 'Pick a date and time for the one-shot run.' };
+      const ms = Date.parse(draft.runAt);
+      if (Number.isNaN(ms)) return { spec: null, error: 'That date and time could not be read.' };
+      return { spec: { type: 'at', runAt: new Date(ms).toISOString() }, error: null };
+    }
+    case 'event': {
+      if (!draft.event) return { spec: null, error: 'Pick an event to watch.' };
+      return { spec: { type: 'event', event: draft.event }, error: null };
+    }
+  }
+}
+
+/** Read a saved Routine's trigger back into the picker. */
+function triggerDraftFrom(r: Routine): TriggerDraft {
+  let parsed: Record<string, unknown> | null = null;
+  if (r.triggerConfig) {
+    try {
+      parsed = JSON.parse(r.triggerConfig) as Record<string, unknown>;
+    } catch {
+      parsed = null;
+    }
+  }
+  const type = (r.triggerType ?? 'cron') as TriggerType;
+  if (!TRIGGER_TYPES.includes(type)) return { ...EMPTY_TRIGGER, cronExpression: r.cronExpression };
+  if (type === 'cron') {
+    return { ...EMPTY_TRIGGER, type, cronExpression: String(parsed?.cronExpression ?? r.cronExpression ?? '') };
+  }
+  if (type === 'interval') {
+    return { ...EMPTY_TRIGGER, type, everyMinutes: String(Math.round(Number(parsed?.everyMs ?? 3_600_000) / 60_000)) };
+  }
+  if (type === 'at') {
+    // `datetime-local` wants a local wall-clock string with no zone suffix.
+    const d = new Date(String(parsed?.runAt ?? ''));
+    const local = Number.isNaN(d.getTime())
+      ? ''
+      : new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+    return { ...EMPTY_TRIGGER, type, runAt: local };
+  }
+  return { ...EMPTY_TRIGGER, type, event: String(parsed?.event ?? EMPTY_TRIGGER.event) };
+}
+
+/** The one-line summary shown on a Routine card. */
+function describeTriggerDraft(draft: TriggerDraft): string {
+  const built = buildTriggerSpec(draft);
+  if (!built.spec) return 'incomplete';
+  switch (draft.type) {
+    case 'cron':
+      return describeCron(String(built.spec.cronExpression));
+    case 'interval': {
+      const mins = Number(draft.everyMinutes);
+      return mins >= 60 && mins % 60 === 0 ? `Every ${mins / 60}h` : `Every ${mins} min`;
+    }
+    case 'at': {
+      const d = new Date(draft.runAt);
+      return `Once at ${d.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}`;
+    }
+    case 'event':
+      return `On ${draft.event}`;
+  }
+}
 
 interface Routine {
   id: string;
@@ -28,6 +139,13 @@ interface Routine {
   lastRunAt: string | null;
   nextRunAt: string | null;
   createdAt: string;
+  /**
+   * The authoritative trigger, added by `ensureTriggerSchema`. A row written
+   * before the migration has neither, and reads back as cron — which is what
+   * `triggerDraftFrom` assumes.
+   */
+  triggerType?: string | null;
+  triggerConfig?: string | null;
 }
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -97,7 +215,159 @@ function formatRunTime(iso: string | null): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ` ${time}`;
 }
 
-const EMPTY_FORM = { name: '', description: '', prompt: '', cronExpression: '0 7 * * *' };
+/**
+ * `scheduler:set-trigger`, reached through preload as `setRoutineTrigger`.
+ *
+ * The declaration belongs in `src/global.d.ts` next to `addRoutine`; until it
+ * lands the panel reads the method off the API object through this narrow type
+ * rather than casting at every call site. Structurally it is identical to the
+ * declaration that replaces it, and the panel already assumes it exists — a
+ * Routine with a missing bridge would silently keep its old trigger, which is
+ * exactly the "channel exists, nobody calls it" shape this work exists to
+ * close.
+ */
+type SetRoutineTrigger = (
+  id: string,
+  trigger: Record<string, unknown>,
+) => Promise<{ ok: boolean; result?: Routine | null; error?: string }>;
+
+/**
+ * Unchecked cast, one reason: `setRoutineTrigger` is declared in preload but
+ * not yet in `global.d.ts`, and this panel is not permitted to edit that file.
+ * The method really is optional — an older preload that lacks the bridge
+ * leaves it undefined, and `handleSaveTrigger` surfaces that as an error
+ * rather than pretending the change was saved.
+ */
+const apiWithSetTrigger = window.henryAPI as unknown as {
+  setRoutineTrigger?: SetRoutineTrigger;
+};
+
+const EMPTY_FORM = { name: '', description: '', prompt: '', trigger: EMPTY_TRIGGER };
+
+const TRIGGER_TYPE_LABELS: Record<TriggerType, string> = {
+  cron: 'Cron',
+  interval: 'Every',
+  at: 'Once',
+  event: 'On event',
+};
+
+/**
+ * The trigger half of a Routine's definition: a type, plus the one field that
+ * type needs. Used by both the create form and the inline "change trigger"
+ * editor so a Routine cannot be created one way and edited another.
+ */
+function TriggerPicker({
+  draft,
+  onChange,
+}: {
+  draft: TriggerDraft;
+  onChange: (next: TriggerDraft) => void;
+}) {
+  const set = <K extends keyof TriggerDraft>(key: K, value: TriggerDraft[K]) =>
+    onChange({ ...draft, [key]: value });
+
+  return (
+    <div>
+      <label className="text-[10px] uppercase tracking-wide text-henry-text-muted block mb-1">
+        When should this run
+      </label>
+      <div className="flex gap-1.5 mb-2" role="tablist" aria-label="Trigger type">
+        {TRIGGER_TYPES.map((t) => (
+          <button
+            key={t}
+            type="button"
+            role="tab"
+            aria-selected={draft.type === t}
+            onClick={() => set('type', t)}
+            className={`px-2.5 py-1 text-[11px] rounded-lg border transition-colors ${
+              draft.type === t
+                ? 'bg-henry-accent/15 text-henry-accent border-henry-accent/25'
+                : 'text-henry-text-muted border-henry-border/30 hover:border-henry-border/50'
+            }`}
+          >
+            {TRIGGER_TYPE_LABELS[t]}
+          </button>
+        ))}
+      </div>
+
+      {draft.type === 'cron' && (
+        <div>
+          <input
+            aria-label="Cron expression"
+            value={draft.cronExpression}
+            onChange={(e) => set('cronExpression', e.target.value)}
+            placeholder="0 7 * * *"
+            className="w-full rounded-lg border border-henry-border/40 bg-henry-bg/40 px-2.5 py-1.5 text-xs font-mono focus:outline-none focus:border-henry-accent/50"
+          />
+          <p className="text-[10px] text-henry-text-dim mt-1">
+            {draft.cronExpression.trim()
+              ? `→ ${describeCron(draft.cronExpression)}`
+              : 'minute hour day-of-month month day-of-week'}
+          </p>
+        </div>
+      )}
+
+      {draft.type === 'interval' && (
+        <div>
+          <div className="flex items-center gap-2">
+            <input
+              aria-label="Repeat every (minutes)"
+              type="number"
+              min={1}
+              step={1}
+              value={draft.everyMinutes}
+              onChange={(e) => set('everyMinutes', e.target.value)}
+              className="w-28 rounded-lg border border-henry-border/40 bg-henry-bg/40 px-2.5 py-1.5 text-xs focus:outline-none focus:border-henry-accent/50"
+            />
+            <span className="text-[11px] text-henry-text-muted">minutes</span>
+          </div>
+          <p className="text-[10px] text-henry-text-dim mt-1">
+            A fixed gap between runs, starting now. The shortest Henry accepts is one minute.
+          </p>
+        </div>
+      )}
+
+      {draft.type === 'at' && (
+        <div>
+          <input
+            aria-label="Run at"
+            type="datetime-local"
+            value={draft.runAt}
+            onChange={(e) => set('runAt', e.target.value)}
+            className="w-full rounded-lg border border-henry-border/40 bg-henry-bg/40 px-2.5 py-1.5 text-xs focus:outline-none focus:border-henry-accent/50"
+          />
+          <p className="text-[10px] text-henry-text-dim mt-1">
+            Runs once at that moment, then switches itself off. If Henry was closed at the time it runs
+            as soon as it next starts.
+          </p>
+        </div>
+      )}
+
+      {draft.type === 'event' && (
+        <div>
+          <select
+            aria-label="Event to watch"
+            value={draft.event}
+            onChange={(e) => set('event', e.target.value)}
+            className="w-full rounded-lg border border-henry-border/40 bg-henry-bg/40 px-2.5 py-1.5 text-xs focus:outline-none focus:border-henry-accent/50"
+          >
+            {ROUTINE_TRIGGER_EVENTS.map((ev) => (
+              <option key={ev.name} value={ev.name}>
+                {ev.label}
+              </option>
+            ))}
+          </select>
+          <p className="text-[10px] text-henry-text-dim mt-1">
+            {ROUTINE_TRIGGER_EVENTS.find((ev) => ev.name === draft.event)?.description}
+          </p>
+          <p className="text-[10px] text-henry-text-dim mt-1">
+            Bursts are collapsed and runs are capped, so a busy event cannot pile up work.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function RoutinesPanel() {
   const [routines, setRoutines] = useState<Routine[]>([]);
@@ -116,6 +386,10 @@ export default function RoutinesPanel() {
   const [tab, setTab] = useState<'routines' | 'ideas'>('routines');
   const [ideaCategory, setIdeaCategory] = useState<RoutineTemplate['category'] | 'All'>('All');
   const [starting, setStarting] = useState<string | null>(null);
+  // Inline "change trigger" editor. A Routine created with the wrong trigger
+  // type is otherwise permanently wrong — there was no channel to change it.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [triggerDraft, setTriggerDraft] = useState<TriggerDraft>(EMPTY_TRIGGER);
 
   /** Start a ready-made routine. Same path as the form, so behaviour cannot drift. */
   const startFromTemplate = async (template: RoutineTemplate) => {
@@ -228,26 +502,71 @@ export default function RoutinesPanel() {
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.name.trim() || !form.prompt.trim() || !form.cronExpression.trim()) {
-      setFormError('Name, prompt, and schedule are all required.');
+    if (!form.name.trim() || !form.prompt.trim()) {
+      setFormError('Name, prompt, and a trigger are all required.');
+      return;
+    }
+    const built = buildTriggerSpec(form.trigger);
+    if (!built.spec) {
+      setFormError(built.error ?? 'That trigger is not usable.');
       return;
     }
     setSaving(true);
     setFormError(null);
     try {
-      const res = await window.henryAPI.addRoutine?.({
+      // `trigger` is the authoritative field; `cronExpression` is sent only so
+      // the legacy NOT NULL column has something true in it for a cron Routine.
+      // Assigning through a local keeps the extra field off the object literal's
+      // excess-property check while `HenryRoutineInput` still types the rest.
+      const payload = {
         name: form.name.trim(),
         description: form.description.trim() || undefined,
         prompt: form.prompt.trim(),
-        cronExpression: form.cronExpression.trim(),
+        cronExpression: form.trigger.type === 'cron' ? form.trigger.cronExpression.trim() : '',
         enabled: true,
-      });
+        trigger: built.spec,
+      };
+      const res = await window.henryAPI.addRoutine?.(payload);
       if (res && !res.ok) {
         setFormError(res.error ?? 'Failed to add Routine.');
         return;
       }
       setForm(EMPTY_FORM);
       setShowForm(false);
+      void reload();
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /**
+   * Move an existing Routine onto a different trigger. This is the only way to
+   * fix a Routine created with the wrong type — without it the picker would
+   * only ever apply to new Routines and every existing one would be stuck.
+   */
+  async function handleSaveTrigger() {
+    if (!editingId) return;
+    if (typeof apiWithSetTrigger.setRoutineTrigger !== 'function') {
+      setFormError('Changing a trigger needs a newer build — this one cannot do it.');
+      return;
+    }
+    const built = buildTriggerSpec(triggerDraft);
+    if (!built.spec) {
+      setFormError(built.error ?? 'That trigger is not usable.');
+      return;
+    }
+    setSaving(true);
+    setFormError(null);
+    try {
+      const res = await apiWithSetTrigger.setRoutineTrigger(editingId, built.spec);
+      if (res && !res.ok) {
+        setFormError(res.error ?? 'Could not change that trigger.');
+        return;
+      }
+      setEditingId(null);
+      setFormError(null);
       void reload();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : String(err));
@@ -406,22 +725,10 @@ export default function RoutinesPanel() {
               className="w-full rounded-lg border border-henry-border/40 bg-henry-bg/40 px-2.5 py-1.5 text-xs leading-relaxed resize-y focus:outline-none focus:border-henry-accent/50"
             />
           </div>
-          <div>
-            <label className="text-[10px] uppercase tracking-wide text-henry-text-muted block mb-1">
-              Schedule (cron)
-            </label>
-            <input
-              value={form.cronExpression}
-              onChange={(e) => setForm((f) => ({ ...f, cronExpression: e.target.value }))}
-              placeholder="0 7 * * *"
-              className="w-full rounded-lg border border-henry-border/40 bg-henry-bg/40 px-2.5 py-1.5 text-xs font-mono focus:outline-none focus:border-henry-accent/50"
-            />
-            <p className="text-[10px] text-henry-text-dim mt-1">
-              {form.cronExpression.trim()
-                ? `→ ${describeCron(form.cronExpression)}`
-                : 'minute hour day-of-month month day-of-week'}
-            </p>
-          </div>
+          <TriggerPicker
+            draft={form.trigger}
+            onChange={(trigger) => setForm((f) => ({ ...f, trigger }))}
+          />
           {formError && <p className="text-[11px] text-henry-error">{formError}</p>}
           <div className="flex justify-end">
             <button
@@ -471,7 +778,7 @@ export default function RoutinesPanel() {
                         {r.name}
                       </h3>
                       <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-md bg-henry-bg/50 border border-henry-border/30 text-henry-text-muted font-mono">
-                        {describeCron(r.cronExpression)}
+                        {describeTriggerDraft(triggerDraftFrom(r))}
                       </span>
                     </div>
                     {r.description && (
@@ -484,6 +791,35 @@ export default function RoutinesPanel() {
                       <span>Next: {enabled ? formatRunTime(r.nextRunAt) : 'paused'}</span>
                     </div>
                   </div>
+                {editingId === r.id && (
+                  <div className="mt-3 border-t border-henry-border/25 pt-3 space-y-3">
+                    <TriggerPicker
+                      draft={triggerDraft}
+                      onChange={setTriggerDraft}
+                    />
+                    {formError && <p className="text-[11px] text-henry-error">{formError}</p>}
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingId(null);
+                          setFormError(null);
+                        }}
+                        className="px-3 py-1.5 text-xs rounded-lg border border-henry-border/40 text-henry-text-muted hover:text-henry-text transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleSaveTrigger()}
+                        disabled={saving}
+                        className="px-4 py-1.5 text-xs rounded-lg bg-henry-accent text-white font-medium hover:bg-henry-accent/90 disabled:opacity-40 transition-colors"
+                      >
+                        {saving ? 'Saving…' : 'Save trigger'}
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                   <div className="flex items-center gap-1.5 shrink-0">
                     {/* Run Now */}
@@ -499,6 +835,21 @@ export default function RoutinesPanel() {
                         <Play className="w-3 h-3" />
                       )}
                       Run
+                    </button>
+
+                    {/* Change trigger type — the only way to fix a Routine
+                        created with the wrong one. */}
+                    <button
+                      onClick={() => {
+                        setEditingId(editingId === r.id ? null : r.id);
+                        setTriggerDraft(triggerDraftFrom(r));
+                        setFormError(null);
+                      }}
+                      title="Change trigger"
+                      aria-expanded={editingId === r.id}
+                      className="p-1 rounded-lg text-henry-text-dim hover:text-henry-accent transition-colors"
+                    >
+                      <CalendarClock className="w-3.5 h-3.5" />
                     </button>
 
                     {/* Enabled toggle */}

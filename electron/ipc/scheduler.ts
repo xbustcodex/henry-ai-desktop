@@ -1,12 +1,12 @@
 /**
  * Scheduler IPC — the renderer's boundary to Henry's Routines (design §6).
  *
- * Channels (match preload.ts):
- *   - `scheduler:list`     → every Routine with its status/next-run
- *   - `scheduler:add`      → create a new Routine
- *   - `scheduler:toggle`   → enable/disable a Routine by id
- *   - `scheduler:run-now`  → fire a Routine immediately
- *   - `scheduler:delete`   → remove a Routine
+ *   - `scheduler:list`         → every Routine with its status/next-run
+ *   - `scheduler:add`          → create a new Routine (any trigger type)
+ *   - `scheduler:set-trigger`  → change an existing Routine's trigger type
+ *   - `scheduler:toggle`       → enable/disable a Routine by id
+ *   - `scheduler:run-now`      → fire a Routine immediately
+ *   - `scheduler:delete`       → remove a Routine
  *
  * The `HenryScheduler` instance is owned by main.ts and handed in here so the
  * cron jobs and the IPC surface share one source of truth.
@@ -38,6 +38,27 @@ export function registerSchedulerHandlers(scheduler: HenryScheduler, db: Databas
 
   ipcMain.handle("scheduler:add", (_e, task: NewScheduledTask) =>
     safe(() => scheduler.add(task))(),
+  );
+
+  /**
+   * Change a Routine's trigger type after it exists. Without this the renderer
+   * can only ever create cron Routines — `scheduler:add` accepted any spec, but
+   * nothing could ever move an existing Routine onto one, so a Routine created
+   * from the wrong type was permanently wrong.
+   *
+   * `scheduler.setTrigger` re-parses through `parseTrigger`, so an invalid spec
+   * comes back as `{ ok: false, error }` with a message written for the user
+   * and the row is left untouched.
+   */
+  ipcMain.handle(
+    "scheduler:set-trigger",
+    (_e, payload: { id: string; trigger: unknown }) =>
+      safe(() => {
+        if (!payload?.id) throw new Error("A Routine id is required.");
+        const updated = scheduler.setTrigger(String(payload.id), payload.trigger);
+        if (!updated) throw new Error(`No Routine found for id "${payload.id}".`);
+        return updated;
+      })(),
   );
 
   ipcMain.handle(

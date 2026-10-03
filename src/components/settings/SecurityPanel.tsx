@@ -17,8 +17,8 @@ import type { HenrySecurityPolicy, HenrySecurityStatus } from '../../global';
 interface SwitchRow {
   key: keyof HenrySecurityPolicy;
   label: string;
-  /** Static explanation. */
-  help: string;
+  /** Static explanation. Omitted only when `dynamicHelp` always has an answer. */
+  help?: string;
   /**
    * Overrides `help` with text derived from live state. Used where a hardcoded
    * number would go stale — the Security panel must never claim a tool count
@@ -82,7 +82,12 @@ const LOCKS: SwitchRow[] = [
   {
     key: 'appLock',
     label: 'Require a PIN to unlock Henry',
-    help: 'Needs a PIN set below. The PIN is stored as a scrypt hash, never as text.',
+    // Says plainly what ON does, because the alternative — a lock that silently
+    // kills every feature — reads as a bug rather than as a policy.
+    dynamicHelp: (s) =>
+      s.locked
+        ? 'On — Henry is locked right now. The lock screen is asking for your PIN.'
+        : 'Needs a PIN set below. The PIN is stored as a scrypt hash, never as text. While the lock is on, Henry asks for the PIN before it will do anything at all.',
     needsPin: true,
   },
 ];
@@ -103,7 +108,7 @@ function Toggle({
 }) {
   // `dynamicHelp` returning null means "I have nothing truthful to say right
   // now" — fall back to the static copy rather than rendering an empty gap.
-  const help = row.dynamicHelp?.(status) ?? row.help;
+  const help = row.dynamicHelp?.(status) ?? row.help ?? '';
   return (
     <label className="flex items-start gap-3 py-3 border-b border-henry-border/20 last:border-0 cursor-pointer">
       <input
@@ -274,7 +279,8 @@ export default function SecurityPanel() {
         </div>
         <p className="text-[10px] text-henry-text-muted mt-2">
           Stored as a scrypt hash. Henry cannot show it back to you, and we cannot recover it
-          for you — if you forget it, remove it from here and set a new one.
+          for you. If you forget it while the lock is on, quit Henry and remove the PIN from the
+          settings database — the lock screen cannot get you in without it.
         </p>
       </div>
     </div>

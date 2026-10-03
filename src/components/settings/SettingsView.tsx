@@ -30,6 +30,8 @@ import GoogleConnectionPanel from './GoogleConnectionPanel';
 import SecurityPanel from './SecurityPanel';
 import PrivacyPanel from './PrivacyPanel';
 import LogsPanel from './LogsPanel';
+import AppLockGate from '../lock/AppLockGate';
+import KnowledgePanel from '../knowledge/KnowledgePanel';
 import { isMacOS, getPlatformName } from '../../utils/platform';
 import type { EndpointingSettings } from '../../henry/voiceEndpointing';
 import { getEndpointingSettings, saveEndpointingSettings } from '../../henry/voice';
@@ -1159,7 +1161,18 @@ function SilentToolsNotice() {
 
 export default function SettingsView() {
   return (
-    <div className="h-full overflow-y-auto bg-henry-bg">
+    <>
+      {/*
+        The app lock has to be enforced in the UI somewhere reachable while
+        `main.ts` refuses every non-exempt channel. Settings is where the lock
+        is configured, so it is also where the user comes looking for it.
+
+        NOTE FOR MAIN: this must also be mounted in `src/App.tsx` at the app
+        root. Settings is one tab — a lock taken while the user is on Chat
+        leaves every panel dead until they navigate here. See the handover.
+      */}
+      <AppLockGate />
+      <div className="h-full overflow-y-auto bg-henry-bg">
       <div className="max-w-3xl mx-auto px-5 py-6 space-y-5">
         <div>
           <h1 className="text-xl font-semibold text-henry-text">Settings</h1>
@@ -1216,6 +1229,7 @@ export default function SettingsView() {
 
         <QuitSection />
       </div>
-    </div>
+      </div>
+    </>
   );
 }

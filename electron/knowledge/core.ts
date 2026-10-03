@@ -23,6 +23,7 @@ import { resolveUserPath } from '../agent/tools/files';
 import { chunkText, DEFAULT_CHUNK_OPTIONS, type TextChunk } from '../vector/chunk';
 import { createEmbedder, type Embedder, type EmbedderConfig } from '../vector/embeddings';
 import { migrateVectorSchema, VectorStore } from '../vector/store';
+import { emitTriggerEvent } from '../agent/triggers';
 import type { SqlDatabase } from '../vector/sql';
 
 /** Where a document came from. */
@@ -255,6 +256,26 @@ export class KnowledgeBase {
         )
         .run(documentId, input.sourceKind, input.uri, input.title, JSON.stringify(input.tags), hash, now, now);
     }
+
+    // `index()` is the single choke point every ingest funnels through — the
+    // three public ingest methods above, the `knowledge:*` IPC handlers and the
+    // agent tools alike — so this is the one place that can honestly mean
+    // "the knowledge base changed".
+    //
+    // It fires only here, past the content-hash dedupe that returns
+    // `unchanged: true` earlier, so re-ingesting identical content emits
+    // nothing. That makes this emitter incapable of a storm by construction,
+    // before the bus's own guard is even consulted.
+    //
+    // `emitTriggerEvent` cannot throw (EventBus.emit isolates each subscriber),
+    // so an ingest is never failed by a Routine watching this event.
+    emitTriggerEvent('knowledge.ingested', {
+      documentId,
+      sourceKind: input.sourceKind,
+      uri: input.uri,
+      title: input.title,
+      chunkCount: embedded.length,
+    });
 
     const document = this.getDocument(documentId);
     if (!document) throw new Error('knowledge document vanished immediately after insert');

@@ -6,6 +6,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useStore } from '../../store';
 import { isMacOS, isLinux, isWindows } from '../../utils/platform';
+import GatedChannelHost, { runGatedShell } from '../computer/GatedChannelHost';
 
 const getApi = () => (window as any).henryAPI as any;
 
@@ -192,20 +193,44 @@ export default function HQPanel() {
       setChatLog(l => [...l.slice(0, -1), { role: 'henry', text: fullText }]);
     });
     stream.onDone(() => {
-      // Auto-execute any shell commands Henry suggests
+      // Auto-execute any shell commands Henry suggests.
+      //
+      // `computer:runShell` is gated: with `confirmShell` on the boundary
+      // refuses it until a grant covering THIS exact payload is armed, and the
+      // only way to arm one is `securityApproveChannel` — which had no call
+      // sites in `src/`. The old `.catch(() => {})` therefore swallowed a
+      // standing safety refusal and HQ looked like it had run the command and
+      // stayed silent. `runGatedShell` asks, and every outcome is reported.
       const cmdMatch = fullText.match(/```(?:bash|sh|shell|zsh)?\s*\n([\s\S]+?)```/);
       if (cmdMatch && getApi()?.computerRunShell) {
-        getApi()?.computerRunShell({ command: cmdMatch[1].trim(), timeout: 15000 }).then((r: any) => {
-          // The handler returns `output` (computer.ts:203). This read `stdout`,
-          // which the handler never returns, so auto-run from a code fence never
-          // showed its result even when the command worked.
-          const text = r?.output ?? r?.stdout;
+        const command = cmdMatch[1].trim();
+        void runGatedShell<HenryComputerShellResult>({ command, timeout: 15000 }).then((outcome) => {
+          if (outcome.status !== 'ran') {
+            setChatLog((l) => [
+              ...l,
+              {
+                role: 'system',
+                text:
+                  outcome.status === 'declined'
+                    ? `⚙️ Not run — you declined: ${command}`
+                    : `⚙️ Not run — ${outcome.reason}`,
+              },
+            ]);
+            return;
+          }
+          // `output` is what the handler returns (computer.ts:203). The old
+          // code read `stdout`, which the handler never returns, so auto-run
+          // from a code fence never showed its result even when it worked.
+          const r = outcome.response;
+          const text = r?.output;
           if (text) {
             setChatLog(l => [...l, { role: 'system', text: '⚙️ Result: ' + String(text).trim().slice(0, 500) }]);
-          } else if (r && r.success === false) {
+          } else if (r?.success === false) {
             setChatLog(l => [...l, { role: 'system', text: '⚙️ Failed: ' + String(r.error || 'no output').slice(0, 300) }]);
           }
-        }).catch(() => {});
+        }).catch((e) => {
+          setChatLog(l => [...l, { role: 'system', text: '⚙️ Failed: ' + String(e).slice(0, 300) }]);
+        });
       }
       setChatBusy(false);
     });
@@ -221,8 +246,17 @@ export default function HQPanel() {
     setShellInput('');
     setShellLog(l => [...l, { cmd, out: '…' }]);
     try {
-      const r = await getApi()?.computerRunShell({ command: cmd, timeout: 30000 });
-      setShellLog(l => [...l.slice(0,-1), { cmd, out: (r.stdout || r.output || '').trim() || r.error || 'done' }]);
+      const outcome = await runGatedShell<HenryComputerShellResult>({ command: cmd, timeout: 30000 });
+      if (outcome.status === 'declined') {
+        setShellLog(l => [...l.slice(0,-1), { cmd, out: 'Declined — nothing was run.', err: true }]);
+        return;
+      }
+      if (outcome.status === 'blocked') {
+        setShellLog(l => [...l.slice(0,-1), { cmd, out: outcome.reason, err: true }]);
+        return;
+      }
+      const r = outcome.response;
+      setShellLog(l => [...l.slice(0,-1), { cmd, out: (r.output || '').trim() || r.error || 'done' }]);
     } catch (e) {
       setShellLog(l => [...l.slice(0,-1), { cmd, out: String(e), err: true }]);
     }
@@ -258,6 +292,9 @@ export default function HQPanel() {
 
   return (
     <div className="flex flex-col h-full bg-[#06060e] text-white overflow-hidden select-none">
+      {/* Renders the shell-confirmation prompt. Without a host mounted, a
+          gated call that the boundary refuses has no way to ask for consent. */}
+      <GatedChannelHost />
       {/* ── TOP BAR ─────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-6 py-3 border-b border-white/5 flex-shrink-0">
         <div className="flex items-center gap-4">
@@ -455,7 +492,18 @@ export default function HQPanel() {
                 {(stats?.runningApps || []).map(app => (
                   <div key={app} className="flex items-center justify-between p-2.5 rounded-xl bg-white/3 border border-white/5 hover:border-white/10 group">
                     <span className="text-sm text-white/70">{app}</span>
-                    <button onClick={() => getApi()?.computerRunShell?.({ command: isMacOS() ? `osascript -e 'quit application "${app}"'` : isLinux() ? `pkill -f "${app}"` : `taskkill /f /im "${app}.exe"`, timeout: 3000 })}
+                    <button onClick={() => {
+                      const command = isMacOS() ? `osascript -e 'quit application "${app}"'` : isLinux() ? `pkill -f "${app}"` : `taskkill /f /im "${app}.exe"`;
+                      // Quitting an app is a shell command like any other, and
+                      // `confirmShell` covers it. The old call ignored its
+                      // result entirely, so a refusal looked like a no-op.
+                      void runGatedShell<HenryComputerShellResult>({ command, timeout: 3000 }).then((outcome) => {
+                        if (outcome.status === 'declined') return;
+                        if (outcome.status === 'blocked') {
+                          setChatLog(l => [...l, { role: 'system', text: `⚙️ Could not quit ${app}: ${outcome.reason}` }]);
+                        }
+                      });
+                    }}
                       className="text-[10px] text-red-400/40 group-hover:text-red-400/80 transition-all">✕</button>
                   </div>
                 ))}
@@ -563,8 +611,14 @@ export default function HQPanel() {
                     return [];
                   })().map(a => (
                     <button key={a.label} onClick={async () => {
-                      const r = await getApi()?.computerRunShell({ command: a.cmd, timeout: 10000 }).catch(() => null);
-                      if (r?.stdout?.trim()) setChatLog(l => [...l, { role: 'system', text: a.label + ': ' + r.stdout.trim() }]);
+                      const outcome = await runGatedShell<HenryComputerShellResult>({ command: a.cmd, timeout: 10000 });
+                      if (outcome.status === 'declined') return;
+                      if (outcome.status === 'blocked') {
+                        setChatLog(l => [...l, { role: 'system', text: `${a.label}: not run — ${outcome.reason}` }]);
+                        return;
+                      }
+                      const output = outcome.response?.output?.trim();
+                      if (output) setChatLog(l => [...l, { role: 'system', text: a.label + ': ' + output }]);
                     }} className="flex items-center gap-2 p-2.5 rounded-xl bg-black/20 border border-white/5 hover:bg-purple-500/10 hover:border-purple-500/30 transition-all text-sm text-white/60 hover:text-white text-left">
                       {a.label}
                     </button>

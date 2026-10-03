@@ -17,6 +17,7 @@ import {
   buildWorkerAITaskSystemPrompt,
   buildWorkerCodeGenSystemPrompt,
 } from '../../src/henry/charter';
+import { emitTriggerEvent } from '../agent/triggers';
 
 type WindowGetter = () => BrowserWindow | null;
 
@@ -352,6 +353,25 @@ async function processNextTask() {
         UPDATE tasks SET status = 'completed', completed_at = ?, result = ?, cost = COALESCE(?, cost)
         WHERE id = ?
       `).run(new Date().toISOString(), JSON.stringify(result), costArg, taskId);
+    }
+
+    // A task reaching 'completed' is the one thing in this module a user would
+    // plausibly want a Routine to react to ("when the render finishes, do the
+    // next thing"). This is the sole path that writes that status, so the event
+    // fires exactly once per completed task — and never for a cancelled one,
+    // because the cancellation branch above never reaches this line.
+    //
+    // `emitTriggerEvent` cannot throw: EventBus.emit try/catches each
+    // subscriber and returns a count, so a broken Routine cannot fail the task
+    // that just finished. It runs after the row is written, so the result is
+    // already durable regardless.
+    if (!alreadyCancelled) {
+      emitTriggerEvent('task.completed', {
+        taskId,
+        description: nextTask.description,
+        taskType: nextTask.type,
+        conversationId: nextTask.conversation_id ?? null,
+      });
     }
 
     safeSend(getWindow, 'task:update', {
