@@ -46,18 +46,18 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 
 | Card | Rows | Closed | Hardened | Partial | Missing | Unverified | Unreachable | Excluded | Commercial |
 |---|---|---|---|---|---|---|---|---|---|
-| 1 UI & Core | 10 | 9 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
+| 1 UI & Core | 10 | 10 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | 2 Chat & Models | 9 | 6 | 0 | 2 | 0 | 0 | 1 | 0 | 0 |
 | 3 Creators & Media | 14 | 12 | 0 | 1 | 0 | 0 | 0 | 1 | 0 |
-| 4 Agents & Tools | 20 | 11 | 0 | 4 | 0 | 4 | 0 | 0 | 1 |
-| 5 Automation | 9 | 7 | 0 | 0 | 0 | 2 | 0 | 0 | 0 |
+| 4 Agents & Tools | 20 | 12 | 0 | 4 | 0 | 3 | 0 | 0 | 1 |
+| 5 Automation | 9 | 7 | 0 | 1 | 0 | 1 | 0 | 0 | 0 |
 | 6 Voice & Input | 13 | 6 | 0 | 5 | 0 | 1 | 0 | 0 | 1 |
 | 7 Computer Control | 10 | 7 | 1 | 2 | 0 | 0 | 0 | 0 | 0 |
 | 8 Companion | 9 | 6 | 0 | 3 | 0 | 0 | 0 | 0 | 0 |
-| 9 Files & Memory | 10 | 5 | 0 | 0 | 0 | 5 | 0 | 0 | 0 |
-| 10 Integrations | 11 | 4 | 0 | 5 | 0 | 1 | 0 | 0 | 1 |
-| 11 Settings & System | 15 | 9 | 0 | 3 | 0 | 2 | 0 | 0 | 1 |
-| **TOTAL** | **130** | 82 | 1 | 25 | 0 | 16 | 1 | 1 | 4 |
+| 9 Files & Memory | 10 | 6 | 0 | 1 | 0 | 3 | 0 | 0 | 0 |
+| 10 Integrations | 11 | 5 | 0 | 5 | 0 | 0 | 0 | 0 | 1 |
+| 11 Settings & System | 15 | 9 | 0 | 4 | 0 | 1 | 0 | 0 | 1 |
+| **TOTAL** | **130** | 86 | 1 | 28 | 0 | 9 | 1 | 1 | 4 |
 
 > Generated from the rows by `scripts/parity-summary.mjs`. Do not edit these numbers by hand —
 > edit the row status and re-run `node scripts/parity-summary.mjs --write`.
@@ -112,7 +112,7 @@ ignored. The description is honest that a key is optional; free Zen models stay 
 | 1.7 | Minimal Orb Theme | `skin: minimalistic` | Minimal skin | — | see Card 3 | — | — | **installed pkg: 4-element clean-ring orb** | **CLOSED (Card 3)** |
 | 1.8 | Onboarding Flow | `completedOnboarding`, `seenGuide`, `tutorial:get-progress` | `OnboardingWizard.tsx` + `src/components/onboarding/ProductTour.tsx` | no in-app tour | 6-step dismissible tour with "Show me" navigation; progress persisted so it resumes and never re-nags | typecheck + 324 suite | — | **installed pkg: tour appears, advances 1/6 -> 2/6, Skip closes and persists `done:true`** | **CLOSED** |
 | 1.9 | Multi-window Support | — | second window (demo stage) | — | Card 3 delivered an always-on-top frameless stage window | — | — | **installed pkg: stage window opens alongside the main window** | **CLOSED (Card 3)** |
-| 1.10 | Global Search | search | `searchFacts` / `sessionSearch` + command palette | — | — | — | — | **installed pkg: NOT verified — my first probe passed a string, but `preload.ts:543/729` declare `searchFacts(query: Record<string,unknown>)` and `sessionSearch(params: Record<string,unknown>)`, so the rejection was my probe's shape, not a defect. Needs a re-run with object arguments** | **UNVERIFIED — probe error, retry needed** |
+| 1.10 | Global Search | search | `searchFacts` / `sessionSearch` + command palette | — | — | — | — | **installed pkg, LIVE: `searchFacts({query:'theme',limit:5})` → `[]`; `sessionSearch({query:'probe',limit:5})` → `{ok:true, result:{results:[]}}`. Both channels reachable and returning correctly; no facts or sessions matched** | **CLOSED — surface verified live (result set empty, not a failure)** |
 
 ---
 
@@ -167,7 +167,7 @@ plus the syncBridge tool router. **Retain our extra tools.**
 | 4.17 | Memory tools (8) | 8 memory tools | `memory_*` agent tools (9 registered) | — | — | — | — | **PARTIAL — 9 memory tools registered and confirmed available to the agent; individual tool execution blocked by the same tool-call blocker as 4.3** | **PARTIAL** |
 | 4.18 | Composio toolkits (~250) | Composio catalogue | — | — | — | — | hosted third-party SaaS | **commercial** | **COMMERCIAL BOUNDARY** |
 | 4.19 | Agent credentials | safeStorage | `electron/agent/credentials.ts` | — | OS-keystore encryption; status leaks no secret, prefix or length | 29 tests | — | `encrypted_at_rest:false` reported honestly when safeStorage is unavailable | **CLOSED (implemented + test-proven; live acceptance not yet run)** |
-| 4.20 | AI analytics | `ai-analytics.ts` | **local-only analytics; CostDashboard consumer exists** | — | — | — | — | **installed pkg: `src/components/costs/CostDashboard.tsx` and ChatView both consume an analytics surface. There is no transmission path — analytics is local by design. Not exercised in this pass** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 4.20 | AI analytics | local-only analytics | `CostDashboard` consumer + `getCostLog` | — | — | — | — | **installed pkg, LIVE: `getCostLog()` → `[]`, channel reachable and returning an empty set (no spend recorded on this machine). Never transmits — local by design** | **CLOSED — surface verified live (empty set, not a failure)** |
 
 ---
 
@@ -177,7 +177,7 @@ plus the syncBridge tool router. **Retain our extra tools.**
 |---|---|---|---|---|---|
 | 5.1 | Task Automation | task engine | `getTasks` / scheduler | — | — | — | — | **CLOSED — installed pkg: `getTasks` returns real stored tasks and the automation API surface is present and coherent** | **CLOSED** |
 | 5.2 | Scheduled Tasks | scheduler | `computerScheduleTask` / `computerListScheduled` / `computerUnscheduleTask` | — | — | — | — | **CLOSED — installed pkg: full lifecycle exercised — schedule → `{ok:true, scheduled:parity-probe-1}`, list → `{tasks:[parity-probe-1]}`, unschedule → `{ok:true}`, list → `{tasks:[]}`. Probe removed, schedule left empty** | **CLOSED** |
-| 5.3 | Background Jobs | scheduler events | `onSchedulerTaskStarted` / `onSchedulerTaskCompleted` / `automationAbort` / `automationIsRunning` | — | — | — | — | **installed pkg: the event and control surface exists and is wired; no job was observed starting or completing in this pass** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 5.3 | Background Jobs | scheduler events | `listRoutines` / `runRoutineNow` / start+complete events | — | — | — | — | **installed pkg, LIVE: `listRoutines()` → `{ok:true, result:[{id:'1a657e6a...', name:'Morning Briefing', ...}]}` — real persisted routines exist and the surface is reachable. **A routine was NOT run: triggering one would fire real scheduled work and leave residue** | **PARTIAL — surface verified live, execution not triggered** |
 | 5.4 | Workflows | workflow schema | Routines | — | — | — | — | **installed pkg: reachable through the automation surface; composition of multi-step workflows was not exercised** | **IMPLEMENTED / NOT LIVE VERIFIED** |
 | 5.5 | Triggers / Events | scheduler | same as 4.15 | cron only | — | as 4.15 | — | as 4.15 | **CLOSED (implemented + test-proven; live acceptance not yet run)** |
 | 5.6 | Goal Planning | goal schema | Goals surface | — | — | — | — | **CLOSED — installed pkg: CRUD verified live earlier (create, read, update all work); `getGoals` now returns `[]` with no residue** | **CLOSED** |
@@ -254,11 +254,11 @@ guarding, `_denyDangerous`).
 | 9.3 | Memory Search | memory store | `savePersonalMemory` / `recallPersonalMemory` / working + session memory | — | — | — | — | **installed pkg: the memory surface is exposed — personal, working, session and project memory with save/update/delete/recall. Individual recall was not exercised in this pass** | **IMPLEMENTED / NOT LIVE VERIFIED** |
 | 9.4 | Knowledge Base | was MISSING | `electron/knowledge/**` | — | ingestion from files/URLs/notes reusing `resolveUserPath` and the SSRF-guarded `web_fetch_page`; `memory_recall` self-heals an empty index | 43 tests | — | **all nine `knowledge:*` channels exposed in preload (six payload shapes were wrong in the first attempt — `get`/`delete` take bare strings)** | **CLOSED (implemented + test-proven; live acceptance not yet run)** |
 | 9.5 | Vector Store | was MISSING | `electron/vector/**` | — | L2-normalised float32 BLOBs in the EXISTING database, exact cosine scan, Ollama embeddings with hashed fallback | 35 tests | — | **fixed: a transient 5xx latched `ollamaUnavailable` permanently, so 256-dim hashed vectors were persisted beside real 768-dim chunks and the dimension guard silently skipped the reals — recall quietly degraded to fallback-vs-fallback. Now sticky only on 404/refused, 30 s cooldown otherwise** | **CLOSED (implemented + test-proven; live acceptance not yet run)** |
-| 9.6 | Quoting System | quote engine | `quoteList/Get/Save/Delete/Duplicate`, `quoteSetStatus`, line items, `quoteSummary`, `quoteConvertToRun`, `quoteExportMarkdown` | — | — | — | — | **installed pkg: a substantial, coherent quote surface is exposed including line-item editing, reorder, convert-to-run and markdown export. Not exercised end to end in this pass** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 9.6 | Quoting System | quote engine | 12 quote channels incl. line items, convert-to-run, markdown export | — | — | — | — | **installed pkg, LIVE: `quoteList({limit:5})` → `[]`; `quoteSave({title:'w3-probe-quote',...})` → `{ok:true, id:'quote_mus8yuwx_yifj52'}`; re-list returned the quote with an auto-generated number `Q-2026-0001`; `quoteDelete(id)` → `{ok:true}` and the list returned to 0. Full create → read → delete round trip exercised** | **CLOSED — LIVE-VERIFIED** |
 | 9.7 | Chat Export | `sessionExport` | `sessionExport` | — | — | — | — | **installed pkg: export is exposed; a real export was not produced in this pass** | **IMPLEMENTED / NOT LIVE VERIFIED** |
 | 9.8 | Offline Export | `exportBackup` | export + import | — | — | — | — | **installed pkg, LIVE: `{ok:true, path:'C:\\Users\\xkali\\Desktop\\henry-backup-2026-10-03'}` — a real backup directory was produced. Residue from the probe was deleted afterwards** | **CLOSED — LIVE-VERIFIED** |
 | 9.9 | Database (SQLite) | better-sqlite3 | runtime status | — | Card 7.8 | — | — | **CLOSED — installed pkg: `runtimeGetStatus` → `{ok:true, databaseOk:true, databaseError:null, bootFailed:false, version:3.0.7}`** | **CLOSED** |
-| 9.10 | Session History | session store | `sessionCreate/End/Resume/Compress/CheckDeps` | — | — | — | — | **installed pkg: the session lifecycle surface is exposed and coherent; a full create → resume → compress cycle was not run in this pass** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 9.10 | Session History | session store | `sessionCreate/End/Resume/Compress/CheckDeps` | — | — | — | — | **installed pkg, LIVE: `sessionSearch({query:'probe',limit:5})` → `{ok:true, result:{results:[]}}` and `sessionSearch({query:''})` → `ValueError: missing required field: query` — validation behaving correctly. No session was created, so a create→resume cycle was not run** | **PARTIAL — search verified live, lifecycle not exercised** |
 
 ---
 
@@ -277,7 +277,7 @@ guarding, `_denyDangerous`).
 | 10.7 | Composio toolkits (~250) | Composio catalogue | — | — | — | — | hosted third-party SaaS | **COMMERCIAL BOUNDARY** |
 | 10.8 | Toolkit logo resolution | renderer | toolkit logo resolution | — | — | — | — | **CLOSED — verified live earlier** | **CLOSED** |
 | 10.9 | OpenCode Integration | `opencode.ts` | `opencodeStatus` / `opencodeModels` | — | — | — | — | **CLOSED — installed pkg: `omp/18.3.2`, 780 models across 5 groups, 108 Zen, 0 polluted ids** | **CLOSED** |
-| 10.10 | Prime Tech Marketplace | marketplace module | 8 marketplace channels + `marketplaceHistory` | — | — | — | — | **installed pkg: the marketplace module and its API surface exist and are reachable; no install flow was exercised** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 10.10 | Prime Tech Marketplace | marketplace module | 7 marketplace channels | — | — | — | — | **installed pkg, LIVE: `marketplaceList()` returned a real manifest — `{manifest:'primetech-marketplace', version:1, entries:[{id:'primetech-terminal', name:'PrimeTech Terminal', type:'app', ...}]}`; `marketplaceHistory()` → `[]`. No entry was installed** | **CLOSED — catalogue verified live** |
 | 10.11 | OAuth PKCE surfaces | OAuth PKCE | Google + third-party connect | — | — | — | **no third-party credential on this machine** | **installed pkg: the OAuth PKCE surface is implemented and works for Google; other providers cannot be proven without credentials** | **PARTIAL** |
 
 ---
@@ -301,7 +301,7 @@ guarding, `_denyDangerous`).
 | 11.11 | Typed settings + change event | `settingsContract.ts` | zod settings contract | — | — | **contract tests** | — | **CLOSED — settings contract is zod-typed and tested** | **CLOSED** |
 | 11.12 | Zod validation on every IPC channel | was recorded CLOSED and was wrong | `installIpcBoundary()` wraps `ipcMain.handle` at MODULE SCOPE | — | zod pinned ^3.25.76 (was transitive); boundary covers all channels by construction | 161 in slice | — | **MEASURED by `scripts/ipc-coverage.mjs`: 27/355 (7.6%) → 233/409 (57.0%), per channel, orphaned schemas 0.** memory.ts 96/100, sessionStore 18/18, integrations 5/5. 176 channels still on baseline sanitisation only | **PARTIAL — measurable, not exhaustive** |
 | 11.13 | App quit | was MISSING | `app:quit` | — | graceful shutdown with active-work surfacing and a two-step force | tested | — | mounted in Settings | **CLOSED (implemented + test-proven; live acceptance not yet run)** |
-| 11.14 | Startup failure screen | failure banner | `StartupFailureBanner` | — | — | — | — | **installed pkg: `StartupFailureBanner` is rendered by `App.tsx` and `AboutPanel` keys off `bootFailed`, but `bootFailed` was false throughout, so the failure path was never actually shown** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 11.14 | Startup failure screen | failure banner | `startupGetFailure` / `StartupFailureBanner` | — | — | — | — | **installed pkg, LIVE: `startupGetFailure()` → `null` and `runtimeGetStatus()` → `bootFailed:false`, confirming the banner's hide-path on a healthy boot. **The failure path itself was not injected — forcing a boot failure risks corrupting the installation** | **PARTIAL — healthy path verified live, failure path not injected** |
 | 11.15 | Auth / licensing / credits / telemetry | — | — | — | — | — | hosted commercial service | **COMMERCIAL BOUNDARY** |
 
 ---
