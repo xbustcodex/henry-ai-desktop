@@ -230,7 +230,7 @@ describe('8.8 — a peer that is not there is reported, not disguised as an empt
     expect(body.crossDevice.peersAsked).toBe(0);
     expect(body.crossDevice.memories).toEqual([]);
     // The local answer is still there — and it is clearly labelled as local.
-    expect(body.crossDevice.peerNote ?? body.note).toMatch(/this device only/i);
+    expect(body.note).toMatch(/this device only/i);
   });
 
   it('asks every other connected device and merges what they return', async () => {

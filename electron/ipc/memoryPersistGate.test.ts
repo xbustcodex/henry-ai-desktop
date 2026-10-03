@@ -96,6 +96,7 @@ const WRITES: [string, unknown[]][] = [
   ['memory:saveMilestone', [{ title: 'v1' }]],
   ['memory:saveNarrativeMemory', [{ arcName: 'Arc', summary: 's' }]],
   ['memory:saveMemorySummary', [{ summaryType: 'daily_rollup', summary: 's' }]],
+  ['memory:generateRollup', [{ period: 'daily' }]],
   ['memory:saveGraphEdge', [{ fromEntityType: 'fact', fromEntityId: 'a', toEntityType: 'fact', toEntityId: 'b', relationshipType: 'rel' }]],
   ['memory:saveWhereWeLeftOff', ['we were mid-migration']],
   ['memory:compressSession', [{ conversationId: 'c1', summary: 'done' }]],
