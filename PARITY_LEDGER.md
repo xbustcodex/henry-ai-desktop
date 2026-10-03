@@ -47,7 +47,7 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 | Card | Rows | Closed | Hardened | Partial | Missing | Unverified | Unreachable | Excluded | Commercial |
 |---|---|---|---|---|---|---|---|---|---|
 | 1 UI & Core | 10 | 6 | 0 | 0 | 1 | 3 | 0 | 0 | 0 |
-| 2 Chat & Models | 9 | 4 | 0 | 0 | 0 | 5 | 0 | 0 | 0 |
+| 2 Chat & Models | 9 | 5 | 0 | 3 | 0 | 0 | 1 | 0 | 0 |
 | 3 Creators & Media | 14 | 12 | 0 | 1 | 0 | 0 | 0 | 1 | 0 |
 | 4 Agents & Tools | 20 | 3 | 1 | 7 | 3 | 5 | 0 | 0 | 1 |
 | 5 Automation | 9 | 2 | 0 | 3 | 0 | 4 | 0 | 0 | 0 |
@@ -57,7 +57,7 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 | 9 Files & Memory | 10 | 1 | 0 | 1 | 2 | 6 | 0 | 0 | 0 |
 | 10 Integrations | 11 | 2 | 0 | 3 | 1 | 4 | 0 | 0 | 1 |
 | 11 Settings & System | 15 | 5 | 0 | 2 | 3 | 4 | 0 | 0 | 1 |
-| **TOTAL** | **130** | 44 | 3 | 26 | 15 | 37 | 0 | 1 | 4 |
+| **TOTAL** | **130** | 45 | 3 | 29 | 15 | 32 | 1 | 1 | 4 |
 
 > Generated from the rows by `scripts/parity-summary.mjs`. Do not edit these numbers by hand —
 > edit the row status and re-run `node scripts/parity-summary.mjs --write`.
@@ -83,15 +83,15 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 
 | # | Row | PAID EVIDENCE | OUR CURRENT | GAP | IMPLEMENTATION | TEST | LIVE | INSTALLED | STATUS |
 |---|---|---|---|---|---|---|---|---|---|
-| 2.1 | AI Chat (Streaming) | renderer `rE` Chat mode | `src/components/chat/ChatView.tsx` | — | — | — | — | — | **complete** |
-| 2.2 | **OpenCode Zen provider row** | `opencode.ai/docs/zen/`; `OPENCODE_API_KEY` | was unreachable from UI | no key row; key would not reach bridge | `PROVIDERS['opencode-zen']`, `CLOUD_PROVIDER_IDS`, `setOpencodeZenCredential`, `buildCoderChildEnv` inject, `ai.ts` dispatch | — | — | — | **live-verified** |
-| 2.3 | **OpenCode model discovery** | n/a (our fix) | only probed literal `opencode` | user's CLI ships as `omp` | probe `opencode` + `omp`, bare name first, standard locations | — | `omp/18.3.2` found | **installed pkg: confirmed** | **CLOSED** |
-| 2.4 | **Zen model parsing** | grouped table, ids have **no `/`** | kept whole table row as id; required `/` | all 559 ids polluted, all 105 Zen models dropped | `parseModelList` tracks group heading, accepts unprefixed ids, splits box-drawing `│` | standalone parser test vs real `omp models` | — | **installed pkg: 777 models, 0 polluted ids, 108 Zen (was 0), groups incl. opencode-zen** | **CLOSED** |
-| 2.5 | Local Ollama | paid: **none** (backend only) | `callOllamaProvider`, ranked catalogue | — | keep, never downgrade | 324 suite | working | verified | **complete** |
-| 2.6 | OpenRouter | paid: via opencode group | `PROVIDERS['openrouter']` | — | keep | — | — | — | **complete** |
-| 2.7 | Local Model Support | paid: **absent** | Ollama + Groq + OpenCode + Relay | — | keep, never downgrade | — | — | — | **complete** |
-| 2.8 | Model Catalogue (355+) | renderer model list | OpenRouter + Ollama + opencode live catalogue | — | keep | — | — | — | **complete** |
-| 2.9 | Model Selector | renderer engine select | `EnginesSection`, `CoderEngineSection` | Zen ids must appear | reads live catalogue | — | **2 selectors list Zen ids: deepseek-v4-flash-free, hy3-free…** | **installed pkg** | **CLOSED** |
+| 2.1 | AI Chat (Streaming) | renderer chat | `ai:stream` | **DEFECT: the Ollama path does not stream.** `streamOpenAI`/`streamAnthropic`/`streamGroq` exist but there is no `streamOllama`, so Ollama falls into the `default` branch that calls non-streaming `callAI` and emits the whole answer as one chunk. Measured: a 626-char reply arrived as **1 chunk after a 20.7s silent wait** (`firstChunkMs == lastChunkMs`); a counting reply also 1 chunk | fix is a `streamOllama` — deferred, not undertaken during burn-down | typecheck | — | **installed pkg: reply content correct and no error, but delivery is one buffered chunk** | **PARTIAL — works, does not stream on Ollama** |
+| 2.2 | Model Selector | renderer engine select | `EnginesSection` / `CoderEngineSection` | — | — | — | — | **CLOSED — installed pkg: all five provider rows render and the selector populates** | **CLOSED** |
+| 2.3 | OpenAI | provider | OpenAI key path | no key configured on this machine | — | — | — | not verifiable without a credential | **PARTIAL** |
+| 2.4 | Anthropic | provider | Anthropic key path | no key configured | — | — | — | not verifiable without a credential | **PARTIAL** |
+| 2.5 | Local Ollama | — | `callOllamaProvider`, `/api/chat` | — | Card 7.8 covers the command boundary | — | — | **CLOSED — installed pkg: `/api/tags` reachable, 7 models present, base URL `http://127.0.0.1:11434`, `ollama` in the provider list** | **CLOSED** |
+| 2.6 | OpenRouter | provider | **declared in `src/providers/models.ts` but not surfaced anywhere reachable** | no runtime API (`openRouterListModels` undefined), no settings key, and **absent from the AI Providers UI** | — | — | — | **installed pkg: `getProviders` returns only groq + ollama; the provider row is not rendered. Declared-but-unreachable — exactly the code-exists-but-nothing-can-reach-it failure this burn-down was meant to catch** | **IMPLEMENTED BUT UNREACHABLE** |
+| 2.7 | Local Model Support | — | Ollama + Groq + OpenCode engine routing | — | — | — | — | **CLOSED — installed pkg: all three providers resolve; Ollama and OpenCode both returned live results** | **CLOSED** |
+| 2.8 | Model Catalogue (355+) | renderer model list | `opencodeModels` | — | — | — | — | **CLOSED — installed pkg: `omp/18.3.2`, **780 models**, groups opencode-zen / openrouter / xai / openai / ollama, **108 Zen**, **0 polluted ids** (paid listed 355)** | **CLOSED** |
+| 2.9 | OpenCode Zen | — | provider row + Zen models | — | Zen discovery already verified end to end | — | — | **CLOSED — installed pkg: row renders; 108 Zen models listed** | **CLOSED** |
 
 **Row 2.2 note:** a saved Zen key must reach the CLI's child environment — it was previously only
 readable from the OS environment, so a key typed into Henry would have been stored and silently
