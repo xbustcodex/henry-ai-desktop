@@ -481,6 +481,13 @@ contextBridge.exposeInMainWorld('henryAPI', {
   knowledgeReindexMemory: () => ipcRenderer.invoke('knowledge:reindexMemory'),
   knowledgeRecallMemory: (query: string, k?: number) =>
     ipcRenderer.invoke('knowledge:recallMemory', { query, k: k ?? 10 }),
+  knowledgeSearch: (query: string, opts?: { limit?: number; sourceKind?: string; terms?: string[] }) =>
+    ipcRenderer.invoke('knowledge:search', {
+      query,
+      limit: opts?.limit ?? 8,
+      sourceKind: opts?.sourceKind,
+      terms: opts?.terms ?? [],
+    }),
   // ── Agent tool streaming ─────────────────────────────────────────────────
   // Without these the runner emits deltas into the void and the user sees the
   // whole answer arrive at once, which looks exactly like not streaming.

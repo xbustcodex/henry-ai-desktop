@@ -554,6 +554,24 @@ declare global {
     sayVoices: HenrySayVoice[];
   }
 
+  interface KnowledgeSearchHit {
+    documentId: string;
+    sourceKind: 'file' | 'url' | 'note';
+    uri: string;
+    title: string;
+    text: string;
+    score: number;
+    chunkId: string;
+  }
+
+  interface KnowledgeSearchOutcome {
+    hits: KnowledgeSearchHit[];
+    /** Which embedding backend actually served this — honest, never optimistic. */
+    backend: 'ollama' | 'hashed-fallback';
+    model: string;
+    note?: string;
+  }
+
   interface HenryVoiceSpeakResult {
     engine: 'local' | 'elevenlabs' | 'none';
     spoke?: boolean;
@@ -1063,6 +1081,11 @@ declare global {
     deleteRoutine?: (id: string) => Promise<{ ok: boolean; result?: boolean; error?: string }>;
     onSchedulerTaskStarted?: (cb: (data: { id: string; name: string }) => void) => () => void;
     onSchedulerTaskCompleted?: (cb: (data: { id: string; name: string; ok: boolean; sessionId?: string; content?: string; error?: string }) => void) => () => void;
+    /** Move an existing Routine onto a different trigger type. Without this the
+     *  picker would apply to new Routines only and every existing one would be
+     *  permanently wrong. */
+    setRoutineTrigger?: (id: string, trigger: Record<string, unknown>) =>
+      Promise<{ ok: boolean; result?: unknown; error?: string }>;
 
     // ── Voice (Electron-only — local whisper STT + say/ElevenLabs TTS) ────
     voiceSttStatus?: (opts?: { refresh?: boolean }) => Promise<HenryVoiceResult<HenryVoiceSttStatus>>;
@@ -1093,6 +1116,8 @@ declare global {
     knowledgeStats?: () => Promise<{ ok: boolean; result?: unknown; error?: string }>;
     knowledgeReindexMemory?: () => Promise<{ ok: boolean; result?: unknown; error?: string }>;
     knowledgeRecallMemory?: (query: string, k?: number) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
+    knowledgeSearch?: (query: string, opts?: { limit?: number; sourceKind?: string; terms?: string[] }) =>
+      Promise<{ ok: boolean; result?: KnowledgeSearchOutcome; error?: string }>;
 
     // ── Agent tool streaming ─────────────────────────────────────────────────
     // Emitted by the tool runner while a tool-calling round streams. Without a
