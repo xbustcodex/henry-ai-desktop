@@ -37,6 +37,8 @@ export interface VolumeControlResult {
 export interface NotificationResult {
   success: boolean;
   error?: string;
+  /** Which mechanism actually showed it — `electron`, `notify-send`, `osascript`, `msg`. */
+  backend?: string;
 }
 
 /**
@@ -220,59 +222,103 @@ export async function getVolume(): Promise<VolumeControlResult> {
  * @returns Promise resolving to notification result
  */
 export async function showNotification(title: string, body?: string): Promise<NotificationResult> {
+  const text = (body ?? '').trim();
+  const heading = (title ?? '').trim();
+  if (!heading && !text) {
+    return { success: false, error: 'A notification needs a title or a body.' };
+  }
+
   try {
     if (platformString === 'darwin') {
-      // macOS: use osascript
+      // macOS: use osascript. Both strings are AppleScript literals, so a
+      // quote or a backslash has to be escaped or the remainder of the
+      // notification becomes script.
       const { execFileSync } = await import('child_process');
-      const escapedTitle = title.replace(/"/g, '\\"');
-      const escapedBody = body?.replace(/"/g, '\\"') ?? '';
+      const escapedTitle = appleScriptLiteral(heading);
+      const escapedBody = appleScriptLiteral(text);
       execFileSync('osascript', ['-e', `display notification "${escapedBody}" with title "${escapedTitle}"`], { timeout: 3000 });
       return { success: true };
-    } else if (platformString === 'linux') {
-      // Linux: use notify-send
-      try {
-        const { execFileSync } = await import('child_process');
-        execFileSync('notify-send', [title, body ?? ''], { timeout: 3000 });
-        return { success: true };
-      } catch (err) {
-        return {
-          success: false,
-          error: err instanceof Error ? err.message : String(err)
-        };
-      }
-    } else if (platformString === 'win32') {
-      // Windows: use PowerShell
-      try {
-        const { execFileSync } = await import('child_process');
-        const escapedTitle = title.replace(/"/g, '`"');
-        const escapedBody = body?.replace(/"/g, '`"') ?? '';
-        const command = `New-BurntToastNotification -Text "${escapedTitle}", "${escapedBody}" -Silent`;
-        execFileSync('powershell', ['-Command', command], { timeout: 3000 });
-        return { success: true };
-      } catch (err) {
-        // Fallback to simpler approach if BurntToast module not available
-        try {
-          const { execFileSync } = await import('child_process');
-          const command = `powershell -Command \"[reflection.assembly]::loadwithpartialname('System.Windows.Forms') | out-null; [system.windows.forms.messagebox]::show('${body}', '${title}')\"`;
-          execFileSync('powershell', ['-Command', command], { timeout: 3000 });
-          return { success: true };
-        } catch (fallbackErr) {
-          return {
-            success: false,
-            error: err instanceof Error ? err.message : String(err)
-          };
-        }
-      }
-    } else {
-      return {
-        success: false,
-        error: `Notifications not implemented for platform: ${platformString}`
-      };
     }
+
+    if (platformString === 'linux') {
+      try {
+        const { execFileSync } = await import('child_process');
+        // argv, never a shell string: a title containing `"` or `$(…)` must
+        // not be able to become a command.
+        execFileSync('notify-send', [heading, text], { timeout: 3000 });
+        return { success: true };
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
+    if (platformString === 'win32') {
+      return showWindowsNotification(heading, text);
+    }
+
+    return {
+      success: false,
+      error: `Notifications not implemented for platform: ${platformString}`,
+    };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Escape a string for a single-quoted AppleScript literal. */
+function appleScriptLiteral(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/**
+ * Windows notifications, in order of how well they actually work.
+ *
+ * The old implementation called `New-BurntToastNotification`, which only
+ * exists if the BurntToast PowerShell *module* is installed — it is not part
+ * of Windows. On a stock machine that always failed, and the fallback was a
+ * `System.Windows.Forms.MessageBox`, which is a modal dialog that blocks the
+ * Electron main process until someone clicks it. That is why
+ * `computer:notify` returned `{ok:false}` on the installed build.
+ *
+ * 1. Electron's own `Notification`. On Windows 10 and later this is a native
+ *    toast through the WinRT toast notifier — the same API the
+ *    `notification:*` channels already use successfully.
+ * 2. `msg.exe`, which ships with Windows and needs no module.
+ * 3. Nothing else. A modal dialog is never an acceptable notification.
+ */
+async function showWindowsNotification(title: string, body: string): Promise<NotificationResult> {
+  const { Notification } = await import('electron');
+  if (Notification.isSupported()) {
+    try {
+      const n = new Notification({
+        title: title || 'Henry',
+        body,
+        silent: false,
+      });
+      n.show();
+      return { success: true, backend: 'electron' };
+    } catch (err) {
+      const viaElectron = err instanceof Error ? err.message : String(err);
+      return notifyViaMsg(title, body, `Electron notifications failed (${viaElectron}).`);
+    }
+  }
+  return notifyViaMsg(title, body, 'Electron reports this system cannot show notifications.');
+}
+
+function notifyViaMsg(title: string, body: string, reason: string): NotificationResult {
+  try {
+    const { execFileSync } = require('child_process') as typeof import('child_process');
+    // `*` is msg.exe's own "every session" selector and must stay a separate
+    // argv element so the title can never be mistaken for a target.
+    execFileSync('msg', ['*', '/time:10', `${title}${body ? `\n${body}` : ''}`], {
+      timeout: 3000,
+      windowsHide: true,
+    });
+    return { success: true, backend: 'msg' };
   } catch (err) {
     return {
       success: false,
-      error: err instanceof Error ? err.message : String(err)
+      error: `${reason} msg.exe also failed: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 }

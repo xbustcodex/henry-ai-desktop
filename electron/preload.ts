@@ -420,6 +420,24 @@ contextBridge.exposeInMainWorld('henryAPI', {
   // Google OAuth (PKCE desktop flow)
   googleStartAuth: (opts: { clientId: string; clientSecret: string; scopes: string[] }) =>
     ipcRenderer.invoke('google:startAuth', opts),
+  // ── Integrations (provider-agnostic OAuth; see electron/integrations/) ──
+  // These back every connected service. `integration:setToken` is for
+  // providers that issue a paste-a-token credential (Discord bot tokens);
+  // `integration:connect` runs the PKCE + loopback flow for providers that do.
+  // NONE of them ever returns a token, refresh token, or client secret.
+  integrationList: () => ipcRenderer.invoke('integration:list'),
+  integrationStatus: () => ipcRenderer.invoke('integration:status'),
+  integrationConnect: (opts: { providerId: string; clientId: string; clientSecret: string; scopes?: string[] }) =>
+    ipcRenderer.invoke('integration:connect', opts),
+  integrationSetToken: (opts: { providerId: string; token: string; label?: string }) =>
+    ipcRenderer.invoke('integration:setToken', opts),
+  integrationDisconnect: (providerId: string) =>
+    ipcRenderer.invoke('integration:disconnect', { providerId }),
+  onIntegrationChanged: (cb: (changed: { providerId?: string }) => void) => {
+    const handler = (_: IpcRendererEvent, changed: { providerId?: string }) => cb(changed);
+    ipcRenderer.on('integration:changed', handler);
+    return () => ipcRenderer.removeListener('integration:changed', handler);
+  },
   // The handlers refresh using the app's OAuth client credentials, so they must
   // be passed through. These previously invoked with no argument at all, which
   // made the handler's destructuring throw a TypeError on every call.

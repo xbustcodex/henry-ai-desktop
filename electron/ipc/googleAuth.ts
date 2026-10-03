@@ -1,26 +1,33 @@
 /**
- * Henry AI — Google Desktop OAuth
+ * Henry AI — Google Desktop OAuth (IPC surface).
  *
- * Implements Authorization Code + PKCE + offline_access for the Electron
- * desktop app.  This is the correct flow for installed applications
- * per RFC 8252 and Google's own desktop-app guidance.
+ * The Authorization Code + PKCE + loopback flow itself now lives in ONE place,
+ * `electron/integrations/oauth/`, and every provider uses it. This module is
+ * the legacy `google:*` IPC facade over that shared engine, kept so the
+ * existing Settings panel keeps working unchanged.
  *
- * FLOW:
- *   1. Renderer calls `google:startAuth` with { clientId, clientSecret }
- *   2. Main process generates PKCE verifier/challenge + random state
- *   3. Main process opens system browser at Google's auth endpoint
- *   4. Main process starts a temporary HTTP listener on 127.0.0.1:9005
- *   5. After user approves, Google redirects to http://127.0.0.1:9005/callback?code=…
- *   6. Main process exchanges the code for access + refresh tokens
- *   7. Tokens are encrypted with safeStorage (OS keychain / DPAPI / SecretService)
- *   8. Only the short-lived access token + expiry are sent back to the renderer
+ * What changed, and why:
+ *   - The token set used to live in two module-level variables, so it died with
+ *     the process and no other module could read it. That is why row 10.1 was
+ *     PARTIAL: the connect surface was live and the agent had nothing to spend.
+ *     Credentials now live in the shared encrypted store (settings table +
+ *     safeStorage), which is the same store the Google agent tools read.
+ *   - The client id/secret are stored with the credential, so a refresh no
+ *     longer depends on the renderer passing them back in on every call.
+ *   - `google:startAuth` no longer returns the access token to the renderer.
+ *     The panel never used it, and handing a renderer a live token is exactly
+ *     the shape of thing that later leaks into a log or a screenshot.
  *
- * REFRESH:
- *   `google:getToken` automatically refreshes if the stored token is within
- *   5 minutes of expiry.  Refresh failures due to revocation clear credentials
- *   and push a `google:tokenRevoked` event to the renderer.
+ * Flow (unchanged, and still correct per RFC 8252 §7.3 for installed apps):
+ *   1. Renderer calls `google:startAuth` with { clientId, clientSecret }.
+ *   2. Main generates PKCE verifier/challenge + random state.
+ *   3. Main opens the system browser at Google's auth endpoint.
+ *   4. Main listens on 127.0.0.1:9005 for the redirect.
+ *   5. Google redirects back with ?code=…&state=…
+ *   6. Main exchanges the code for access + refresh tokens.
+ *   7. Tokens are encrypted with safeStorage and persisted.
  *
- * GOOGLE CLOUD CONSOLE REQUIREMENTS (documented for the user):
+ * GOOGLE CLOUD CONSOLE REQUIREMENTS (unchanged):
  *   - Create an OAuth 2.0 client of type "Desktop app"
  *   - Enable: Gmail API, Google Calendar API, Google Drive API
  *   - No redirect URI needs to be added — Google accepts 127.0.0.1 loopback
@@ -28,364 +35,141 @@
  *   - Copy the client_id and client_secret into Henry's Google settings
  */
 
-import { ipcMain, shell, safeStorage } from 'electron';
-import http from 'http';
-import crypto from 'crypto';
-import { URL } from 'url';
+import { ipcMain } from 'electron';
 import type { BrowserWindow } from 'electron';
+import type Database from 'better-sqlite3';
+import { getDb } from './database';
+import { GOOGLE_PROVIDER } from '../integrations/oauth/registry';
+import { connect, ensureAccessToken, disconnect, OAuthFlowError } from '../integrations/oauth/flow';
+import { clearCredential, describeCredential, hasCredential } from '../integrations/oauth/credentialStore';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-const CALLBACK_PORT = 9005;
-const CALLBACK_PATH = '/callback';
-const CALLBACK_URL  = `http://127.0.0.1:${CALLBACK_PORT}${CALLBACK_PATH}`;
-
-/** All scopes Henry needs.  Granted once via `prompt=consent`. */
-const SCOPES = [
-  'openid',
-  'profile',
-  'email',
-  'https://www.googleapis.com/auth/gmail.readonly',
-  'https://www.googleapis.com/auth/gmail.compose',
-  'https://www.googleapis.com/auth/calendar.readonly',
-  'https://www.googleapis.com/auth/calendar.events',
-  'https://www.googleapis.com/auth/drive.readonly',
-].join(' ');
-
-// ── In-memory credential storage ─────────────────────────────────────────────
-// Refresh tokens never leave the main process.
-// Access tokens are sent to the renderer as short-lived strings.
-
-interface GoogleTokenSet {
-  accessToken:  string;
-  refreshToken: string;
-  expiresAt:    number;   // epoch ms
-  scopes:       string;
-}
-
-/** Encrypted credential buffer (Electron safeStorage). */
-let credentialBuffer: Buffer | null = null;
-
-/** Fallback when safeStorage is unavailable (dev / headless). */
-let credentialPlaintext: string | null = null;
-
-function persistCredentials(tokenSet: GoogleTokenSet): void {
-  const json = JSON.stringify(tokenSet);
-  if (safeStorage.isEncryptionAvailable()) {
-    credentialBuffer    = safeStorage.encryptString(json);
-    credentialPlaintext = null;
-  } else {
-    credentialPlaintext = json;
-    credentialBuffer    = null;
-  }
-}
-
-function retrieveCredentials(): GoogleTokenSet | null {
-  try {
-    if (credentialBuffer && safeStorage.isEncryptionAvailable()) {
-      return JSON.parse(safeStorage.decryptString(credentialBuffer)) as GoogleTokenSet;
-    }
-    if (credentialPlaintext) {
-      return JSON.parse(credentialPlaintext) as GoogleTokenSet;
-    }
-  } catch {
-    // Corrupted — treat as missing
-  }
-  return null;
-}
-
-function wipeCredentials(): void {
-  credentialBuffer    = null;
-  credentialPlaintext = null;
-}
-
-// ── PKCE helpers ──────────────────────────────────────────────────────────────
-
-function makeCodeVerifier(): string {
-  return crypto.randomBytes(64).toString('base64url');
-}
-
-function makeCodeChallenge(verifier: string): string {
-  return crypto.createHash('sha256').update(verifier).digest('base64url');
-}
-
-// ── Loopback callback listener ────────────────────────────────────────────────
+/** The provider object this module drives. Read from the shared registry. */
+const PROVIDER = GOOGLE_PROVIDER;
 
 /**
- * Starts a temporary HTTP server on 127.0.0.1:9005.
- * Resolves with the authorization code when Google redirects back.
- * The server is destroyed immediately after receiving the first valid callback.
+ * The live database handle. `getDb` throws before `initDatabase` runs, so a
+ * boot-race call degrades to "no credential" rather than taking the app down.
  */
-function waitForAuthorizationCode(expectedState: string): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const server = http.createServer((req, res) => {
-      try {
-        const reqUrl = new URL(req.url ?? '/', `http://127.0.0.1:${CALLBACK_PORT}`);
-
-        if (reqUrl.pathname !== CALLBACK_PATH) {
-          res.writeHead(404).end();
-          return;
-        }
-
-        const code          = reqUrl.searchParams.get('code');
-        const returnedState = reqUrl.searchParams.get('state');
-        const error         = reqUrl.searchParams.get('error');
-
-        // Always respond with HTML so the browser tab shows a friendly message
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-
-        if (error) {
-          const msg = error === 'access_denied'
-            ? 'You declined the authorization request.'
-            : `Authorization failed: ${error}`;
-          res.end(`<!DOCTYPE html><html><head><title>Henry</title></head><body style="font-family:system-ui;padding:48px;max-width:480px">
-            <h2 style="color:#ef4444">Authorization declined</h2>
-            <p style="color:#6b7280">${msg}</p>
-            <p style="color:#6b7280;font-size:14px">You can close this tab and return to Henry.</p>
-          </body></html>`);
-          server.close();
-          reject(new Error(msg));
-          return;
-        }
-
-        if (!code || returnedState !== expectedState) {
-          res.end('Invalid callback. You can close this tab.');
-          return;
-        }
-
-        res.end(`<!DOCTYPE html><html><head><title>Henry</title></head><body style="font-family:system-ui;padding:48px;max-width:480px">
-          <h2 style="color:#22c55e">✓ Henry is connected</h2>
-          <p style="color:#6b7280">Google authorization was successful. You can close this tab and return to Henry.</p>
-        </body></html>`);
-
-        server.close();
-        resolve(code);
-      } catch (err) {
-        server.close();
-        reject(err);
-      }
-    });
-
-    server.once('error', (err: NodeJS.ErrnoException) => {
-      if (err.code === 'EADDRINUSE') {
-        reject(new Error(
-          `Port ${CALLBACK_PORT} is already in use. Close any other process using it and try again.`
-        ));
-      } else {
-        reject(new Error(`Callback listener error: ${err.message}`));
-      }
-    });
-
-    server.listen(CALLBACK_PORT, '127.0.0.1');
-  });
-}
-
-// ── Token exchange ────────────────────────────────────────────────────────────
-
-async function exchangeCodeForTokens(
-  code:         string,
-  codeVerifier: string,
-  clientId:     string,
-  clientSecret: string,
-): Promise<GoogleTokenSet> {
-  const body = new URLSearchParams({
-    code,
-    client_id:     clientId,
-    client_secret: clientSecret,
-    redirect_uri:  CALLBACK_URL,
-    grant_type:    'authorization_code',
-    code_verifier: codeVerifier,
-  });
-
-  const res  = await fetch('https://oauth2.googleapis.com/token', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body:    body.toString(),
-  });
-  const data = await res.json() as Record<string, unknown>;
-
-  if (!res.ok || data.error) {
-    throw new Error(
-      String(data.error_description ?? data.error ?? `Token exchange failed (HTTP ${res.status})`)
-    );
+function currentDb(): Database.Database | null {
+  try {
+    return getDb();
+  } catch {
+    return null;
   }
-
-  if (!data.refresh_token) {
-    throw new Error(
-      'Google did not return a refresh token. Make sure the OAuth client type is "Desktop app" and try again.'
-    );
-  }
-
-  return {
-    accessToken:  data.access_token  as string,
-    refreshToken: data.refresh_token as string,
-    expiresAt:    Date.now() + ((data.expires_in as number) ?? 3600) * 1000,
-    scopes:       (data.scope as string) ?? SCOPES,
-  };
 }
-
-// ── Token refresh ─────────────────────────────────────────────────────────────
-
-async function doRefreshToken(
-  refreshToken: string,
-  clientId:     string,
-  clientSecret: string,
-): Promise<{ accessToken: string; expiresAt: number }> {
-  const body = new URLSearchParams({
-    refresh_token: refreshToken,
-    client_id:     clientId,
-    client_secret: clientSecret,
-    grant_type:    'refresh_token',
-  });
-
-  const res  = await fetch('https://oauth2.googleapis.com/token', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body:    body.toString(),
-  });
-  const data = await res.json() as Record<string, unknown>;
-
-  if (!res.ok || data.error) {
-    throw new Error(
-      String(data.error_description ?? data.error ?? `Token refresh failed (HTTP ${res.status})`)
-    );
-  }
-
-  return {
-    accessToken: data.access_token as string,
-    expiresAt:   Date.now() + ((data.expires_in as number) ?? 3600) * 1000,
-  };
-}
-
-const REVOKED_ERRORS = new Set(['invalid_grant', 'Token has been expired or revoked']);
-
-function isRevocationError(err: unknown): boolean {
-  const msg = (err as Error)?.message ?? '';
-  return REVOKED_ERRORS.has(msg) || msg.includes('invalid_grant') || msg.includes('revoked');
-}
-
-// ── IPC registration ──────────────────────────────────────────────────────────
 
 export function registerGoogleAuthHandlers(getMainWindow: () => BrowserWindow | null): void {
-
   /**
    * Start the PKCE + loopback flow.
-   * Returns { accessToken, expiresAt } to the renderer on success.
-   * Throws a string message on failure (the renderer should show it to the user).
+   *
+   * Returns `{ ok: true, connected, expiresAt, scope }` on success — never the
+   * access token. Throws nothing: failures come back as `{ ok: false, error }`
+   * so the renderer can show the message without an unhandled rejection.
    */
-  ipcMain.handle('google:startAuth', async (
-    _e,
-    { clientId, clientSecret }: { clientId: string; clientSecret: string }
-  ) => {
-    const codeVerifier   = makeCodeVerifier();
-    const codeChallenge  = makeCodeChallenge(codeVerifier);
-    const state          = crypto.randomBytes(16).toString('hex');
-
-    const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
-    authUrl.searchParams.set('client_id',             clientId);
-    authUrl.searchParams.set('redirect_uri',          CALLBACK_URL);
-    authUrl.searchParams.set('response_type',         'code');
-    authUrl.searchParams.set('scope',                 SCOPES);
-    authUrl.searchParams.set('code_challenge',        codeChallenge);
-    authUrl.searchParams.set('code_challenge_method', 'S256');
-    authUrl.searchParams.set('state',                 state);
-    authUrl.searchParams.set('access_type',           'offline');
-    authUrl.searchParams.set('prompt',                'consent');
-
-    // Open system default browser — not an Electron BrowserWindow
-    await shell.openExternal(authUrl.toString());
-
-    // Block until Google redirects to the loopback listener
-    const code = await waitForAuthorizationCode(state);
-
-    // Exchange for tokens — refresh token is captured and stored here in main process
-    const tokenSet = await exchangeCodeForTokens(code, codeVerifier, clientId, clientSecret);
-    persistCredentials(tokenSet);
-
-    // Return only the short-lived access token to the renderer
-    return { accessToken: tokenSet.accessToken, expiresAt: tokenSet.expiresAt };
-  });
+  ipcMain.handle(
+    'google:startAuth',
+    async (
+      _e,
+      { clientId, clientSecret, scopes }: { clientId: string; clientSecret: string; scopes?: string[] },
+    ) => {
+      // The panel offers a scope list; the provider's own list is the floor.
+      // Merging means the agent's scopes (gmail.send, drive.file) are always
+      // requested even if an older panel only offers the read-only set.
+      const db = currentDb();
+      if (!db) return { ok: false, connected: false, error: 'Henry is still starting up — try again in a moment.' };
+      const requested = Array.isArray(scopes) ? scopes.filter((s) => typeof s === 'string') : [];
+      const merged = Array.from(new Set([...PROVIDER.defaultScopes, ...requested]));
+      try {
+        const tokens = await connect({
+          provider: PROVIDER,
+          clientId,
+          clientSecret,
+          scopes: merged,
+          db,
+        });
+        return {
+          ok: true,
+          connected: true,
+          expiresAt: tokens.expiresAt || null,
+          scope: tokens.scope || null,
+        };
+      } catch (e) {
+        const message = e instanceof OAuthFlowError ? e.message : e instanceof Error ? e.message : String(e);
+        return { ok: false, connected: false, error: message };
+      }
+    },
+  );
 
   /**
-   * Get the current access token.
-   * Automatically refreshes if the token will expire within 5 minutes.
-   * Returns null if no credentials are stored (user needs to connect).
-   * Emits `google:tokenRevoked` if the refresh token was revoked.
+   * Get the current access token, refreshing automatically inside a minute of
+   * expiry. Returns null when nothing is stored (the user needs to connect).
+   * Emits `google:tokenRevoked` if the refresh token was revoked upstream.
+   *
+   * This handler no longer takes client credentials. They used to have to be
+   * passed back by the renderer on every single call, which meant a refresh
+   * silently failed whenever the caller forgot; they are stored with the
+   * credential now.
    */
-  ipcMain.handle('google:getToken', async (
-    _e,
-    auth?: { clientId?: string; clientSecret?: string },
-  ) => {
-    // The app's OAuth client credentials, supplied by the caller. Previously
-    // the preload invoked this with no argument, so this destructuring threw.
-    const clientId = auth?.clientId ?? '';
-    const clientSecret = auth?.clientSecret ?? '';
-    const creds = retrieveCredentials();
-    if (!creds) return null;
-
-    const fiveMinutes = 5 * 60 * 1000;
-    const needsRefresh = creds.expiresAt - Date.now() < fiveMinutes;
-
-    if (!needsRefresh) {
-      return { accessToken: creds.accessToken, expiresAt: creds.expiresAt };
-    }
-
-    // Proactive silent refresh
-    try {
-      const refreshed = await doRefreshToken(creds.refreshToken, clientId, clientSecret);
-      persistCredentials({ ...creds, ...refreshed });
-      return { accessToken: refreshed.accessToken, expiresAt: refreshed.expiresAt };
-    } catch (err) {
-      if (isRevocationError(err)) {
-        wipeCredentials();
-        getMainWindow()?.webContents.send('google:tokenRevoked');
-      }
+  ipcMain.handle('google:getToken', async () => {
+    const db = currentDb();
+    if (!db) return null;
+    const before = describeCredential(PROVIDER.id, db).connected;
+    const tokens = await ensureAccessToken({ provider: PROVIDER, db });
+    if (!tokens) {
+      // The engine deletes a revoked credential on its way to returning null;
+      // tell the renderer rather than leaving a panel showing "connected".
+      if (before) getMainWindow()?.webContents.send('google:tokenRevoked');
       return null;
     }
+    return {
+      // Legacy field: some callers expect a bare token shape. The renderer
+      // receives the short-lived access token, never the refresh token.
+      ok: true,
+      accessToken: tokens.accessToken,
+      expiresAt: tokens.expiresAt,
+      scope: tokens.scope,
+    };
   });
 
   /**
-   * Explicit refresh — called by the renderer when a 401 is received.
+   * Explicit refresh — the agent's `apiRequest` path uses this on a 401.
    * Returns the new access token, or throws if revoked.
    */
-  ipcMain.handle('google:refreshToken', async (
-    _e,
-    auth?: { clientId?: string; clientSecret?: string },
-  ) => {
-    // The app's OAuth client credentials, supplied by the caller. Previously
-    // the preload invoked this with no argument, so this destructuring threw.
-    const clientId = auth?.clientId ?? '';
-    const clientSecret = auth?.clientSecret ?? '';
-    const creds = retrieveCredentials();
-    if (!creds?.refreshToken) {
-      throw new Error('No refresh token stored. Please reconnect Google.');
+  ipcMain.handle('google:refreshToken', async () => {
+    const db = currentDb();
+    if (!db || !hasCredential(PROVIDER.id, db)) {
+      throw new Error('No Google refresh token stored. Please reconnect Google.');
     }
-
-    try {
-      const refreshed = await doRefreshToken(creds.refreshToken, clientId, clientSecret);
-      persistCredentials({ ...creds, ...refreshed });
-      return { accessToken: refreshed.accessToken, expiresAt: refreshed.expiresAt };
-    } catch (err) {
-      if (isRevocationError(err)) {
-        wipeCredentials();
-        getMainWindow()?.webContents.send('google:tokenRevoked');
-      }
-      throw err;
+    // Force a real round trip: a token can be rejected upstream before its
+    // stated expiry, and returning the same rejected token is not a refresh.
+    const tokens = await ensureAccessToken({ provider: PROVIDER, db, forceRefresh: true });
+    if (!tokens) {
+      getMainWindow()?.webContents.send('google:tokenRevoked');
+      throw new Error('Google refresh failed — the token was likely revoked. Please reconnect Google.');
     }
+    return { ok: true, accessToken: tokens.accessToken, expiresAt: tokens.expiresAt };
   });
 
   /**
-   * Check whether long-term credentials exist in the main process.
-   * Returns true even if the access token is expired (we can still refresh).
+   * Check whether long-term credentials exist.
+   * Returns true even if the access token has expired (we can still refresh).
    */
   ipcMain.handle('google:hasCredentials', () => {
-    return retrieveCredentials() !== null;
+    const db = currentDb();
+    return db ? hasCredential(PROVIDER.id, db) : false;
   });
 
   /**
    * Wipe all stored credentials — user disconnecting Google.
+   * Revokes upstream first where Google supports it, then deletes the row.
    */
-  ipcMain.handle('google:disconnect', () => {
-    wipeCredentials();
+  ipcMain.handle('google:disconnect', async () => {
+    const db = currentDb();
+    if (!db) return { ok: false, error: 'Henry is still starting up — try again in a moment.' };
+    const result = await disconnect({ provider: PROVIDER, db });
+    // Belt and braces: if the revoke path somehow left the row, delete it.
+    if (!result.removed) clearCredential(PROVIDER.id, db);
+    getMainWindow()?.webContents.send('google:tokenRevoked');
+    return { ok: true, ...describeCredential(PROVIDER.id, db) };
   });
 }

@@ -17,12 +17,18 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 
+// Henry asks for exactly these. They must match the scope list in
+// `electron/integrations/oauth/registry.ts` — a panel that under-reports what
+// it requests is a consent screen that lies, and the agent tools would then
+// 403 on a scope the user believes was granted.
 const SCOPES = [
   { id: 'https://www.googleapis.com/auth/gmail.readonly', label: 'Read Gmail' },
   { id: 'https://www.googleapis.com/auth/gmail.compose', label: 'Create Gmail drafts' },
+  { id: 'https://www.googleapis.com/auth/gmail.send', label: 'Send email' },
   { id: 'https://www.googleapis.com/auth/calendar.readonly', label: 'Read Calendar' },
-  { id: 'https://www.googleapis.com/auth/calendar.events', label: 'Create Calendar events' },
+  { id: 'https://www.googleapis.com/auth/calendar.events', label: 'Create and update Calendar events' },
   { id: 'https://www.googleapis.com/auth/drive.readonly', label: 'Read Drive' },
+  { id: 'https://www.googleapis.com/auth/drive.file', label: 'Upload files to Drive' },
 ];
 
 const cardCls = 'bg-henry-surface border border-henry-border/20 rounded-2xl p-4';
