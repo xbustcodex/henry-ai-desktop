@@ -52,6 +52,31 @@ function json(res: http.ServerResponse, status: number, body: unknown): void {
   res.end(data);
 }
 
+/** One SSE frame in the shape an OpenAI client expects. */
+function sse(res: http.ServerResponse, payload: unknown): void {
+  res.write(`data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`);
+}
+
+/**
+ * Why the bridge refuses a tool-bearing request, in one sentence the user can
+ * act on.
+ *
+ * `opencode run` accepts a single prompt and drives its OWN built-in tools; it
+ * has no flag, argument or environment variable for accepting a caller's tool
+ * schema (verified against `opencode run --help` on omp 1.18.31). Its JSON
+ * event stream reports `tool` parts only AFTER it has already executed them,
+ * named after opencode's tools (`read`, `bash`, `edit`) rather than Henry's
+ * registry names. Forwarding those as OpenAI `tool_calls` would double-execute
+ * work and then ask the ToolRunner to look up tools that do not exist here.
+ *
+ * So the bridge says no instead of quietly returning a text-only answer. The
+ * silence is what made this look like a model-capability problem for weeks.
+ */
+export const TOOLS_UNSUPPORTED_MESSAGE =
+  'The OpenCode bridge cannot execute Henry\'s tools. `opencode run` takes a single ' +
+  'prompt and runs its own built-in tools; it cannot be given Henry\'s tool schema. ' +
+  'For agent turns use Ollama, OpenAI, Groq or Anthropic.';
+
 function readBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let size = 0;
@@ -144,7 +169,16 @@ export function extractUsage(stdout: string): RunOutcome['usage'] {
   return out;
 }
 
-async function runModel(model: string, prompt: string): Promise<RunOutcome> {
+/**
+ * Run `opencode run` and collect the answer.
+ *
+ * `onTextPart` is called with each text part the moment the CLI writes it,
+ * which is what makes `stream: true` real: the HTTP response can be written
+ * while the CLI is still running instead of after it exits. Granularity is
+ * one part per assistant message — the CLI does not emit token-level text
+ * deltas, so this cannot be finer without changing opencode itself.
+ */
+async function runModel(model: string, prompt: string, onTextPart?: (text: string) => void): Promise<RunOutcome> {
   const cli = await detectOpencodeCli();
   if (!cli.available || !cli.path) {
     throw new Error(cli.error ?? 'opencode is not installed.');
@@ -169,7 +203,26 @@ async function runModel(model: string, prompt: string): Promise<RunOutcome> {
       reject(new Error(`opencode timed out after ${Math.round(RUN_TIMEOUT_MS / 1000)}s.`));
     }, RUN_TIMEOUT_MS);
 
-    child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+    // Chunk boundaries do not align with event boundaries, so a partial line
+    // stays buffered until the rest of it arrives.
+    let stdoutPending = '';
+    child.stdout?.on('data', (d: Buffer) => {
+      stdout += d.toString();
+      if (!onTextPart) return;
+      stdoutPending += d.toString();
+      const lines = stdoutPending.split('\n');
+      stdoutPending = lines.pop() ?? '';
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t.startsWith('{')) continue;
+        try {
+          const ev = JSON.parse(t) as { part?: { type?: string; text?: string } };
+          if (ev.part?.type === 'text' && typeof ev.part.text === 'string' && ev.part.text) {
+            onTextPart(ev.part.text);
+          }
+        } catch { /* a split or malformed line is not a reason to fail the run */ }
+      }
+    });
     child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
     child.on('error', (e: Error) => { clearTimeout(timer); reject(e); });
     child.on('close', (code: number | null) => {
@@ -197,6 +250,101 @@ async function runModel(model: string, prompt: string): Promise<RunOutcome> {
       }
     });
   });
+}
+
+export interface BridgeChatPlan {
+  model: string;
+  prompt: string;
+  stream: boolean;
+}
+
+export type BridgeChatCheck =
+  | { ok: true; plan: BridgeChatPlan }
+  | { ok: false; status: number; error: { message: string; type: string } };
+
+/**
+ * Is this field a request for tools?
+ *
+ * The rule is "defined, non-null, and not an empty array", NOT "is an array".
+ * A shape test would let `tools: {}`, `tools: "x"` and `tools: {"a":1}` walk
+ * straight past the refusal — nothing here executes them, but the caller would
+ * believe its tool definitions were honoured and would report zero tool calls
+ * without ever being told the bridge cannot do them. That is exactly the silent
+ * gap the refusal exists to close, so the question is what the field MEANS, not
+ * what shape it happens to have.
+ */
+function asksForTools(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+}
+
+/**
+ * Decide whether a chat-completions request can be served, before anything is
+ * spawned. Pure, so the rules — especially the tools refusal — are testable
+ * without a CLI, a network or a bridge process.
+ */
+export function checkChatRequest(body: unknown): BridgeChatCheck {
+  const b = (body ?? {}) as {
+    model?: unknown;
+    messages?: Array<{ role?: string; content?: unknown }>;
+    stream?: unknown;
+    tools?: unknown;
+    /** Legacy OpenAI function-calling field; same meaning as `tools`. */
+    functions?: unknown;
+    function_call?: unknown;
+  };
+
+  // The refusal that turns a silent capability gap into a legible one.
+  // `function_call: 'none'` is the one value that is not a request for tools —
+  // it is a caller explicitly opting out — so it is allowed through.
+  const legacyFunctionCall = b.function_call === 'none' ? undefined : b.function_call;
+  if (asksForTools(b.tools) || asksForTools(b.functions) || asksForTools(legacyFunctionCall)) {
+    return {
+      ok: false,
+      status: 400,
+      error: { message: TOOLS_UNSUPPORTED_MESSAGE, type: 'bridge_tools_unsupported' },
+    };
+  }
+
+  const model = typeof b.model === 'string' ? b.model.trim() : '';
+  if (!model) {
+    return {
+      ok: false,
+      status: 400,
+      error: { message: 'model is required', type: 'invalid_request_error' },
+    };
+  }
+
+  const prompt = messagesToPrompt(b.messages ?? []);
+  if (!prompt) {
+    return {
+      ok: false,
+      status: 400,
+      error: { message: 'messages is required', type: 'invalid_request_error' },
+    };
+  }
+
+  return { ok: true, plan: { model, prompt, stream: b.stream === true } };
+}
+
+/** One OpenAI-shaped SSE chunk, so the stream and the test agree on the wire. */
+export function chatCompletionChunk(
+  id: string,
+  created: number,
+  model: string,
+  delta: Record<string, unknown>,
+  finishReason: string | null = null,
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+): Record<string, unknown> {
+  return {
+    id,
+    object: 'chat.completion.chunk',
+    created,
+    model,
+    choices: usage ? [] : [{ index: 0, delta, finish_reason: finishReason }],
+    ...(usage ? { usage } : {}),
+  };
 }
 
 async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -234,19 +382,38 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   if (req.method === 'POST' && (path === '/v1/chat/completions' || path === '/chat/completions')) {
     try {
       const raw = await readBody(req);
-      const body = JSON.parse(raw || '{}') as {
-        model?: string;
-        messages?: Array<{ role?: string; content?: unknown }>;
-        max_tokens?: number;
-        stream?: boolean;
-      };
-      const model = String(body.model ?? '').trim();
-      if (!model) {
-        return json(res, 400, { error: { message: 'model is required', type: 'invalid_request_error' } });
+      const body = JSON.parse(raw || '{}') as unknown;
+      const check = checkChatRequest(body);
+      if (!check.ok) {
+        return json(res, check.status, { error: check.error });
       }
-      const prompt = messagesToPrompt(body.messages ?? []);
-      if (!prompt) {
-        return json(res, 400, { error: { message: 'messages is required', type: 'invalid_request_error' } });
+      const { model, prompt, stream } = check.plan;
+
+      if (stream) {
+        // Real streaming: each text part is written the moment the CLI emits
+        // it, instead of the caller waiting for the process to exit and then
+        // receiving one buffered body.
+        const id = `chatcmpl-${crypto.randomUUID()}`;
+        const created = Math.floor(Date.now() / 1000);
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+        });
+        const chunk = (delta: Record<string, unknown>, finish: string | null = null) =>
+          sse(res, chatCompletionChunk(id, created, model, delta, finish));
+        try {
+          const { usage } = await runModel(model, prompt, (text) => chunk({ content: text }));
+          chunk({}, 'stop');
+          if (usage) sse(res, chatCompletionChunk(id, created, model, {}, null, usage));
+          sse(res, '[DONE]');
+        } catch (e: unknown) {
+          const message = e instanceof Error ? e.message : String(e);
+          sse(res, { error: { message, type: 'opencode_error' } });
+          sse(res, '[DONE]');
+        }
+        res.end();
+        return;
       }
 
       const { content, usage } = await runModel(model, prompt);

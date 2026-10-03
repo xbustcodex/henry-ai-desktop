@@ -17,7 +17,14 @@ import type { HenrySecurityPolicy, HenrySecurityStatus } from '../../global';
 interface SwitchRow {
   key: keyof HenrySecurityPolicy;
   label: string;
+  /** Static explanation. */
   help: string;
+  /**
+   * Overrides `help` with text derived from live state. Used where a hardcoded
+   * number would go stale — the Security panel must never claim a tool count
+   * that no longer matches the registry.
+   */
+  dynamicHelp?: (s: HenrySecurityStatus) => string | null;
   /** Rendered instead of a toggle when the switch cannot be armed as-is. */
   needsPin?: boolean;
 }
@@ -30,8 +37,18 @@ const CONFIRMATION: SwitchRow[] = [
   },
   {
     key: 'confirmSilentTools',
-    label: 'Confirm silent-tier tools',
-    help: 'Tools that normally run without asking will wait for your approval first.',
+    label: 'Ask before silent-tier tools run',
+    help: 'Off by default, and the default is deliberate — see below.',
+    // Names the consequence in both states, and counts the tools live rather
+    // than hardcoding a number that someone will forget to update.
+    dynamicHelp: (s) => {
+      const n = s.tools?.silent ?? 0;
+      if (n === 0) return 'No silent-tier tools are registered right now.';
+      const on = s.policy.confirmSilentTools;
+      return on
+        ? `On — Henry will ask before each of the ${n} silent-tier tools runs.`
+        : `Off — ${n} tools run without asking. Turn this on to be asked every time.`;
+    },
   },
   {
     key: 'confirmDeleteOutsideHome',
@@ -39,6 +56,14 @@ const CONFIRMATION: SwitchRow[] = [
     help: 'Asks before Henry removes a file that lives outside your home directory.',
   },
 ];
+
+/*
+ * Why `confirmSilentTools` defaults off — repeated here because the panel is
+ * where a user meets the switch, and a switch nobody understands is worse than
+ * either default. The full reasoning lives on DEFAULT_POLICY in
+ * electron/ipc/securityPolicy.ts.
+ */
+
 
 const NETWORK: SwitchRow[] = [
   {
@@ -70,14 +95,20 @@ const LOCKS: SwitchRow[] = [
 function Toggle({
   row,
   value,
+  status,
   disabled,
   onChange,
 }: {
   row: SwitchRow;
   value: boolean;
+  /** Supplied so `dynamicHelp` can read live counts; omitted for static rows. */
+  status: HenrySecurityStatus;
   disabled?: boolean;
   onChange: (next: boolean) => void;
 }) {
+  // `dynamicHelp` returning null means "I have nothing truthful to say right
+  // now" — fall back to the static copy rather than rendering an empty gap.
+  const help = row.dynamicHelp?.(status) ?? row.help;
   return (
     <label className="flex items-start gap-3 py-3 border-b border-henry-border/20 last:border-0 cursor-pointer">
       <input
@@ -90,7 +121,7 @@ function Toggle({
       <span className="flex-1 min-w-0">
         <span className="block text-sm text-henry-text">{row.label}</span>
         <span className="block text-[11px] text-henry-text-muted mt-0.5 leading-relaxed">
-          {row.help}
+          {help}
         </span>
       </span>
     </label>
@@ -168,6 +199,7 @@ export default function SecurityPanel() {
             key={row.key}
             row={row}
             value={policy[row.key]}
+            status={status}
             disabled={row.needsPin && !status.hasPin}
             onChange={(v) => void set(row.key, v)}
           />

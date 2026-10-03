@@ -743,7 +743,9 @@ export function encodePowerShellCommand(script: string): string {
 /** The argv used to launch either flavour of the Windows helper. */
 export function windowsHelperArgv(): { cmd: string; args: string[] } {
   return {
-    cmd: 'powershell',
+    // The full .exe name rather than the bare `powershell`, so resolution does
+    // not depend on CreateProcess applying PATHEXT for us.
+    cmd: 'powershell.exe',
     args: [
       '-NoProfile',
       '-NonInteractive',
@@ -1161,7 +1163,11 @@ async function dispatchMouse(
     }
     if (kind === 'scroll') {
       // Page Up / Page Down are the real AppleScript equivalent of a scroll.
-      const code = (o.deltaY ?? 0) < 0 ? 116 : 121;
+      // 116 is Page Up, 121 is Page Down. This was mapped the other way round,
+      // so a positive deltaY scrolled down on macOS while scrolling up on
+      // Windows and Linux — the same "assumed one platform's convention"
+      // class of bug this file exists to avoid.
+      const code = (o.deltaY ?? 0) < 0 ? 121 : 116;
       const r = await runTool('osascript', ['-e', `tell application "System Events" to key code ${code}`], 5000);
       return { success: r.ok, error: r.error, backend: DARWIN_BACKEND };
     }

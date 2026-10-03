@@ -27,6 +27,9 @@ import RemoteControlPanel from './RemoteControlPanel';
 import DeviceLinkPanel from './DeviceLinkPanel';
 import HealthPanel from './HealthPanel';
 import GoogleConnectionPanel from './GoogleConnectionPanel';
+import SecurityPanel from './SecurityPanel';
+import PrivacyPanel from './PrivacyPanel';
+import LogsPanel from './LogsPanel';
 import { isMacOS, getPlatformName } from '../../utils/platform';
 import type { EndpointingSettings } from '../../henry/voiceEndpointing';
 import { getEndpointingSettings, saveEndpointingSettings } from '../../henry/voice';
@@ -958,6 +961,149 @@ function VoiceSection() {
     </div>
   );
 }
+// ── Quit ─────────────────────────────────────────────────────────────────────
+
+/**
+ * In-app quit (row 11.13).
+ *
+ * `quitApp` refuses while a Routine or task is in flight and returns the list,
+ * so the first click tells the user what would be interrupted rather than
+ * silently dropping it. The second, visually distinct button is the only thing
+ * that forces the quit — abandoning work should never be the path of least
+ * resistance.
+ */
+function QuitSection() {
+  const [activeWork, setActiveWork] = useState<string[]>([]);
+  const [confirming, setConfirming] = useState(false);
+  const [quitting, setQuitting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const r = await window.henryAPI.appActiveWork();
+        if (!cancelled) setActiveWork(r.activeWork);
+      } catch {
+        // Not being able to ask is not a reason to hide the button — the main
+        // process still refuses the quit if work IS running.
+      }
+    };
+    void refresh();
+    const t = setInterval(refresh, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, []);
+
+  useEffect(() => {
+    // The main process sends this just before tearing down, so the user sees
+    // why the window is about to go away rather than watching it hang.
+    return window.henryAPI.onAppQuitting(() => setQuitting(true));
+  }, []);
+
+  const quit = async (force: boolean) => {
+    try {
+      const res = await window.henryAPI.quitApp(force ? { force: true } : {});
+      if (res.needsConfirmation) {
+        setActiveWork(res.activeWork ?? []);
+        setConfirming(true);
+        return;
+      }
+      if (!res.ok) toast.error(res.error ?? 'Could not quit');
+      else setQuitting(true);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not quit');
+    }
+  };
+
+  const dangerBtn =
+    'px-3 py-1.5 rounded-lg text-xs font-medium text-red-400 hover:bg-red-500/10 disabled:opacity-40';
+
+  return (
+    <div className={cardCls}>
+      <SectionHeader
+        title="Quit Henry"
+        sub="Closes the app cleanly: stops Routines, closes machine connections, and flushes the database before exiting."
+      />
+
+      {activeWork.length > 0 && (
+        <div className="mb-3 text-[11px] text-amber-400 leading-relaxed">
+          Still running: {activeWork.join(', ')}
+        </div>
+      )}
+
+      {confirming && activeWork.length > 0 ? (
+        <div className="space-y-2">
+          <p className="text-[11px] text-henry-text-muted leading-relaxed">
+            Quitting now abandons the work above. It cannot be resumed.
+          </p>
+          <div className="flex gap-2">
+            <button className={btnCls} onClick={() => setConfirming(false)}>
+              Cancel
+            </button>
+            <button className={dangerBtn} onClick={() => void quit(true)}>
+              Quit anyway
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button className={dangerBtn} onClick={() => void quit(false)} disabled={quitting}>
+          {quitting ? 'Quitting…' : 'Quit Henry'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A ONE-TIME pointer to the silent-tool setting, shown next to System health.
+ *
+ * Deliberately once: the dismissal is recorded in localStorage, so this can
+ * never become the nagging banner pattern. It exists because the default here
+ * is permissive and a user should meet that fact once without hunting for it.
+ */
+function SilentToolsNotice() {
+  const [dismissed, setDismissed] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    try {
+      setDismissed(window.localStorage.getItem('henry:security-notice-dismissed') === '1');
+    } catch {
+      // Storage unavailable (private mode / web mock) — show it rather than
+      // hiding a security-relevant default behind a failure to read a flag.
+      setDismissed(false);
+    }
+  }, []);
+
+  if (dismissed !== false) return null;
+
+  return (
+    <div className="bg-henry-surface/40 border border-henry-border/30 rounded-2xl p-4">
+      <div className="flex items-start gap-3">
+        <div className="flex-1 min-w-0">
+<div className="text-sm text-henry-text">Some tools run without asking</div>
+ <p className="text-[11px] text-henry-text-muted mt-0.5 leading-relaxed">
+   By default a group of tools Henry considers low-risk run silently, so you are not asked
+   to approve ordinary work. If you would rather approve every one, Security has a switch
+   for it.
+          </p>
+        </div>
+  <button
+   className="px-3 py-1.5 rounded-lg text-xs font-medium text-henry-text-muted hover:text-henry-text shrink-0"
+  onClick={() => {
+        try {
+            window.localStorage.setItem('henry:security-notice-dismissed', '1');
+     } catch { /* nothing to do */ }
+    setDismissed(true);
+       }}
+      >
+          Dismiss
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // ── Root ─────────────────────────────────────────────────────────────────────
 
@@ -993,10 +1139,32 @@ export default function SettingsView() {
           </div>
         </div>
 
-        <div className={cardCls}>
-          <SectionHeader title="System health" />
+ <div className={cardCls}>
+      <SectionHeader title="System health" />
           <HealthPanel />
+     </div>
+
+        <SilentToolsNotice />
+
+        <div className={cardCls}>
+          <SectionHeader
+            title="Security"
+            sub="Confirmations, network access, and the app lock. These change what Henry is allowed to do, not just how it looks."
+          />
+        <SecurityPanel />
         </div>
+
+ <div className={cardCls}>
+          <SectionHeader title="Privacy" sub="What Henry stores on this machine, and what it sends." />
+  <PrivacyPanel />
+     </div>
+
+    <div className={cardCls}>
+          <SectionHeader title="Logs & debug" />
+          <LogsPanel />
+     </div>
+
+        <QuitSection />
       </div>
     </div>
   );

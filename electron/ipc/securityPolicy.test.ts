@@ -37,10 +37,9 @@ function freshDb(): FakeDb {
   return fake;
 }
 
-describe('defaults are the restrictive end', () => {
+describe('defaults', () => {
   it('requires confirmation for shell work out of the box', () => {
     expect(DEFAULT_POLICY.confirmShell).toBe(true);
-    expect(DEFAULT_POLICY.confirmSilentTools).toBe(true);
     expect(DEFAULT_POLICY.confirmDeleteOutsideHome).toBe(true);
   });
 
@@ -59,6 +58,23 @@ describe('defaults are the restrictive end', () => {
 
   it('leaves the app lock off, because a lock with no PIN cannot be opened', () => {
     expect(DEFAULT_POLICY.appLock).toBe(false);
+  });
+
+  /**
+   * The one switch that gates pre-existing, deliberately-designed behaviour
+   * rather than a new capability. It defaults OFF so an upgrade does not change
+   * what existing users experience, and so the silent/confirm tier split keeps
+   * carrying information. Main overruled an earlier fail-closed default here;
+   * this assertion exists to pin the decision either way.
+   */
+  it('leaves silent-tier tools unprompted, preserving shipped behaviour', () => {
+    expect(DEFAULT_POLICY.confirmSilentTools).toBe(false);
+  });
+
+  it('still offers the stricter posture when the user asks for it', () => {
+    const restore = __setPolicyForTest({ confirmSilentTools: true });
+    expect(policyFlag('confirmSilentTools')).toBe(true);
+    restore();
   });
 });
 
@@ -80,6 +96,23 @@ describe('resolvePolicy — an unreadable value must never disable a protection'
   it('falls back to the default for an empty string', () => {
     const p = resolvePolicy({ security_policy_confirmShell: '' });
     expect(p.confirmShell).toBe(true);
+  });
+
+  /**
+   * The fallback rule is "degrade to the DEFAULT", not "degrade to blocking".
+   * For every protection-gated switch that default happens to be the safe
+   * value; for `confirmSilentTools` it is not, and that is intentional. A
+   * corrupt row must therefore resolve to whichever posture the default
+   * expresses — this pins that the resolver is not secretly biased.
+   */
+  it('degrades a corrupt row to the default, not to a fixed safe value', () => {
+    const corrupt = { security_policy_confirmShell: 'maybe', security_policy_confirmSilentTools: '???' };
+    const p = resolvePolicy(corrupt);
+    expect(p.confirmShell).toBe(DEFAULT_POLICY.confirmShell);
+    expect(p.confirmSilentTools).toBe(DEFAULT_POLICY.confirmSilentTools);
+    // Spelled out, because this is the one place the two diverge.
+    expect(p.confirmShell).toBe(true);
+    expect(p.confirmSilentTools).toBe(false);
   });
 
   it('honours an explicit false — the user may turn a protection off', () => {

@@ -149,6 +149,40 @@ const finiteNumber = z.number().finite();
 /** A required, non-blank, length-bounded string. */
 const nonEmpty = (max = 4096) => z.string().trim().min(1).max(max);
 
+/**
+ * Any value that survives `JSON.parse` — the boundary of what can cross IPC.
+ *
+ * Declared before `jsonObject` because the two are mutually recursive: an
+ * object may contain an array, which may contain another object. `z.lazy` is
+ * what makes that expressible without an unbounded type.
+ */
+const jsonValue: z.ZodTypeAny = z.lazy(() =>
+  z.union([
+    z.string().max(1024 * 1024),
+    z.number().finite(),
+    z.boolean(),
+    z.null(),
+    jsonObject,
+    z.array(jsonValue).max(10_000),
+  ]),
+);
+
+/**
+ * A free-form JSON object — the shape preload actually sends for the ~60
+ * record-style channels (`saveFact(record)`, `addRoutine(task)`, …).
+ *
+ * This is deliberately NOT `.strict()`. Those handlers read named fields and
+ * ignore the rest, and a strict object schema would reject any caller that
+ * sends one extra key — a regression, not a protection. Its job is to refuse a
+ * non-object where an object is required (which would otherwise reach the
+ * handler as `undefined` and fail confusingly deep inside it) and to bound the
+ * nesting.
+ */
+const jsonObject = z.record(z.string(), jsonValue);
+
+/** A channel preload invokes with no arguments at all. */
+const noArg = z.undefined().optional();
+
 /** Coordinates and other geometry reach a shell command on macOS, so they must
  *  be finite numbers rather than whatever the renderer sent. */
 
@@ -487,6 +521,102 @@ export const channelSchemas: Record<string, ChannelSchema> = {
   'logs:clear': z.object({ before: z.string().max(64).optional() }).strict(),
   'logs:retention': z.object({ days: z.number().int().min(1).max(365) }).strict(),
   'app:quit': z.object({ force: z.boolean().optional(), confirm: z.boolean().optional() }).strict(),
+
+  // ── Session store ─────────────────────────────────────────────────────
+  // Every `session:*` handler is `handler(command)`, which takes ONE object
+  // payload. preload sends an object for all of them, including the two that
+  // look argument-less — `sessionStats: () => invoke('session:stats', {})` and
+  // `clearToolCalls: () => invoke('session:clear-tool-calls', {})` send `{}`.
+  // Requiring an object here is therefore safe and catches a bare-string call.
+  'session:checkDeps': noArg,
+  'session:create': jsonObject,
+  'session:end': jsonObject,
+  'session:resume': jsonObject,
+  'session:branch': jsonObject,
+  'session:list': jsonObject,
+  'session:search': jsonObject,
+  'session:addMessage': jsonObject,
+  'session:getMessages': jsonObject,
+  'session:list-tool-calls': jsonObject,
+  'session:clear-tool-calls': jsonObject,
+  'session:get': jsonObject,
+  'session:setTitle': jsonObject,
+  'session:archive': jsonObject,
+  'session:updateTokens': jsonObject,
+  'session:export': jsonObject,
+  'session:stats': jsonObject,
+
+  // ── Creators ─────────────────────────────────────────────────────────
+  'creators:getDemo': noArg,
+  'creators:saveDemo': jsonObject,
+  'creators:getOrb': noArg,
+  'creators:saveOrb': jsonObject,
+  'creators:listMedia': noArg,
+  'creators:closeStage': noArg,
+
+  // ── Memory: record payloads (preload sends a Record for each) ──────────
+  'memory:saveFact': jsonObject,
+  'memory:searchFacts': jsonObject,
+  'memory:saveSummary': jsonObject,
+  'memory:savePersonalMemory': jsonObject,
+  'memory:saveProject': jsonObject,
+  'memory:saveProjectMemory': jsonObject,
+  'memory:saveSessionMemory': jsonObject,
+  'memory:updateWorkingMemory': jsonObject,
+  'memory:saveGoal': jsonObject,
+  'memory:saveCommitment': jsonObject,
+  'memory:saveMilestone': jsonObject,
+  'memory:saveRelationshipMemory': jsonObject,
+  'memory:saveNarrativeMemory': jsonObject,
+  'memory:saveMemorySummary': jsonObject,
+  'memory:saveGraphEdge': jsonObject,
+  'memory:buildContext': jsonObject,
+  'memory:buildDeepContext': jsonObject,
+  'memory:compressSession': jsonObject,
+
+  // ── Personal apps that live in memory.ts ──────────────────────────────
+  'reminders:list': noArg,
+  'reminders:due': noArg,
+  'reminders:save': jsonObject,
+  'focus:stats': noArg,
+  'weekly:data': noArg,
+  'finance:create': jsonObject,
+  'finance:add': jsonObject,
+  'journal:save': jsonObject,
+  'lists:all': noArg,
+  'lists:save': jsonObject,
+  'focus:save': jsonObject,
+  'capture:save': jsonObject,
+  'recordings:list': noArg,
+  'recordings:save': jsonObject,
+  'contacts:create': jsonObject,
+  'tasks:create': jsonObject,
+  'finance:recurring:list': noArg,
+  'finance:recurring:autopost': noArg,
+  'finance:recurring:save': jsonObject,
+  'health:habitList': noArg,
+  // Required fields the handler reads directly — a missing `date` would
+  // otherwise write a row keyed on NULL.
+  'health:logSave': z
+    .object({
+      id: z.string().max(128).optional(),
+      date: nonEmpty(32),
+      category: nonEmpty(64),
+      label: z.string().max(200).optional(),
+      value: finiteNumber.optional(),
+      unit: z.string().max(32).optional(),
+      note: z.string().max(2000).optional(),
+    })
+    .passthrough(),
+  'health:habitSave': z
+    .object({
+      id: z.string().max(128).optional(),
+      name: nonEmpty(200),
+      icon: z.string().max(32).optional(),
+      color: z.string().max(32).optional(),
+      target_per_day: z.number().int().min(0).max(1000).optional(),
+    })
+    .passthrough(),
 };
 
 /** Channels whose payload must never be a bare string. */
@@ -648,40 +778,86 @@ export const SHELL_GATED_CHANNELS: ReadonlySet<string> = new Set([
 /**
  * One-shot approval grants, keyed by channel.
  *
- * Single-use on purpose. An approval that could be replayed would let a
- * compromised renderer satisfy the gate once and then run commands forever,
- * which is the same exposure as having no gate.
+ * Each grant stores the fingerprint of the EXACT payload the user approved, not
+ * just the channel name. A grant scoped only to the channel means consent for
+ * `ls` also authorises `rm -rf` on the same channel — the call is refused,
+ * armed, and re-invoked, and anything that changes the payload in between
+ * inherits the consent. Consent that does not describe what actually runs is
+ * not consent, so the fingerprint must match or the grant is destroyed.
  */
-const approvals = new Map<string, number>();
+interface Grant {
+  expiresAt: number;
+  fingerprint: string;
+}
+
+const approvals = new Map<string, Grant>();
 
 /** Grants are short-lived so a forgotten approval cannot be revived later. */
 const APPROVAL_TTL_MS = 60_000;
 
 /**
- * Record that the user approved one execution of `channel`.
+ * Stable JSON serialisation, so key order cannot change the fingerprint.
+ *
+ * `JSON.stringify` preserves insertion order, which means `{a:1,b:2}` and
+ * `{b:2,a:1}` would fingerprint differently for identical content — and two
+ * logically equal payloads failing to match would silently re-prompt the user.
+ * Sorting keys makes the digest a function of VALUE, not of serialisation.
+ */
+function canonicalise(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+  if (Array.isArray(value)) return '[' + value.map(canonicalise).join(',') + ']';
+  const entries = Object.keys(value as Record<string, unknown>)
+    .sort()
+    .map((k) => `${JSON.stringify(k)}:${canonicalise((value as Record<string, unknown>)[k])}`);
+  return '{' + entries.join(',') + '}';
+}
+
+/**
+ * A digest of the exact arguments a gated call will carry.
+ *
+ * Hashed rather than stored raw so the grant map never holds the command text:
+ * a debug dump of the approval table must not become a shell history.
+ */
+export function payloadFingerprint(args: readonly unknown[]): string {
+  // Lazily required so this module still loads under a plain-Node test where
+  // the `electron` import is already stubbed.
+  const { createHash } = require('crypto') as typeof import('crypto');
+  return createHash('sha256').update(canonicalise(args)).digest('hex');
+}
+
+/**
+ * Record that the user approved running `channel` with exactly `fingerprint`.
  *
  * Called from the preload bridge only after the renderer has actually shown a
- * confirmation. Returns false for an unknown channel so a typo cannot create a
+ * confirmation. Returns false for a non-gated channel so a typo cannot create a
  * grant that some later channel happens to match.
  */
-export function armChannelApproval(channel: string, getWindow?: () => { isDestroyed(): boolean } | null): boolean {
+export function armChannelApproval(
+  channel: string,
+  fingerprint: string,
+  getWindow?: () => { isDestroyed(): boolean } | null,
+): boolean {
   if (!SHELL_GATED_CHANNELS.has(channel)) return false;
   const win = getWindow?.();
   if (win && win.isDestroyed()) return false;
-  approvals.set(channel, Date.now() + APPROVAL_TTL_MS);
+  approvals.set(channel, { expiresAt: Date.now() + APPROVAL_TTL_MS, fingerprint });
   return true;
 }
 
 /**
- * Spend an approval for `channel`, returning whether one was valid.
+ * Spend the approval for `channel`, requiring it to cover exactly `fingerprint`.
  *
- * Expired grants are deleted on the way out rather than left to accumulate.
+ * A mismatch DESTROYS the grant rather than leaving it for a later matching
+ * call. That is the conservative choice on purpose: if the payload changed
+ * once, we have no reason to believe the renderer still intends what the user
+ * saw, so the safest assumption is that this is a new, unapproved action.
  */
-export function consumeChannelApproval(channel: string): boolean {
-  const expiry = approvals.get(channel);
-  if (expiry === undefined) return false;
+export function consumeChannelApproval(channel: string, fingerprint: string): boolean {
+  const grant = approvals.get(channel);
+  if (grant === undefined) return false;
   approvals.delete(channel);
-  return Date.now() < expiry;
+  if (Date.now() >= grant.expiresAt) return false;
+  return grant.fingerprint === fingerprint;
 }
 
 /** Drop every outstanding grant. Used on policy change and by tests. */

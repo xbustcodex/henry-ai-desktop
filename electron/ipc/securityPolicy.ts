@@ -60,16 +60,31 @@ export type SecurityPolicy = {
 export type PolicyKey = keyof SecurityPolicy;
 
 /**
- * SAFE DEFAULTS. `confirmX` and `redactLogs` are on; the three `allowX`
- * network-sharing switches are off; persistence is on because turning it off
- * by default would silently discard the user's history on upgrade.
+ * SAFE DEFAULTS, with one deliberate exception.
  *
- * `persistAnalytics` defaults OFF: analytics rows are the only thing here that
- * exist purely for measurement, so nothing should be collected until asked.
+ * `confirmX` and `redactLogs` are on; the `allowX` network switches are off;
+ * persistence is on because turning it off by default would silently discard
+ * the user's history on upgrade. `persistAnalytics` is off — analytics rows
+ * exist purely for measurement, so nothing is collected until asked.
+ *
+ * ## `confirmSilentTools` is the exception, and it is off on purpose
+ *
+ * Every OTHER gate here protects something new, so failing closed costs the
+ * user nothing they already had. This one gates a capability that has always
+ * existed and was deliberately designed: the silent/confirm tier split. Making
+ * it default-on would change the product for every existing user on upgrade
+ * without asking, and would make the split itself meaningless — if all ~33
+ * silent tools prompt, "silent" stops carrying information, and a user asked
+ * 33 times per turn learns to click through reflexively, which is *less*
+ * protective than prompting only where it matters.
+ *
+ * The switch exists for users who want the stricter posture. It is off until
+ * they ask for it, and the Security panel says so in those terms with the
+ * count derived from the live tool registry rather than hardcoded.
  */
 export const DEFAULT_POLICY: Readonly<SecurityPolicy> = Object.freeze({
   confirmShell: true,
-  confirmSilentTools: true,
+  confirmSilentTools: false,
   redactLogs: true,
   allowLanSync: false,
   confirmDeleteOutsideHome: true,
