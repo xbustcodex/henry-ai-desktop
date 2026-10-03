@@ -150,7 +150,7 @@ plus the syncBridge tool router. **Retain our extra tools.**
 |---|---|---|---|---|---|
 | 4.1 | Multi-Agent Support | agent-core | agent routing in `ai.ts`/ToolRunner | — | — | — | — | **PARTIAL — installed pkg: an agent turn with `tools` set routed through the ToolRunner and completed with no error. Multi-agent fan-out not observed** | **PARTIAL** |
 | 4.2 | Agent Roles (4+) | agent-core | engine roles (companion/worker) in the router | — | — | — | — | **UNVERIFIED — engines selectable and both routes exist; distinct role behaviour not exercised** | **IMPLEMENTED / NOT LIVE VERIFIED** |
-| 4.3 | Tool Execution | `tool-registry.ts` | ToolRunner (`electron/agent/toolRunner.ts`) | **BLOCKER: `listToolCalls` returns `{tool_calls: []}` after a real agent turn. The runner is wired and error-free, but no local model emitted a tool call through this path, so a tool was never observed executing** | no change made | — | — | **installed pkg: 52 tools registered (7 categories; safety silent 33 / notify 5 / confirm 14); agent turn completed with no error; **zero tool calls recorded** | **IMPLEMENTED / NOT LIVE VERIFIED (blocked)** |
+| 4.3 | Tool Execution | `tool-registry.ts` | ToolRunner (`electron/agent/toolRunner.ts`) | — | — | — | — | **installed pkg: 52 tools registered (7 categories; safety silent 33 / notify 5 / confirm 14); agent turn completed with no error; `listToolCalls` returned `{tool_calls: []}` — see AGENT TOOL INVOCATION BLOCKER below** | **IMPLEMENTED / NOT LIVE VERIFIED** |
 | 4.4 | Shell / Terminal | `processes.ts` | `run_shell` tool + `computerRunShell` | — | — | Card 7 covers the command classifier boundary | — | **CLOSED — installed pkg: `run_shell` registered and confirm-tier; the classifier refused a fork bomb, a Windows forced system delete and a wrong-typed payload** | **CLOSED** |
 | 4.5 | File System Tools | 10 tools (`tool-registry.ts:151-289`) | `electron/agent/tools/files.ts` | — | — | 23 tests (capability + containment) | — | **installed pkg: all 10 registered — file_list, file_search, file_inspect, file_read, file_load, file_write, file_replace, file_move, file_copy, file_publish** | **CLOSED** |
 | 4.6 | Git Integration | — | `repo_status`, `repo_read`, `repo_edit` | — | — | — | — | **PARTIAL — installed pkg: all 3 repo tools still registered alongside the new file tools; `repoStatus` returned false from a non-repo directory, which is correct. No git repository was available on this machine to exercise a real diff** | **PARTIAL** |
@@ -599,3 +599,47 @@ token revoked (`{ok:true}`), `pairToken` cleared, `linkedDevices` empty, and the
 rebound to `127.0.0.1:4242` — `192.168.1.110:4242` now UNREACHABLE while `127.0.0.1:4242`
 returns HTTP 200 and Henry's local desktop remains healthy (`runtime ok, db ok, boot ok`).
 No test device or test data was left behind.
+
+
+---
+
+## AGENT TOOL INVOCATION BLOCKER (recorded, not resolved)
+
+The registry and ToolRunner exist and expose **52 tools**, and a genuine agent turn through
+Henry completes without error. But the local models available on this machine — `llama3.2:3b` and
+`qwen2.5-coder:7b` — have emitted **zero tool calls** across real agent turns, so
+`listToolCalls` stays `{tool_calls: []}`.
+
+**Consequence:** any row whose advertised behaviour depends on a tool actually executing cannot be
+closed from live evidence.
+
+**Rules honoured:**
+- Tool calls were NOT manufactured in any acceptance test.
+- No row was closed by invoking ToolRunner directly — that is exactly the "code exists therefore it
+  works" error that made 51 rows overstate themselves earlier.
+- Rows blocked this way stay PARTIAL / UNVERIFIED with their individual evidence intact. This is
+  annotated here rather than added to the eight-state vocabulary, so the summary is not distorted
+  to accommodate it.
+
+**This is NOT evidence that Henry's tool architecture is broken.** At least three possibilities
+remain, and they are deliberately not collapsed here:
+
+1. the selected local model has no native tool-calling support;
+2. it supports tool calling but Henry is not presenting the schema/request in the shape it expects;
+3. it emits a provider-specific tool-call representation that Henry is not parsing.
+
+That deserves its own controlled investigation — not a larger model pulled at random. Deferred to
+its own piece of work after the burn-down.
+
+## Preserved Card 4 classifications
+
+| Row | Status |
+|---|---|
+| 4.4 shell | CLOSED |
+| 4.5 file tools | CLOSED |
+| 4.11 process / system | CLOSED |
+| 4.7 GitHub research tooling | MISSING (no implementation) |
+| 4.12 agent goal/plan tooling | MISSING (no implementation) |
+| 4.13 Goals surface vs agent access | PARTIAL |
+| 4.16 self-improvement | MISSING (no implementation) |
+| execution-dependent rows | PARTIAL / UNVERIFIED per their own evidence |
