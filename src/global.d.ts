@@ -958,7 +958,7 @@ declare global {
      * Call only after the user has actually confirmed — the main process
      * treats the call as that decision having been made.
      */
-    securityApproveChannel: (channel: string) => Promise<{ ok: boolean; channel: string }>;
+    securityApproveChannel: (channel: string, args?: unknown[]) => Promise<{ ok: boolean; channel: string; error?: string }>;
 
     whisperTranscribe?: (audioBlob: Blob, apiKey: string) => Promise<string>;
 
@@ -1081,6 +1081,18 @@ declare global {
     voiceTtsLocalSetupProgress?: (cb: (p: unknown) => void) => () => void;
     voiceElevenLabsStatus?: () => Promise<HenryVoiceResult<HenryElevenLabsStatus>>;
     voiceElevenLabsVoices?: () => Promise<HenryVoiceResult<{ voiceId: string; name: string; category: string }[]>>;
+
+    // ── Knowledge base / vector store ───────────────────────────────────────
+    // knowledgeGet/knowledgeDelete are bridged as bare strings, not objects.
+    knowledgeIngestFile?: (path: string, title?: string) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
+    knowledgeIngestUrl?: (url: string, title?: string) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
+    knowledgeIngestNote?: (text: string, title?: string) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
+    knowledgeList?: (opts?: { sourceKind?: string; limit?: number }) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
+    knowledgeGet?: (id: string) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
+    knowledgeDelete?: (id: string) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
+    knowledgeStats?: () => Promise<{ ok: boolean; result?: unknown; error?: string }>;
+    knowledgeReindexMemory?: () => Promise<{ ok: boolean; result?: unknown; error?: string }>;
+    knowledgeRecallMemory?: (query: string, k?: number) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
   voiceGreeting?: (opts?: { speak?: boolean }) => Promise<HenryVoiceResult<{
     text: string;
     period: 'morning' | 'afternoon' | 'evening' | 'lateNight';
@@ -1198,6 +1210,7 @@ export interface HenrySecurityPolicy {
   persistMemory: boolean;
   persistAnalytics: boolean;
   diagnosticsMetadata: boolean;
+
   allowNetworkShare: boolean;
 }
 
@@ -1210,6 +1223,12 @@ export interface HenrySecurityStatus {
   locked: boolean;
   /** Whether the OS keychain is available for provider-key encryption. */
   encryptionAvailable: boolean;
+  /**
+   * Live tool-tier counts, derived in the main process from the tool registry.
+   * Derived rather than hardcoded so the Security panel's copy cannot go stale
+   * when the tool set changes.
+   */
+  tools: { silent: number; confirm: number; notify: number; total: number };
 }
 
 export interface HenryUnlockResult {

@@ -43,6 +43,35 @@ const now = () => new Date().toISOString();
 // is the supported path for persistent attachments.
 const webAttachmentBytes = new Map<string, string>(); // id -> data URL
 
+// Desktop-only security/privacy state for the browser build. Held in a plain
+// object rather than localStorage: these switches gate main-process behaviour
+// that does not exist here, so persisting them would imply a durability the
+// web build does not have. `securitySet` still updates the object so a panel
+// behaves predictably while the page is open.
+//
+// The policy shape is derived from the API contract rather than imported, so
+// adding a switch to HenrySecurityPolicy cannot leave this mock behind.
+type WebSecurityPolicy = Awaited<ReturnType<Window['henryAPI']['securityGet']>>['policy'];
+type WebSecurityStatus = Awaited<ReturnType<Window['henryAPI']['securityGet']>>;
+type WebPrivacyStatus = Awaited<ReturnType<Window['henryAPI']['privacyGet']>>;
+type WebUnlockResult = Awaited<ReturnType<Window['henryAPI']['securityUnlock']>>;
+type WebLogStats = Awaited<ReturnType<Window['henryAPI']['logsStats']>>;
+
+const WEB_SECURITY_DEFAULTS: WebSecurityPolicy = {
+  confirmShell: false,
+  confirmSilentTools: false,
+  redactLogs: false,
+  allowLanSync: false,
+  confirmDeleteOutsideHome: false,
+  appLock: false,
+  persistConversations: false,
+  persistMemory: false,
+  persistAnalytics: false,
+  diagnosticsMetadata: false,
+  allowNetworkShare: false,
+};
+const webSecurityPolicy: WebSecurityPolicy = { ...WEB_SECURITY_DEFAULTS };
+
 
 import { tryCerebrasFallback, isGroqRateLimit } from './henry/providers/cerebras';
 import { log } from './henry/log';
@@ -1683,6 +1712,72 @@ const henryAPI: Window['henryAPI'] = {
     }
     return await res.text();
   },
+
+  // ── Desktop-only surfaces ───────────────────────────────────────────────
+  // These exist on the real preload API but cannot work in a browser build:
+  // there is no main process, no encrypted keystore, no filesystem and no
+  // process supervisor behind them. They return the same shape the main
+  // process returns rather than throwing, so a panel rendered in the web build
+  // shows an honest "unavailable" instead of crashing — and so a caller cannot
+  // mistake a thrown error for a security refusal.
+
+  securityGet: async (): Promise<WebSecurityStatus> => ({
+    policy: { ...webSecurityPolicy },
+    defaults: { ...WEB_SECURITY_DEFAULTS },
+    keys: [],
+    hasPin: false,
+    locked: false,
+    encryptionAvailable: false,
+    tools: { silent: 0, confirm: 0, notify: 0, total: 0 },
+  }),
+  securitySet: async (key, value) => {
+    // The key arrives typed from the API contract; indexing through it rather
+    // than through `string` keeps a typo from silently writing a new property.
+    webSecurityPolicy[key as keyof WebSecurityPolicy] = value as never;
+    return { ok: false, error: 'Security settings are only available in the desktop app.' };
+  },
+  securitySetPin: async (_pin) => ({ ok: false, hasPin: false, error: 'PINs are desktop-only.' }),
+  securityClearPin: async () => ({ ok: false, hasPin: false, error: 'Desktop app only.' }),
+  securityUnlock: async (_pin): Promise<WebUnlockResult> => ({ ok: false }),
+  securityApproveChannel: async (channel) => ({
+    ok: false,
+    channel,
+    error: 'Desktop app only.',
+  }),
+
+  privacyGet: async (): Promise<WebPrivacyStatus> => ({
+    policy: { ...webSecurityPolicy },
+    telemetry: {
+      // Stated explicitly rather than left undefined: Henry has no outbound
+      // analytics path, and the web build certainly has none.
+      transmitsAnything: false,
+      localOnly: true,
+      includesModelMetadata: false,
+    },
+    storage: {
+      conversations: false,
+      memory: false,
+      analytics: false,
+    },
+  }),
+  privacyClear: async (_what) => ({ ok: false, removed: {} }),
+
+  logsQuery: async () => [],
+  logsStats: async (): Promise<WebLogStats> => ({
+    total: 0,
+    byLevel: {},
+    oldest: null,
+    newest: null,
+    retentionDays: 0,
+  }),
+  logsClear: async () => ({ removed: 0 }),
+  logsSetRetention: async (days) => ({ days }),
+  logsGetRetention: async () => ({ days: 0 }),
+  logsExport: async () => ({ text: '' }),
+
+  quitApp: async () => ({ ok: false, forced: false, abandonedWork: [], error: 'Desktop app only.' }),
+  appActiveWork: async () => ({ activeWork: [] }),
+  onAppQuitting: () => () => undefined,
 };
 
 // Only install the mock in non-Electron contexts (plain browser / Capacitor).

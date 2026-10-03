@@ -447,6 +447,26 @@ contextBridge.exposeInMainWorld('henryAPI', {
     ipcRenderer.invoke('google:refreshToken', creds ?? { clientId: '', clientSecret: '' }),
   googleHasCredentials: () => ipcRenderer.invoke('google:hasCredentials'),
   googleDisconnect: () => ipcRenderer.invoke('google:disconnect'),
+  // ── Knowledge base / vector store ───────────────────────────────────────
+  // Exposed because the knowledge tools and the memory recall path are the
+  // only writers of the vector index; without these the index stays empty and
+  // `memory:searchAll` silently degrades to lexical hits.
+  knowledgeIngestFile: (path: string, title?: string) =>
+    ipcRenderer.invoke('knowledge:ingestFile', { path, title: title ?? '', tags: [] }),
+  knowledgeIngestUrl: (url: string, title?: string) =>
+    ipcRenderer.invoke('knowledge:ingestUrl', { url, title: title ?? '', tags: [] }),
+  knowledgeIngestNote: (text: string, title?: string) =>
+    ipcRenderer.invoke('knowledge:ingestNote', { text, title: title ?? '', tags: [] }),
+  knowledgeList: (opts?: { sourceKind?: string; limit?: number }) =>
+    ipcRenderer.invoke('knowledge:list', opts ?? {}),
+  // Bridged as bare strings: these handlers take a string id directly, not an
+  // object. Sending {id} here would hand them "[object Object]".
+  knowledgeGet: (id: string) => ipcRenderer.invoke('knowledge:get', id),
+  knowledgeDelete: (id: string) => ipcRenderer.invoke('knowledge:delete', id),
+  knowledgeStats: () => ipcRenderer.invoke('knowledge:stats'),
+  knowledgeReindexMemory: () => ipcRenderer.invoke('knowledge:reindexMemory'),
+  knowledgeRecallMemory: (query: string, k?: number) =>
+    ipcRenderer.invoke('knowledge:recallMemory', { query, k: k ?? 10 }),
   // Recordings (Meeting Recorder → SQLite)
   recordingsList: () => ipcRenderer.invoke('recordings:list'),
   recordingsGet: (id: string) => ipcRenderer.invoke('recordings:get', id),
@@ -916,12 +936,13 @@ contextBridge.exposeInMainWorld('henryAPI', {
   },
 
   /**
-   * Grant one execution of a gated channel (shell/terminal/printer).
+   * Grant ONE execution of a gated channel (shell/terminal/printer).
    *
-   * Must be called ONLY after the user has actually confirmed — the main
-   * process treats a grant as that decision having been made. Grants are
-   * single-use and expire in 60s.
+   * `args` MUST be the exact argument list that will be passed to the gated
+   * invoke. The grant is bound to their fingerprint: approving one command and
+   * then invoking a different one on the same channel is refused, and the grant
+   * is discarded. Call only after the user has actually confirmed.
    */
-  securityApproveChannel: (channel: string) =>
-    ipcRenderer.invoke('security:approve-channel', { channel }),
+  securityApproveChannel: (channel: string, args: unknown[] = []) =>
+    ipcRenderer.invoke('security:approve-channel', { channel, args }),
 });

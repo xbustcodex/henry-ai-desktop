@@ -20,6 +20,8 @@ import { ipcMain } from 'electron';
 import type Database from 'better-sqlite3';
 import { decryptKey } from '../ipc/_keyStorage';
 import { prepareSpeechText } from './_speechText';
+import { registerLocalTtsHandlers } from './localTts';
+import { registerElevenLabsHandlers } from './elevenLabs';
 import { TtsEngineSetting, TtsActiveEngine, TtsStatus, TtsSpeakResult, speak as platformSpeak, getTtsStatus, stopSpeaking, registerPlatformTtsHandlers } from '../../src/platform/tts';
 
 type Envelope<T = unknown> = { ok: true; result: T } | { ok: false; error: string };
