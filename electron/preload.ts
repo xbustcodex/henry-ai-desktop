@@ -298,6 +298,11 @@ contextBridge.exposeInMainWorld('henryAPI', {
   toggleRoutine: (id: string, enabled: boolean) =>
     ipcRenderer.invoke('scheduler:toggle', { id, enabled }),
   runRoutineNow: (id: string) => ipcRenderer.invoke('scheduler:run-now', { id }),
+  // Move an EXISTING Routine onto a different trigger type. Without this the
+  // trigger picker would apply to new Routines only and every existing one would
+  // be permanently wrong, which is worse than having no picker at all.
+  setRoutineTrigger: (id: string, trigger: Record<string, unknown>) =>
+    ipcRenderer.invoke('scheduler:set-trigger', { id, trigger }),
 
   // ── Automation run history ────────────────────────────────────────
   automationRuns: (opts?: { taskId?: string; limit?: number; unreadOnly?: boolean }) =>
