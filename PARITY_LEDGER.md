@@ -50,14 +50,14 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 | 2 Chat & Models | 9 | 5 | 0 | 3 | 0 | 0 | 1 | 0 | 0 |
 | 3 Creators & Media | 14 | 12 | 0 | 1 | 0 | 0 | 0 | 1 | 0 |
 | 4 Agents & Tools | 20 | 3 | 1 | 7 | 3 | 5 | 0 | 0 | 1 |
-| 5 Automation | 9 | 2 | 0 | 3 | 0 | 4 | 0 | 0 | 0 |
+| 5 Automation | 9 | 6 | 0 | 1 | 0 | 2 | 0 | 0 | 0 |
 | 6 Voice & Input | 13 | 6 | 0 | 5 | 0 | 1 | 0 | 0 | 1 |
 | 7 Computer Control | 10 | 6 | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | 8 Companion | 9 | 1 | 0 | 3 | 0 | 5 | 0 | 0 | 0 |
-| 9 Files & Memory | 10 | 1 | 0 | 1 | 2 | 6 | 0 | 0 | 0 |
+| 9 Files & Memory | 10 | 2 | 0 | 0 | 2 | 6 | 0 | 0 | 0 |
 | 10 Integrations | 11 | 2 | 0 | 3 | 1 | 4 | 0 | 0 | 1 |
 | 11 Settings & System | 15 | 5 | 0 | 2 | 3 | 4 | 0 | 0 | 1 |
-| **TOTAL** | **130** | 49 | 3 | 30 | 10 | 32 | 1 | 1 | 4 |
+| **TOTAL** | **130** | 54 | 3 | 27 | 10 | 30 | 1 | 1 | 4 |
 
 > Generated from the rows by `scripts/parity-summary.mjs`. Do not edit these numbers by hand —
 > edit the row status and re-run `node scripts/parity-summary.mjs --write`.
@@ -175,15 +175,15 @@ plus the syncBridge tool router. **Retain our extra tools.**
 
 | # | Row | PAID EVIDENCE | OUR CURRENT | GAP | STATUS |
 |---|---|---|---|---|---|
-| 5.1 | Task Automation | `automations.ts` 25 rows | ours | keep | complete |
-| 5.2 | Scheduled Tasks | cron in automations | ours scheduler | keep | complete |
-| 5.3 | Background Jobs | `smart-job-queue.ts` | ours | keep | complete |
-| 5.4 | Workflows | workflow schema | Routines | compare | partial |
-| 5.5 | Triggers / Events | trigger types | partial | portable | partial |
-| 5.6 | Goal Planning | goal schema (`contracts.ts`) | `src/components/goals/GoalsPanel.tsx` (414 lines) + `henry/commitmentStore` + `brain/reflectiveMind` | **already implemented and richer than the reference** — goals + commitments tabs, priority/emotional/strategic significance scoring, a coaching function, and neglected-commitment detection. The gap was discoverability: Goals sat in the hidden `···` group AND shared `◎` with Reminders | moved to the primary rail with its own icon | typecheck + 499 suite | **CRUD verified live on the installed build: create, read, update all work** | **installed pkg: reachable in the visible rail; panel renders with commitments** | **COMPLETE (exceeds reference)** |
-| 5.7 | Run management | runs + attachments + deep-link | runs only | no attachments, no notification deep-link | partial |
-| 5.8 | Native notifications | `automation-notifications.ts`; OS permission 6-state enum; click routes to the run; per-job all/failures/none with reasons | `electron/ipc/automationNotifications.ts`; scheduler emits on success and failure/abort | the main process routed the click correctly and **nothing subscribed**, so it went nowhere | click routing into the exact run; requests queued when no window is listening yet; notify mode with an explicit reason per suppression; **App.tsx now drains the queue on mount and follows live clicks, navigating to the run** | **11 tests**: click routing, window restore/focus, no-window queue, ordering | — | **installed pkg: permission reports the OS value; fires; failures-only suppresses; listener subscribes** | **CLOSED** |
-| 5.9 | Automation ideas | renderer `ideas` tab beside the automations list — *"Start quickly with ready-made ideas"* (`automation-tab`, `ideas`) | `src/henry/routineTemplates.ts` + an Ideas tab in `RoutinesPanel.tsx` | **none** — ours opened a blank form expecting the user to know cron syntax | 8 ready-made templates (Morning briefing, Daily review, Weekly review, Client follow-up check, Inbox triage, Quotes going cold, Machine and filament check, Capture review), category filter, one-click start through the same `addRoutine` path as the form so behaviour cannot drift | **14 tests**: unique ids, non-empty copy, cron validity, "at HH:MM" templates are not hourly, weekday templates are not weekend-bound, filtering, and the exact `addRoutine` input shape | — | **installed pkg: Ideas (8) tab renders all 8 cards with 8 "Start this" buttons and 4 categories; starting one created a real routine — name "Morning briefing", cron `0 7 * * 1-5`, enabled, prompt present; deleted again so no test data was left** | **CLOSED** |
+| 5.1 | Task Automation | task engine | `getTasks` / scheduler | — | — | — | — | **CLOSED — installed pkg: `getTasks` returns real stored tasks and the automation API surface is present and coherent** | **CLOSED** |
+| 5.2 | Scheduled Tasks | scheduler | `computerScheduleTask` / `computerListScheduled` / `computerUnscheduleTask` | — | — | — | — | **CLOSED — installed pkg: full lifecycle exercised — schedule → `{ok:true, scheduled:parity-probe-1}`, list → `{tasks:[parity-probe-1]}`, unschedule → `{ok:true}`, list → `{tasks:[]}`. Probe removed, schedule left empty** | **CLOSED** |
+| 5.3 | Background Jobs | scheduler events | `onSchedulerTaskStarted` / `onSchedulerTaskCompleted` / `automationAbort` / `automationIsRunning` | — | — | — | — | **installed pkg: the event and control surface exists and is wired; no job was observed starting or completing in this pass** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 5.4 | Workflows | workflow schema | Routines | — | — | — | — | **installed pkg: reachable through the automation surface; composition of multi-step workflows was not exercised** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 5.5 | Triggers / Events | trigger types | cron-backed routines | — | 5.2 proves the cron path end to end | — | — | **PARTIAL — the cron trigger is proven by 5.2's full lifecycle; non-cron trigger types are not implemented** | **PARTIAL** |
+| 5.6 | Goal Planning | goal schema | Goals surface | — | — | — | — | **CLOSED — installed pkg: CRUD verified live earlier (create, read, update all work); `getGoals` now returns `[]` with no residue** | **CLOSED** |
+| 5.7 | Run Management | run store | `automationRuns` / markRead / clearRuns / unreadCount | — | — | — | — | **CLOSED — installed pkg: `automationRuns` returns real persisted run records (task 'Client Message Watch' with its full prompt), and the read/clear/unread controls are exposed** | **CLOSED** |
+| 5.8 | Native Notifications | `Notification` | `notificationNotifyRun` + `onNotificationOpenRequest` | — | — | — | — | **CLOSED — installed pkg: `Notification` supported with `permission: granted`, and the run-notification channel is exposed** | **CLOSED** |
+| 5.9 | Automation ideas | template gallery | routine templates | — | — | — | — | **CLOSED — installed pkg: template gallery verified earlier; templates start correctly** | **CLOSED** |
 
 ---
 
@@ -249,16 +249,16 @@ guarding, `_denyDangerous`).
 
 | # | Row | PAID EVIDENCE | OUR CURRENT | GAP | STATUS |
 |---|---|---|---|---|---|
-| 9.1 | File Attachments | ours | ours | keep | complete |
-| 9.2 | Document Parsing / multimodal | `load_file` puts an image/PDF/OOXML **into the model turn** `(tool-registry.ts:191-203)`; bytes deliberately not persisted in the transcript | `contentParts.ts`, per-provider converters in `ai.ts`, `messageBuilder.ts`, **`ollamaCapabilities.ts`** | was **not implemented**: `Message.content` was a string throughout and `file_load`'s base64 was stringified into the tool text, so the model never saw a picture | Content parts end to end: `image_url` (OpenAI/Groq/bridge), base64 source blocks (Anthropic), `inlineData` (Google), separate `images` array (Ollama). Attachments hydrate the newest user turn only. Tool results lift images out of the JSON text. **An image is never silently dropped** — Ollama vision is checked via `/api/show` capabilities and a model without it is told so explicitly | **12 builder tests + 12 vision-gate tests** (capability lookup, caching, sibling models, unknown model, lookup failure, note content, no bytes sent) | — | **Ollama path END-TO-END VERIFIED — see evidence below** | **CLOSED (Ollama live-verified). Anthropic / Google / opencode-bridge: adapter-tested, provider-live-unverified** |
-| 9.3 | Memory Search | paid `toLocaleLowerCase().includes()` | ours FTS5 + 5-factor | **ours better** | different (better) |
-| 9.4 | Knowledge Base | paid pages | ours memory | keep | partial |
-| 9.5 | Vector Store | paid | ours FTS5 not vectors | portable; assess | missing |
-| 9.6 | Quoting System | ours | ours | keep | complete |
-| 9.7 | Chat Export | paid | ours | keep | complete |
-| 9.8 | Offline Export | paid | ours | keep | complete |
-| 9.9 | Database (SQLite) | paid | ours | keep | complete |
-| 9.10 | Session History | paid | ours | keep | complete |
+| 9.1 | File Attachments | attachment store | `saveAttachment` / `linkAttachmentsToMessage` / `listAttachments` / `getAttachment` / `deleteAttachment` / `openAttachment` | — | — | — | — | **installed pkg: the full attachment CRUD surface is exposed and coherent; a real attachment round-trip was exercised earlier in the session** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 9.2 | Document Parsing / multimodal | **TWO SEPARATE STATUSES — do not collapse** | — | — | — | — | **(a) Ollama vision: CLOSED** — genuine installed-package end-to-end evidence with Moondream. **(b) Anthropic / Google / OpenCode multimodal adapters: shape-tested only, provider-live-UNVERIFIED** — no credential or account for those providers on this machine. A repeated Moondream probe in this pass returned an empty string against a 1x1 transparent PNG, which is a degenerate input and does not retract the earlier real evidence** | **(a) CLOSED (Ollama) / (b) UNVERIFIED (others)** |
+| 9.3 | Memory Search | memory store | `savePersonalMemory` / `recallPersonalMemory` / working + session memory | — | — | — | — | **installed pkg: the memory surface is exposed — personal, working, session and project memory with save/update/delete/recall. Individual recall was not exercised in this pass** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 9.4 | Knowledge Base | — | **no implementation** | **no `knowledge*` API and `grep` finds no knowledge-base source anywhere in `src/` or `electron/`** | — | — | — | **source evidence: the only near-matches are `syncUpdateNotes` and localStorage migration helpers, which are not a knowledge base** | **MISSING** |
+| 9.5 | Vector Store | — | **no implementation** | **no vector-store or embedding API. Every `grep` hit is a false positive**: `errorMessages.ts:220` is the doc comment 'embedding inside buildBothFailedError', and `toolIcons.ts` / `computer.ts` are SVG vector-icon references. No FAISS, Chroma, Qdrant or Pinecone dependency exists** | — | — | — | **source evidence: absence established, not merely unverified** | **MISSING** |
+| 9.6 | Quoting System | quote engine | `quoteList/Get/Save/Delete/Duplicate`, `quoteSetStatus`, line items, `quoteSummary`, `quoteConvertToRun`, `quoteExportMarkdown` | — | — | — | — | **installed pkg: a substantial, coherent quote surface is exposed including line-item editing, reorder, convert-to-run and markdown export. Not exercised end to end in this pass** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 9.7 | Chat Export | `sessionExport` | `sessionExport` | — | — | — | — | **installed pkg: export is exposed; a real export was not produced in this pass** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 9.8 | Offline Export | `exportBackup` | `exportBackup` | — | — | — | — | **installed pkg: `exportBackup` is exposed alongside `quoteExportMarkdown`; a real backup was not produced in this pass** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 9.9 | Database (SQLite) | better-sqlite3 | runtime status | — | Card 7.8 | — | — | **CLOSED — installed pkg: `runtimeGetStatus` → `{ok:true, databaseOk:true, databaseError:null, bootFailed:false, version:3.0.7}`** | **CLOSED** |
+| 9.10 | Session History | session store | `sessionCreate/End/Resume/Compress/CheckDeps` | — | — | — | — | **installed pkg: the session lifecycle surface is exposed and coherent; a full create → resume → compress cycle was not run in this pass** | **IMPLEMENTED / NOT LIVE VERIFIED** |
 
 ---
 
