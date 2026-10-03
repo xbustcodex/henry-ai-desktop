@@ -1,5 +1,23 @@
 # Changelog
 
+## Known bug — Companion QR / Android session failure (deferred)
+
+Fixed and verified:
+- LAN discovery selected a Hyper-V virtual adapter (172.18.96.1) over the real
+  Wi-Fi (192.168.1.110) because it took the first non-internal IPv4.
+  Now default-route driven; 14 regression tests.
+- The state payload advertised a LAN URL while the listener was loopback-only.
+- Two pairing-token guard defects stopped a phone pairing at all: LAN pairing was
+  impossible by construction (the PIN route was loopback-only), and the guard then
+  validated against the paired-device session tokens instead of the QR pair token.
+
+Still broken: the physical Android retest fails and the session dies the same way.
+The remaining failure boundary is undiagnosed. The affected Card 8 lifecycle rows
+are recorded as PARTIAL / KNOWN BUG — DEFERRED and are not marked closed.
+
+Test environment was restored: sync_allow_lan off, pairing token revoked, no
+linked devices, listener back on 127.0.0.1:4242.
+
 ## 3.0.7 — Feature integration + Linux hardening
 
 Two tracks of work: a full audit of the Linux port with every confirmed defect

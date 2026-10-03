@@ -53,11 +53,11 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 | 5 Automation | 9 | 2 | 0 | 3 | 0 | 4 | 0 | 0 | 0 |
 | 6 Voice & Input | 13 | 2 | 0 | 4 | 5 | 1 | 0 | 0 | 1 |
 | 7 Computer Control | 10 | 6 | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
-| 8 Companion | 9 | 2 | 0 | 2 | 0 | 5 | 0 | 0 | 0 |
+| 8 Companion | 9 | 1 | 0 | 3 | 0 | 5 | 0 | 0 | 0 |
 | 9 Files & Memory | 10 | 1 | 0 | 1 | 2 | 6 | 0 | 0 | 0 |
 | 10 Integrations | 11 | 2 | 0 | 3 | 1 | 4 | 0 | 0 | 1 |
 | 11 Settings & System | 15 | 5 | 0 | 2 | 3 | 4 | 0 | 0 | 1 |
-| **TOTAL** | **130** | 43 | 3 | 22 | 16 | 41 | 0 | 1 | 4 |
+| **TOTAL** | **130** | 42 | 3 | 23 | 16 | 41 | 0 | 1 | 4 |
 
 > Generated from the rows by `scripts/parity-summary.mjs`. Do not edit these numbers by hand —
 > edit the row status and re-run `node scripts/parity-summary.mjs --write`.
@@ -233,13 +233,13 @@ guarding, `_denyDangerous`).
 
 | # | Row | PAID EVIDENCE | OUR CURRENT | GAP | STATUS |
 |---|---|---|---|---|---|
-| 8.1 | AI Companion | renderer companion surface | whole Companion subsystem | **LAN discovery picked the wrong interface**: `getLocalIp()` returned the FIRST non-internal IPv4, which on Windows is enumeration order, so Hyper-V `vEthernet (Default Switch)` 172.18.96.1 won over the real Wi-Fi 192.168.1.110. Separately the state payload advertised `http://<lanIp>:4242` while the listener was bound to loopback | `electron/ipc/network.ts`: default-route-driven selection, virtual adapters demoted as additional evidence, link-local demoted; advertised host now honest (`lanReachable` flag) | **14 tests** covering the exact reported topology: disconnected Ethernet, connected vEthernet with IPv4 and no gateway, connected Wi-Fi with default gateway — selection is the Wi-Fi; plus Ethernet-only, virtual-only, Docker, VPN, non-private default route, empty and IPv6 cases | route detection reads Windows `route print -4` Active Routes | **installed pkg: `localIp` now reports `192.168.1.110` (was 172.18.96.1); listener confirmed bound to 127.0.0.1 only and `192.168.1.110:4242` correctly unreachable while LAN access is off** | **CLOSED (discovery)** — the Android QR test is blocked: it needs `sync_allow_lan` enabled and a physical phone | **CLOSED** |
-| 8.2 | Memory Graph | renderer memory-graph surface | `MemoryGraphView` | — | — | — | — | **UNVERIFIED — implemented and reached in the UI; not re-walked on this package** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 8.1 | AI Companion | renderer companion surface | whole Companion subsystem | **LAN discovery picked the wrong interface** (first non-internal IPv4 = Hyper-V vEthernet 172.18.96.1 over real Wi-Fi 192.168.1.110); separately the state payload advertised a LAN URL while the listener was loopback-only | `electron/ipc/network.ts`: default-route-driven selection, virtual adapters demoted as additional evidence, link-local demoted; advertised host honest with `lanReachable` | **14 tests** reproducing the exact reported topology + Ethernet-only, virtual-only, Docker, VPN, non-private default route, IPv6, empty | Windows `route print -4` Active Routes | **installed pkg: localIp 192.168.1.110 (was 172.18.96.1); listener confirmed 0.0.0.0:4242 while LAN enabled; `192.168.1.110:4242` HTTP 200 from Windows** | **PARTIAL — LAN discovery CLOSED; pairing-secret guard defects found and fixed; sustained authenticated session still fails, see KNOWN BUG** | **PARTIAL / KNOWN BUG — DEFERRED** |
+| 8.2 | Memory Graph | renderer memory-graph surface | `MemoryGraphView` | — | — | — | — | **UNVERIFIED — implemented and reachable; not re-walked on this package** | **IMPLEMENTED / NOT LIVE VERIFIED** |
 | 8.3 | Personality | renderer personality surface | profile/persona settings | — | — | — | — | **UNVERIFIED** | **IMPLEMENTED / NOT LIVE VERIFIED** |
-| 8.4 | Emotional Context | renderer emotional surface | emotional-context memory scoring | — | — | — | — | **UNVERIFIED — note this build also shipped the emotional_significance_score column used here** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 8.4 | Emotional Context | renderer emotional surface | emotional-context scoring | — | — | — | — | **UNVERIFIED** | **IMPLEMENTED / NOT LIVE VERIFIED** |
 | 8.5 | Companion Voice | renderer companion-voice surface | ours TTS | — | — | — | — | **UNVERIFIED** | **IMPLEMENTED / NOT LIVE VERIFIED** |
-| 8.6 | Avatar / Visuals | renderer avatar surface | Reactor + Minimal orb (Card 3) | — | — | — | — | **CLOSED — installed pkg: both orb skins render in the JARVIS stage (Card 3)** | **CLOSED** |
-| 8.7 | Daily / Weekly Summary | renderer daily/weekly surface | reminders + Goals weekly review template | — | — | — | — | **PARTIAL — a weekly-review routine template exists and starts correctly, but scheduled generation itself was not observed** | **PARTIAL** |
+| 8.6 | Avatar / Visuals | renderer avatar surface | Reactor + Minimal orb (Card 3) | — | — | — | — | **CLOSED — installed pkg: both orb skins render in the JARVIS stage** | **CLOSED** |
+| 8.7 | Daily / Weekly Summary | renderer daily/weekly surface | reminders + Goals weekly-review template | — | — | — | — | **PARTIAL — a weekly-review routine template exists and starts correctly; scheduled generation not observed** | **PARTIAL** |
 | 8.8 | Cross-Device Search | renderer cross-device surface | sync + FTS5 memory search | — | — | — | — | **PARTIAL — local search verified; cross-device search not exercised** | **PARTIAL** |
 | 8.9 | Panel Help Matcher | renderer help-matcher surface | command palette / global search | — | — | — | — | **UNVERIFIED** | **IMPLEMENTED / NOT LIVE VERIFIED** |
 
@@ -563,3 +563,39 @@ or interface name is hardcoded.
 listener is confirmed bound to `127.0.0.1:4242` and `192.168.1.110:4242` is correctly unreachable,
 because `sync_allow_lan` is off. Enabling it exposes 4242 to every host on the network, which is
 the user's security decision to make, not one to flip unasked.
+
+
+---
+
+## KNOWN BUG — Companion QR / Android session failure (DEFERRED)
+
+**Status:** deferred to a post-parity update. Not to be reopened during the parity pass
+unless another parity row directly depends on it.
+
+**What is fixed and must be kept:**
+
+* LAN discovery selected the wrong interface (`electron/ipc/network.ts`) — 14 tests.
+* LAN listener verified on `0.0.0.0:4242`; correct physical address `192.168.1.110` advertised.
+* Generated QR reached the physical Android device and rendered the Companion interface.
+* Two pairing-token guard defects found and fixed (`77d3a6a`) — 5 tests.
+* `advertisedHost()` no longer advertises an unreachable LAN address.
+
+**What is still broken:**
+
+* The physical Android retest fails and the session dies in the same manner as the first
+  attempt. The remaining failure boundary is **undiagnosed**. Possibilities not yet
+  eliminated include the pairing-token/session transition, token expiry or rotation, the
+  WebSocket/SSE live stream, the screen or remote-control stream, a client-side exception,
+  a host approval transition, reconnect logic, or lifecycle cleanup destroying the freshly
+  established session.
+* `linkedDevices` remained empty after both attempts, so no device ever completed pairing
+  and no orphan credential was left behind.
+
+**Affected ledger rows:** the Card 8 lifecycle rows (pair, persist across restart, revoke,
+remain revoked) are **PARTIAL / KNOWN BUG — DEFERRED**. None may be marked CLOSED.
+
+**Environment restored after testing:** `sync_allow_lan` set back to `false`, the pairing
+token revoked (`{ok:true}`), `pairToken` cleared, `linkedDevices` empty, and the listener
+rebound to `127.0.0.1:4242` — `192.168.1.110:4242` now UNREACHABLE while `127.0.0.1:4242`
+returns HTTP 200 and Henry's local desktop remains healthy (`runtime ok, db ok, boot ok`).
+No test device or test data was left behind.
