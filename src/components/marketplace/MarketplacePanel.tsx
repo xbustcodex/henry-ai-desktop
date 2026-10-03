@@ -5,6 +5,7 @@
  * process, never inferred in the UI.
  */
 
+import ToolIcon from './ToolIcon';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
   CatalogEntry,
@@ -162,13 +163,16 @@ export default function MarketplacePanel() {
             return (
               <div key={entry.id} className="rounded-2xl border border-henry-border/25 bg-henry-surface/25 p-3.5">
                 <div className="flex items-start justify-between gap-2 mb-1">
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex items-start gap-2">
+                    <ToolIcon name={entry.name} />
+                    <div className="min-w-0">
                     <p className="text-sm font-semibold text-henry-text truncate">{entry.name}</p>
                     <p className="text-[10px] text-henry-text-muted">
                       {entry.type} · {entry.category}
                       {entry.version ? ` · v${entry.version}` : ''}
                       {entry.author ? ` · ${entry.author}` : ''}
                     </p>
+                    </div>
                   </div>
                   <span className={`shrink-0 text-[9px] px-1.5 py-0.5 rounded-full ${badge.cls}`}>
                     {badge.label}

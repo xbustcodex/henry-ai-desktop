@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  ROUTINE_TEMPLATES,
+  TEMPLATE_CATEGORIES,
+  templatesByCategory,
+  templateToRoutineInput,
+  type RoutineTemplate,
+} from '../../henry/routineTemplates';
+import { toast } from '../ui/Toast';
 import { Clock, Play, Plus, Trash2, Loader2, X, History } from 'lucide-react';
 
 /**
@@ -103,6 +111,31 @@ export default function RoutinesPanel() {
   const [runs, setRuns] = useState<import('../../types').AutomationRun[]>([]);
   const [unread, setUnread] = useState(0);
   const [showRuns, setShowRuns] = useState(false);
+  // "Ideas" is the ready-made template library, mirroring paid 1.7.0's
+  // `ideas` tab: start from something useful instead of writing a cron by hand.
+  const [tab, setTab] = useState<'routines' | 'ideas'>('routines');
+  const [ideaCategory, setIdeaCategory] = useState<RoutineTemplate['category'] | 'All'>('All');
+  const [starting, setStarting] = useState<string | null>(null);
+
+  /** Start a ready-made routine. Same path as the form, so behaviour cannot drift. */
+  const startFromTemplate = async (template: RoutineTemplate) => {
+    setStarting(template.id);
+    setFormError(null);
+    try {
+      const res = await window.henryAPI.addRoutine?.(templateToRoutineInput(template));
+      if (res && !res.ok) {
+        setFormError(res.error ?? `Could not start "${template.name}".`);
+        return;
+      }
+      toast.success(`Started "${template.name}".`);
+      await reload();
+      setTab('routines');
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : `Could not start "${template.name}".`);
+    } finally {
+      setStarting(null);
+    }
+  };
 
   const reload = useCallback(async () => {
     const api = window.henryAPI;
@@ -256,6 +289,78 @@ export default function RoutinesPanel() {
           {showForm ? 'Close' : 'Add Routine'}
         </button>
       </div>
+      {/* Tabs: your routines, or start from a ready-made one. */}
+      <div className="flex gap-1.5 mb-3">
+        {(['routines', 'ideas'] as const).map((k) => (
+          <button
+            key={k}
+            onClick={() => setTab(k)}
+            className={`px-3 py-1.5 text-xs rounded-lg border transition-colors capitalize ${
+              tab === k
+                ? 'bg-henry-accent/15 text-henry-accent border-henry-accent/25'
+                : 'text-henry-text-muted border-henry-border/30 hover:border-henry-accent/40'
+            }`}
+          >
+            {k === 'routines' ? `Routines${routines.length ? ` (${routines.length})` : ''}` : `Ideas (${ROUTINE_TEMPLATES.length})`}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'ideas' ? (
+        <div className="space-y-3">
+          <p className="text-xs text-henry-text-muted">
+            Ready-made routines you can start in one click. Each one is written to be edited
+            afterwards.
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {(['All', ...TEMPLATE_CATEGORIES] as const).map((c) => (
+              <button
+                key={c}
+                onClick={() => setIdeaCategory(c as RoutineTemplate['category'] | 'All')}
+                className={`px-2.5 py-1 text-[11px] rounded-full border transition-colors ${
+                  ideaCategory === c
+                    ? 'bg-henry-accent/15 text-henry-accent border-henry-accent/25'
+                    : 'text-henry-text-muted border-henry-border/30'
+                }`}
+              >
+                {c}
+              </button>
+            ))}
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {templatesByCategory(
+              ideaCategory === 'All' ? undefined : (ideaCategory as RoutineTemplate['category'])
+            ).map((t) => (
+              <div
+                key={t.id}
+                className="rounded-xl border border-henry-border/25 bg-henry-bg/40 p-3 flex flex-col gap-2"
+              >
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-henry-text">{t.name}</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-henry-border/30 text-henry-text-muted">
+                      {t.category}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-henry-text-muted mt-1 leading-relaxed">
+                    {t.description}
+                  </p>
+                  <p className="text-[10px] text-henry-text-muted/80 mt-1">{t.scheduleLabel}</p>
+                </div>
+                <button
+                  onClick={() => void startFromTemplate(t)}
+                  disabled={starting !== null}
+                  className="mt-auto text-[11px] px-3 py-1.5 rounded-lg bg-henry-accent/15 border border-henry-accent/25 text-henry-accent hover:bg-henry-accent/25 disabled:opacity-50 transition-colors inline-flex items-center gap-1.5 justify-center"
+                >
+                  {starting === t.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+                  Start this
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+      <>
       <p className="text-xs text-henry-text-muted mb-4">
         Things Henry does on a schedule — briefings, reminders, watching for client messages.
         Outbound actions still pause for your approval.
@@ -427,6 +532,8 @@ export default function RoutinesPanel() {
             );
           })}
         </div>
+      )}
+      </>
       )}
       {showRuns && (
         <section className="mt-5 rounded-2xl border border-henry-border/30 bg-henry-surface/30 p-4">
