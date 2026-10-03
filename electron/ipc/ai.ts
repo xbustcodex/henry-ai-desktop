@@ -15,6 +15,13 @@ import type { ModelTool } from '../agent/types';
 import type { ModelCompletion, RunnerMessage } from '../agent/toolRunner';
 import { toText, partition, dataUrl, isImagePart, type ContentMessage, type MessageContent, type MessagePart } from './contentParts';
 import { ollamaSupportsVision, buildOllamaMessage } from './ollamaCapabilities';
+import {
+  streamOllamaChat,
+  callOllamaToolsRound,
+  resolveOllamaBaseUrl,
+  ollamaNotRunningError,
+} from '../providers/ollama';
+import { parseAnthropicContent, parseInlineToolCalls, parseOpenAIToolCalls } from '../providers/toolCalls';
 
 type WindowGetter = () => BrowserWindow | null;
 
@@ -105,7 +112,7 @@ export const MODEL_PRICING: Record<string, { input: number; output: number }> = 
   'qwen2.5:72b': { input: 0, output: 0 },
 };
 
-function calculateCost(model: string, inputTokens: number, outputTokens: number): number {
+export function calculateCost(model: string, inputTokens: number, outputTokens: number): number {
   const pricing = MODEL_PRICING[model];
   if (!pricing) return 0;
   // Add 5% buffer for retries / overhead
@@ -429,11 +436,16 @@ async function callAnthropic(params: AiRequest): Promise<{
     throw new Error(error.error?.message || `Anthropic API error: ${response.status}`);
   }
 
-  const data = await response.json();
+  const data = (await response.json()) as {
+    content?: unknown;
+    usage?: { input_tokens?: number; output_tokens?: number };
+  };
+  // Anthropic splits an answer across several text blocks (and interleaves
+  // tool_use blocks); reading only the first one silently truncated replies.
   return {
-    content: data.content?.[0]?.text || '',
+    content: parseAnthropicContent(data.content).content,
     usage: data.usage
-      ? { input: data.usage.input_tokens, output: data.usage.output_tokens }
+      ? { input: data.usage.input_tokens ?? 0, output: data.usage.output_tokens ?? 0 }
       : undefined,
   };
 }
@@ -448,9 +460,13 @@ async function callGoogle(params: AiRequest): Promise<{
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       contents: toGoogleContents(params.messages),
-      systemInstruction: params.messages.find((m) => m.role === 'system')
-        ? { parts: [{ text: params.messages.find((m) => m.role === 'system')!.content }] }
-        : undefined,
+      // `content` may be a content-parts array when an image is attached;
+      // Google rejects an array where it wants `text`, so it is flattened.
+      systemInstruction: (() => {
+        const sys = params.messages.find((m) => m.role === 'system');
+        if (!sys) return undefined;
+        return { parts: [{ text: typeof sys.content === 'string' ? sys.content : toText(sys.content) }] };
+      })(),
       generationConfig: {
         temperature: params.temperature ?? 0.7,
         maxOutputTokens: params.maxTokens ?? 4096,
@@ -496,14 +512,12 @@ async function callOllamaProvider(params: AiRequest): Promise<{
   content: string;
   usage?: { input: number; output: number };
 }> {
-  const base = (params.apiUrl || 'http://localhost:11434').replace(/\/$/, '');
+  const base = resolveOllamaBaseUrl(params.apiUrl);
 
   // Pre-flight: confirm Ollama is reachable before attempting the actual call.
   const running = await pingOllama(base);
   if (!running) {
-    throw new Error(
-      `Ollama isn't running. Start it in Terminal:\n\n  ollama serve\n\nIf Ollama is on a different machine, update the URL in Settings → Engines.`
-    );
+    throw new Error(ollamaNotRunningError());
   }
 
   const response = await fetch(`${base}/api/chat`, {
@@ -755,6 +769,44 @@ function extractOpenAIChatDeltaContent(delta: unknown): string {
   return '';
 }
 
+/**
+ * Consume an OpenAI-shaped SSE stream, emitting each delta as it arrives.
+ *
+ * Shared by the OpenAI and Groq streamers so the two cannot drift. An `error`
+ * payload mid-stream is raised, not ignored: OpenAI sends one and then closes
+ * the connection, which used to look like a successful, truncated answer.
+ */
+async function consumeOpenAISse(
+  response: Response,
+  onPiece: (text: string) => void,
+  onUsage: (usage: StreamTokenUsage) => void
+): Promise<void> {
+  await readSSEStream(response, (data) => {
+    if (data === '[DONE]') return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(data);
+    } catch {
+      return;
+    }
+    if (!parsed || typeof parsed !== 'object') return;
+    const p = parsed as {
+      choices?: Array<{ delta?: unknown }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+      error?: { message?: string };
+    };
+    if (p.error) throw new Error(p.error.message || 'Stream error');
+    const piece = extractOpenAIChatDeltaContent(p.choices?.[0]?.delta);
+    if (piece.length > 0) onPiece(piece);
+    if (p.usage) {
+      onUsage({
+        input: p.usage.prompt_tokens ?? 0,
+        output: p.usage.completion_tokens ?? 0,
+      });
+    }
+  });
+}
+
 async function streamOpenAI(
   params: AiRequest,
   onChunk: (text: string) => void,
@@ -788,32 +840,16 @@ async function streamOpenAI(
       return;
     }
 
-    await readSSEStream(response, (data) => {
-      if (data === '[DONE]') return;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(data);
-      } catch {
-        return;
-      }
-      if (!parsed || typeof parsed !== 'object') return;
-      const p = parsed as {
-        choices?: Array<{ delta?: unknown }>;
-        usage?: { prompt_tokens?: number; completion_tokens?: number };
-      };
-      const delta = p.choices?.[0]?.delta;
-      const piece = extractOpenAIChatDeltaContent(delta);
-      if (piece.length > 0) {
+    await consumeOpenAISse(
+      response,
+      (piece) => {
         fullText += piece;
         onChunk(piece);
+      },
+      (u) => {
+        usage = u;
       }
-      if (p.usage) {
-        usage = {
-          input: p.usage.prompt_tokens ?? 0,
-          output: p.usage.completion_tokens ?? 0,
-        };
-      }
-    });
+    );
 
     onDone(fullText, usage);
   } catch (err: unknown) {
@@ -868,7 +904,14 @@ async function streamAnthropic(
         delta?: { text?: string };
         message?: { usage?: { input_tokens?: number } };
         usage?: { output_tokens?: number };
+        error?: { message?: string; type?: string };
       };
+      // Anthropic reports a mid-stream failure as an `error` event and then
+      // closes the socket. Without this the turn ended "successfully" with a
+      // truncated answer and no explanation.
+      if (p.type === 'error') {
+        throw new Error(p.error?.message || 'Anthropic stream error');
+      }
       if (p.type === 'content_block_delta') {
         const text = p.delta?.text;
         if (typeof text === 'string' && text.length > 0) {
@@ -926,32 +969,16 @@ async function streamGroq(
       return;
     }
 
-    await readSSEStream(response, (data) => {
-      if (data === '[DONE]') return;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(data);
-      } catch {
-        return;
-      }
-      if (!parsed || typeof parsed !== 'object') return;
-      const p = parsed as {
-        choices?: Array<{ delta?: unknown }>;
-        usage?: { prompt_tokens?: number; completion_tokens?: number };
-      };
-      const delta = p.choices?.[0]?.delta;
-      const piece = extractOpenAIChatDeltaContent(delta);
-      if (piece.length > 0) {
+    await consumeOpenAISse(
+      response,
+      (piece) => {
         fullText += piece;
         onChunk(piece);
+      },
+      (u) => {
+        usage = u;
       }
-      if (p.usage) {
-        usage = {
-          input: p.usage.prompt_tokens ?? 0,
-          output: p.usage.completion_tokens ?? 0,
-        };
-      }
-    });
+    );
 
     onDone(fullText, usage);
   } catch (err: unknown) {
@@ -973,19 +1000,6 @@ interface ToolCompletionParams {
   signal?: AbortSignal;
   messages: RunnerMessage[];
   modelTools: ModelTool[];
-}
-
-function safeParseArgs(raw: unknown): Record<string, unknown> {
-  if (raw && typeof raw === 'object') return raw as Record<string, unknown>;
-  if (typeof raw === 'string' && raw.trim()) {
-    try {
-      const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
-    } catch {
-      return {};
-    }
-  }
-  return {};
 }
 
 /**
@@ -1042,7 +1056,9 @@ function toAnthropicToolMessages(messages: RunnerMessage[]): { system?: string; 
     const mText = typeof m.content === 'string' ? m.content : toText(m.content, { noteImages: false });
     const mImages = m.images ?? (Array.isArray(m.content) ? m.content.filter(isImagePart) : []);
     if (m.role === 'system') {
-      system = mText;
+      // Several system turns must all reach the model; assigning kept only
+      // the last one and silently discarded the rest of the persona.
+      system = system ? `${system}\n\n${mText}` : mText;
       continue;
     }
     // Anthropic's tool_result block CAN carry an image, so a tool that loaded a
@@ -1084,14 +1100,43 @@ function toAnthropicToolMessages(messages: RunnerMessage[]): { system?: string; 
     }
     out.push({ role: m.role, content: m.content });
   }
-  return { system, messages: out };
+  // Anthropic rejects two turns with the same role back to back. Parallel tool
+  // calls produce exactly that — one `tool_result` user turn each — and the
+  // API answered 400, so the agent loop died on the second tool. Adjacent
+  // same-role turns are merged, preserving block order.
+  const merged: Array<{ role: string; content: unknown }> = [];
+  for (const turn of out as Array<{ role: string; content: unknown }>) {
+    const prev = merged[merged.length - 1];
+    if (prev && prev.role === turn.role && Array.isArray(prev.content) && Array.isArray(turn.content)) {
+      prev.content.push(...(turn.content as unknown[]));
+      continue;
+    }
+    merged.push({ role: turn.role, content: turn.content });
+  }
+  return { system, messages: merged };
+}
+
+/**
+ * The chat-completions endpoint for an OpenAI-shaped provider. A relay keeps
+ * its own configured URL: falling through to api.openai.com here would ship a
+ * relay user's conversation to OpenAI with the relay's bearer token.
+ */
+function openAIShapedUrl(provider: string): string {
+  if (provider === 'groq') return 'https://api.groq.com/openai/v1/chat/completions';
+  if (provider === 'relay') {
+    const relayUrl = resolveRelayBaseUrl();
+    if (!relayUrl) {
+      throw new Error(
+        'Hosted relay is not configured. Add a relay URL in Settings → Engines, or pick another provider.',
+      );
+    }
+    return relayUrl;
+  }
+  return 'https://api.openai.com/v1/chat/completions';
 }
 
 async function callOpenAIToolsCompletion(params: ToolCompletionParams): Promise<ModelCompletion> {
-  const url =
-    params.provider === 'groq'
-      ? 'https://api.groq.com/openai/v1/chat/completions'
-      : 'https://api.openai.com/v1/chat/completions';
+  const url = openAIShapedUrl(params.provider);
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${params.apiKey}` },
@@ -1110,18 +1155,19 @@ async function callOpenAIToolsCompletion(params: ToolCompletionParams): Promise<
     throw new Error(error.error?.message || `Tool completion error: ${response.status}`);
   }
   const data = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string; tool_calls?: Array<{ id: string; function?: { name?: string; arguments?: string } }> } }>;
+    choices?: Array<{ message?: { content?: unknown; tool_calls?: unknown } }>;
     usage?: { prompt_tokens?: number; completion_tokens?: number };
   };
   const msg = data.choices?.[0]?.message ?? {};
-  const toolCalls = (msg.tool_calls ?? []).map((tc) => ({
-    id: tc.id,
-    name: tc.function?.name ?? '',
-    arguments: safeParseArgs(tc.function?.arguments),
-  }));
+  const rawContent = typeof msg.content === 'string' ? msg.content : '';
+  // Structured `tool_calls` is the documented path. Some OpenAI-compatible
+  // servers (and some small local models) instead write the call as JSON in
+  // `content`; those used to be reported as "no tool calls".
+  const structured = parseOpenAIToolCalls(msg.tool_calls);
+  const inline = structured.length === 0 ? parseInlineToolCalls(rawContent) : { content: rawContent, toolCalls: [] };
   return {
-    content: msg.content ?? '',
-    toolCalls,
+    content: inline.content,
+    toolCalls: structured.length > 0 ? structured : inline.toolCalls,
     usage: data.usage
       ? { input: data.usage.prompt_tokens ?? 0, output: data.usage.completion_tokens ?? 0 }
       : undefined,
@@ -1157,20 +1203,13 @@ async function callAnthropicToolsCompletion(params: ToolCompletionParams): Promi
     throw new Error(error.error?.message || `Tool completion error: ${response.status}`);
   }
   const data = (await response.json()) as {
-    content?: Array<{ type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }>;
+    content?: unknown;
     usage?: { input_tokens?: number; output_tokens?: number };
   };
-  let content = '';
-  const toolCalls: ModelCompletion['toolCalls'] = [];
-  for (const block of data.content ?? []) {
-    if (block.type === 'text' && block.text) content += block.text;
-    else if (block.type === 'tool_use') {
-      toolCalls.push({ id: block.id ?? '', name: block.name ?? '', arguments: block.input ?? {} });
-    }
-  }
+  const parsed = parseAnthropicContent(data.content);
   return {
-    content,
-    toolCalls,
+    content: parsed.content,
+    toolCalls: parsed.toolCalls,
     usage: data.usage
       ? { input: data.usage.input_tokens ?? 0, output: data.usage.output_tokens ?? 0 }
       : undefined,
@@ -1178,19 +1217,37 @@ async function callAnthropicToolsCompletion(params: ToolCompletionParams): Promi
 }
 
 /**
- * Runs one model round with tools attached. OpenAI and Groq use the OpenAI
- * function-calling format; Anthropic uses its tool_use blocks. Providers
- * without tool support degrade to a plain text completion (no tool calls).
+ * Runs one model round with tools attached. OpenAI, Groq and any configured
+ * relay use the OpenAI function-calling format; Anthropic uses its tool_use
+ * blocks; Ollama has a native `/api/chat` tool protocol.
+ *
+ * The fallback below used to catch Ollama as well, which is why 52 registered
+ * tools produced `{tool_calls: []}` forever: a text-only round structurally
+ * cannot return a tool call, whatever the model is capable of.
  */
 export async function callAIWithTools(params: ToolCompletionParams): Promise<ModelCompletion> {
   switch (params.provider) {
     case 'openai':
     case 'groq':
       return callOpenAIToolsCompletion(params);
+    case 'relay':
+      return callOpenAIToolsCompletion(params);
     case 'anthropic':
       return callAnthropicToolsCompletion(params);
+    case 'ollama': {
+      const round = await callOllamaToolsRound({
+        model: params.model,
+        messages: params.messages,
+        modelTools: params.modelTools,
+        apiUrl: params.apiUrl,
+        temperature: params.temperature,
+        maxTokens: params.maxTokens,
+        signal: params.signal,
+      });
+      return { content: round.content, toolCalls: round.toolCalls, usage: round.usage };
+    }
     default: {
-      // Graceful fallback — provider has no tool support in Sprint 1.
+      // No tool protocol for this provider: one plain text round, no tool calls.
       const flat: AiMessage[] = params.messages.map((m) => ({
         role: m.role === 'tool' ? 'user' : m.role,
         content: m.content,
@@ -1304,6 +1361,28 @@ export function registerAIHandlers(_db: Database.Database, getWindow: WindowGett
           break;
         case 'groq':
           await streamGroq(paramsWithSignal, onChunk, onDone, onError);
+          break;
+        case 'ollama':
+          // Real token-by-token streaming. This case did not exist: Ollama fell
+          // into `default`, which awaits the whole answer and emits one chunk,
+          // so a 626-character reply showed 20.7 s of silence then a single
+          // write. Vision capability is resolved before the request so the
+          // message shape matches the non-streaming path.
+          await streamOllamaChat(
+            {
+              model: paramsWithSignal.model,
+              apiUrl: paramsWithSignal.apiUrl,
+              temperature: paramsWithSignal.temperature,
+              maxTokens: paramsWithSignal.maxTokens,
+              signal: paramsWithSignal.signal,
+              messages: await buildOllamaMessages(
+                resolveOllamaBaseUrl(paramsWithSignal.apiUrl),
+                paramsWithSignal.model,
+                paramsWithSignal.messages
+              ),
+            },
+            { onChunk, onDone, onError }
+          );
           break;
         default:
           try {

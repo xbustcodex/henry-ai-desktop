@@ -14,6 +14,7 @@ import {
   isOllamaResponding,
   OLLAMA_URL,
 } from './ollamaManager';
+import { readNdjsonStream } from '../providers/ndjson';
 
 type WindowGetter = () => BrowserWindow | null;
 
@@ -216,46 +217,53 @@ export function registerOllamaHandlers(winGetter: WindowGetter) {
       });
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      if (!response.body) throw new Error('No response body');
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
       let fullText = '';
+      let sawDone = false;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const text = decoder.decode(value, { stream: true });
-        const lines = text.split('\n').filter(Boolean);
-
-        for (const line of lines) {
-          try {
-            const data = JSON.parse(line);
-            if (data.message?.content) {
-              fullText += data.message.content;
-              safeSend(getWindow, 'ai:stream:chunk', {
-                channelId: params.channelId,
-                chunk: data.message.content,
-              });
-            }
-
-            if (data.done) {
-              safeSend(getWindow, 'ai:stream:done', {
-                channelId: params.channelId,
-                fullText,
-                usage: {
-                  prompt_tokens: data.prompt_eval_count || 0,
-                  completion_tokens: data.eval_count || 0,
-                  total_tokens: (data.prompt_eval_count || 0) + (data.eval_count || 0),
-                  cost: 0, // Local models = free
-                },
-              });
-            }
-          } catch {
-            // Skip malformed lines
-          }
+      // A single reader.read() does not align with a line boundary: splitting
+      // each read on '\n' and parsing the pieces dropped every partial line, so
+      // tokens went missing at random. The shared reader carries a leftover
+      // buffer between reads.
+      await readNdjsonStream(response, (record) => {
+        const data = (record ?? {}) as {
+          message?: { content?: string };
+          done?: boolean;
+          prompt_eval_count?: number;
+          eval_count?: number;
+          error?: string;
+        };
+        if (typeof data.error === 'string' && data.error) throw new Error(data.error);
+        if (data.message?.content) {
+          fullText += data.message.content;
+          safeSend(getWindow, 'ai:stream:chunk', {
+            channelId: params.channelId,
+            chunk: data.message.content,
+          });
         }
+        if (data.done) {
+          sawDone = true;
+          safeSend(getWindow, 'ai:stream:done', {
+            channelId: params.channelId,
+            fullText,
+            usage: {
+              prompt_tokens: data.prompt_eval_count || 0,
+              completion_tokens: data.eval_count || 0,
+              total_tokens: (data.prompt_eval_count || 0) + (data.eval_count || 0),
+              cost: 0, // Local models = free
+            },
+          });
+        }
+      });
+
+      // Ollama closes the stream without a `done` record when generation is
+      // cut short; without this the renderer waited forever for a done event.
+      if (!sawDone) {
+        safeSend(getWindow, 'ai:stream:done', {
+          channelId: params.channelId,
+          fullText,
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, cost: 0 },
+        });
       }
 
       return { success: true };
