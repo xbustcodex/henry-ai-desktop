@@ -49,7 +49,7 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 | 1 UI & Core | 10 | 6 | 0 | 0 | 1 | 3 | 0 | 0 | 0 |
 | 2 Chat & Models | 9 | 4 | 0 | 0 | 0 | 5 | 0 | 0 | 0 |
 | 3 Creators & Media | 14 | 12 | 0 | 1 | 0 | 0 | 0 | 1 | 0 |
-| 4 Agents & Tools | 20 | 1 | 1 | 4 | 4 | 9 | 0 | 0 | 1 |
+| 4 Agents & Tools | 20 | 3 | 1 | 7 | 3 | 5 | 0 | 0 | 1 |
 | 5 Automation | 9 | 2 | 0 | 3 | 0 | 4 | 0 | 0 | 0 |
 | 6 Voice & Input | 13 | 2 | 0 | 4 | 5 | 1 | 0 | 0 | 1 |
 | 7 Computer Control | 10 | 6 | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
@@ -57,7 +57,7 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 | 9 Files & Memory | 10 | 1 | 0 | 1 | 2 | 6 | 0 | 0 | 0 |
 | 10 Integrations | 11 | 2 | 0 | 3 | 1 | 4 | 0 | 0 | 1 |
 | 11 Settings & System | 15 | 5 | 0 | 2 | 3 | 4 | 0 | 0 | 1 |
-| **TOTAL** | **130** | 42 | 3 | 23 | 16 | 41 | 0 | 1 | 4 |
+| **TOTAL** | **130** | 44 | 3 | 26 | 15 | 37 | 0 | 1 | 4 |
 
 > Generated from the rows by `scripts/parity-summary.mjs`. Do not edit these numbers by hand —
 > edit the row status and re-run `node scripts/parity-summary.mjs --write`.
@@ -148,26 +148,26 @@ plus the syncBridge tool router. **Retain our extra tools.**
 
 | # | Row | PAID EVIDENCE | OUR CURRENT | GAP | STATUS |
 |---|---|---|---|---|---|
-| 4.1 | Multi-Agent Support | agent-core | ours has agent roles | keep | complete |
-| 4.2 | Agent Roles (4+) | agent-core | ours | keep | complete |
-| 4.3 | Tool Execution | `tool-registry.ts` | ours | keep | complete |
-| 4.4 | Shell / Terminal | `processes.ts` | ours `shell.ts` | keep | complete |
-| 4.5 | File System Tools | 10 tools: `list_files`, `search_files`, `inspect_file`, `read_file`, `load_file`, `write_file`, `replace_file`, `move_file`, `copy_file`, `publish_file` (`tool-registry.ts:151-289`) | `electron/agent/tools/files.ts` — all ten added; `repo_read`/`repo_edit` kept | — | additive, not a replacement: our repo tools stay narrower and approval-gated; the new ones are confined to home, writes behind `confirm` | **23 tests**: capability + traversal + absolute paths + refuse-clobber + atomic replace leaves no temp + every `confirm` tool has a prompt | — | **installed pkg: 52 tools registered (was 42); all 10 present; write/replace/move = `confirm`, reads = `silent`; `repo_*` intact** | **CLOSED** |
-| 4.6 | Git Integration | — | `repo.ts` | keep | complete |
-| 4.7 | GitHub Research Tools | — | none | portable | missing |
-| 4.8 | Python Tools | paid runs them **jailed** | `electron/ipc/pythonRunner.ts` | **was LESS isolated than paid, AND completely broken on Windows** — it staged to a hardcoded `/tmp/henry_<ts>.py` and ran with `shell: '/bin/zsh'`, so neither path exists on Windows, and the blocking `execSync` froze the main process for up to 12s | **HARDENED / SUPERSET** — our own jail: pre-execution source screening (14 escape classes refused before staging), scrubbed env, private cwd under tmpdir, POSIX rlimits (CPU/AS/FSIZE/NPROC/NOFILE), wall-clock timeout with SIGKILL, hard output cap, async, cross-platform interpreter. Paid's implementation not used. | **23 tests**: 14 escapes refused + legitimate exec, real script errors, timeout, no env leaks, private cwd, output cap | — | installed build boots with it; Python 3.12.10 resolves from the packaged app | **HARDENED / SUPERSET** — **PARTIAL**: jail proven by tests; the chat entry point is not yet verified end to end because "python run:" is routed to the coder engine before it reaches this branch |
-| 4.9 | Network Tools | `files.ts` fetch | `web.ts` | keep | complete |
-| 4.10 | Sandbox | sandbox config | partial | compare | partial |
-| 4.11 | Process / System Tools | `processes.ts` | ours | keep | complete |
-| 4.12 | Plan Mode | — | ours | keep | complete |
-| 4.13 | Goal Planning | goal schema | none | portable | missing |
-| 4.14 | Workflows | automation workflows | ours Routines | compare | partial |
-| 4.15 | Triggers / Events | automation triggers | partial | portable | partial |
-| 4.16 | Self-Improvement | — | none | assess | missing |
-| 4.17 | Memory tools (8) | `memory_list`, `memory_search`, `memory_read`, `memory_create_page`, `memory_replace_page`, `memory_create_directory` … | `memory.ts`, FTS5 + 5-factor scoring | **ours is stronger** on search | different (better) |
-| 4.18 | Composio toolkits (~250) | `contracts.ts:426-975` | none | — | **commercial** |
-| 4.19 | Agent credentials | `agent-credential-store.ts` | ours `_keyStorage` | compare | partial |
-| 4.20 | AI analytics | `ai-analytics.ts` | local analytics | keep local | complete |
+| 4.1 | Multi-Agent Support | agent-core | agent routing in `ai.ts`/ToolRunner | — | — | — | — | **PARTIAL — installed pkg: an agent turn with `tools` set routed through the ToolRunner and completed with no error. Multi-agent fan-out not observed** | **PARTIAL** |
+| 4.2 | Agent Roles (4+) | agent-core | engine roles (companion/worker) in the router | — | — | — | — | **UNVERIFIED — engines selectable and both routes exist; distinct role behaviour not exercised** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 4.3 | Tool Execution | `tool-registry.ts` | ToolRunner (`electron/agent/toolRunner.ts`) | **BLOCKER: `listToolCalls` returns `{tool_calls: []}` after a real agent turn. The runner is wired and error-free, but no local model emitted a tool call through this path, so a tool was never observed executing** | no change made | — | — | **installed pkg: 52 tools registered (7 categories; safety silent 33 / notify 5 / confirm 14); agent turn completed with no error; **zero tool calls recorded** | **IMPLEMENTED / NOT LIVE VERIFIED (blocked)** |
+| 4.4 | Shell / Terminal | `processes.ts` | `run_shell` tool + `computerRunShell` | — | — | Card 7 covers the command classifier boundary | — | **CLOSED — installed pkg: `run_shell` registered and confirm-tier; the classifier refused a fork bomb, a Windows forced system delete and a wrong-typed payload** | **CLOSED** |
+| 4.5 | File System Tools | 10 tools (`tool-registry.ts:151-289`) | `electron/agent/tools/files.ts` | — | — | 23 tests (capability + containment) | — | **installed pkg: all 10 registered — file_list, file_search, file_inspect, file_read, file_load, file_write, file_replace, file_move, file_copy, file_publish** | **CLOSED** |
+| 4.6 | Git Integration | — | `repo_status`, `repo_read`, `repo_edit` | — | — | — | — | **PARTIAL — installed pkg: all 3 repo tools still registered alongside the new file tools; `repoStatus` returned false from a non-repo directory, which is correct. No git repository was available on this machine to exercise a real diff** | **PARTIAL** |
+| 4.7 | GitHub Research Tools | — | none | no implementation | — | — | — | not verified | **MISSING** |
+| 4.8 | Python Tools | jailed python execution | `electron/ipc/pythonRunner.ts` | chat entry point still routes `python run:` to the coder engine first | jail: pre-staging refusal of 14 escape classes, scrubbed env, private cwd, POSIX rlimits, timeout, hard output cap, async | **12 tests** covering both halves | — | **PARTIAL — jail proven by tests; the jail itself is sound but the chat entry point remains unreachable** | **HARDENED / SUPERSET — PARTIAL** |
+| 4.9 | Network Tools | `files.ts` fetch | `web_fetch_page` / `webSearch` | — | — | — | — | **UNVERIFIED — registered and reachable; not exercised on this machine** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 4.10 | Sandbox | sandbox config | safety tiers + confirm gate | — | — | — | — | **PARTIAL — installed pkg: 14 confirm-tier tools identified (calendar_create_event, messages_send, email_send, web_fetch_page, run_shell, generate_video, qb_create_invoice, repo_edit, …) and 33 silent-tier. The gate's *denial* path was not exercised** | **PARTIAL** |
+| 4.11 | Process / System Tools | `processes.ts` | `computerListProcesses`, `computerSystemInfo`, `computerSystemStats` | — | — | Card 7.9 | — | **CLOSED — installed pkg: 40 processes listed (Card 7 fix), system info win32, CPU stats returned** | **CLOSED** |
+| 4.12 | Plan Mode | — | no plan-mode tool registered | — | — | — | — | **installed pkg: `listTools` contains no plan/goal tool and the API surface exposes nothing matching /plan/** | **MISSING** |
+| 4.13 | Goal Planning | goal schema | Goals surface exists (`src/components/goals/GoalsPanel.tsx`) but **no agent tool exposes it** | — | — | — | — | **PARTIAL — the user-facing goals surface works (CRUD verified live), but there is no agent-callable goal tool, so the agent cannot create or read goals** | **PARTIAL** |
+| 4.14 | Workflows | workflow schema | Routines | — | — | — | — | **UNVERIFIED — templates start correctly (Card 5.9); workflow composition not exercised** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 4.15 | Triggers / Events | trigger types | Routines scheduling (cron) | — | — | — | — | **PARTIAL — cron-backed routines verified to create and report a schedule; non-cron triggers not implemented** | **PARTIAL** |
+| 4.16 | Self-Improvement | — | none | no implementation | — | — | — | not verified | **MISSING** |
+| 4.17 | Memory tools (8) | 8 memory tools | `memory_*` agent tools (9 registered) | — | — | — | — | **PARTIAL — 9 memory tools registered and confirmed available to the agent; individual tool execution blocked by the same tool-call blocker as 4.3** | **PARTIAL** |
+| 4.18 | Composio toolkits (~250) | Composio catalogue | — | — | — | — | hosted third-party SaaS | **commercial** | **COMMERCIAL BOUNDARY** |
+| 4.19 | Agent credentials | `agent-credential-store.ts` | `_keyStorage` (OS keystore) | — | — | — | — | **PARTIAL — provider keys are encrypted at rest via safeStorage (Card 11.2); the agent credential store's own surface was not exercised** | **PARTIAL** |
+| 4.20 | AI analytics | `ai-analytics.ts` | local analytics (never transmitted) | — | — | — | — | **UNVERIFIED** | **IMPLEMENTED / NOT LIVE VERIFIED** |
 
 ---
 
