@@ -51,13 +51,13 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 | 3 Creators & Media | 14 | 12 | 0 | 1 | 0 | 0 | 0 | 1 | 0 |
 | 4 Agents & Tools | 20 | 3 | 1 | 7 | 3 | 5 | 0 | 0 | 1 |
 | 5 Automation | 9 | 2 | 0 | 3 | 0 | 4 | 0 | 0 | 0 |
-| 6 Voice & Input | 13 | 2 | 0 | 4 | 5 | 1 | 0 | 0 | 1 |
+| 6 Voice & Input | 13 | 6 | 0 | 5 | 0 | 1 | 0 | 0 | 1 |
 | 7 Computer Control | 10 | 6 | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 | 8 Companion | 9 | 1 | 0 | 3 | 0 | 5 | 0 | 0 | 0 |
 | 9 Files & Memory | 10 | 1 | 0 | 1 | 2 | 6 | 0 | 0 | 0 |
 | 10 Integrations | 11 | 2 | 0 | 3 | 1 | 4 | 0 | 0 | 1 |
 | 11 Settings & System | 15 | 5 | 0 | 2 | 3 | 4 | 0 | 0 | 1 |
-| **TOTAL** | **130** | 45 | 3 | 29 | 15 | 32 | 1 | 1 | 4 |
+| **TOTAL** | **130** | 49 | 3 | 30 | 10 | 32 | 1 | 1 | 4 |
 
 > Generated from the rows by `scripts/parity-summary.mjs`. Do not edit these numbers by hand —
 > edit the row status and re-run `node scripts/parity-summary.mjs --write`.
@@ -191,19 +191,19 @@ plus the syncBridge tool router. **Retain our extra tools.**
 
 | # | Row | PAID EVIDENCE | OUR CURRENT | GAP | STATUS |
 |---|---|---|---|---|---|
-| 6.1 | Speech-to-Text (STT) | `voice/whisper.ts:26,98-104` serialises on a promise chain | `electron/voice/stt.ts` | was **worse than paid**: a busy flag that THREW "already running", silently discarding whatever the user said — worst in hands-free use | serialised chain, nothing dropped; queue depth exposed | — | — | **installed pkg: two concurrent transcriptions both resolve, no "already running"** | **CLOSED** |
-| 6.2 | Text-to-Speech (TTS) | `ttsBackend: system\|openai\|elevenlabs\|kokoro` | ours system + ElevenLabs + browser | no Kokoro local neural TTS | partial |
-| 6.3 | Voice Commands | voice router | ours intents | keep + extend | partial |
-| 6.4 | Wake Word | paid claims wake word | none | assess; must not reproduce broken clap | missing |
-| 6.5 | Voice Panel (All OS) | renderer voice panel | ours Voice section | compare | partial |
-| 6.6 | Voice Transcription | `voiceSilenceMs` 400–5000 (default 900), `micSensitivity` 0–1, `micMuted` | `src/henry/voiceEndpointing.ts` | **was push-to-talk only — you had to release the button yourself, so hands-free was impossible** | AnalyserNode watches real RMS; ends on speech-then-silence; window RESTARTS if speech resumes; speech must be detected first (no empty turns); hard max utterance so a stuck mic cannot record forever; clamped to paid's ranges, persisted, switchable off | **13 tests**: silent tap never submits, resume restarts the window, continuous noise still ends, fires once, stop() detaches, no-WebAudio fallback | — | **installed pkg: "Stop recording when you stop talking" + silence slider + sensitivity slider + guidance all render** | **CLOSED** |
-| 6.7 | Audio Recording | recorder | ours | keep | complete |
-| 6.8 | Live Caption (Typewriter) | `captionMode` | none | Card 3.5 | missing |
-| 6.9 | Voice Integrations | ElevenLabs + OpenAI + Kokoro | ElevenLabs | OpenAI/Kokoro | partial |
-| 6.10 | Voice diagnostics | `voice-diagnostics.ts` records recordingId/recordingMs/chunkCount/stopReason + redacts secrets | bare `Error.message` | **fully portable** | missing |
-| 6.11 | spokenAssistantName | 3-line: strip H.E.N.R.Y → HENRY so TTS doesn't spell 5 letters | none | trivial portable | missing |
-| 6.12 | autoplayPolicy override | `no-user-gesture-required` (`main/index.ts:193-196`) | ours lacks | replies start long after the gesture | missing |
-| 6.13 | Hosted voice router | `voice:route` → `{backend}/voice/turn` | — | **commercial** — a local router is buildable, backend is not | commercial |
+| 6.1 | Speech-to-Text (STT) | renderer `rec` | web-speech `SpeechRecognition`; local Whisper optional | — | — | — | — | **CLOSED — installed pkg: transcription verified end to end earlier. `voiceSttStatus` now reports `{binaryPresent:false, modelPresent:false, ready:false}` at `voice-models/ggml-base.en.bin`, i.e. the local Whisper path is absent and the browser path carries it** | **CLOSED (browser path)** |
+| 6.2 | Text-to-Speech (TTS) | `ttsService.ts` | web-speech engine | **no ElevenLabs key on this machine, so that engine is configured but unreachable** | Card 7.8 covers the `/IM say` boundary | — | — | **installed pkg: `voiceTtsStatus` → `{engine:local, active:web-speech, availableEngines:[web-speech], sayVoice:Samantha, sayRate:175}`. Speech works; no Kokoro local neural TTS** | **PARTIAL** |
+| 6.3 | Voice Commands | hands-free + endpointing | hands-free toggle, endpointing slider | — | — | — | — | **PARTIAL — installed pkg: the Settings UI exposes hands-free ending-on-speech, an Ends-after-Nms-of-quiet slider and a microphone sensitivity slider, and the hands-free capture path was exercised earlier. Local Whisper is absent (6.1), so recognition runs on the browser engine** | **PARTIAL** |
+| 6.4 | Wake Word | `src/henry/wakeWord.ts` | `wakeWordManager` | **engine is the Capacitor mobile plugin `@capacitor-community/speech-recognition`, which is not viable on desktop Electron — so this is implemented but not operable on Windows/macOS desktop** | — | — | — | **source: 3 wake patterns over continuous recognition, 4s cooldown, wired into HenryHomePanel; nothing in `electron/`** | **PARTIAL — mobile-only engine** |
+| 6.5 | Voice Panel (All OS) | renderer settings | Voice sections in SettingsView | — | — | — | — | **CLOSED — installed pkg: voice settings render, including engine option, hands-free ending, silence slider and microphone sensitivity** | **CLOSED** |
+| 6.6 | Voice Transcription | `voiceTranscribe` | web-speech | — | — | — | — | **CLOSED — real transcription verified earlier through the installed package** | **CLOSED** |
+| 6.7 | Audio Recording | hands-free capture | `voiceMicAccess` | — | — | — | — | **CLOSED — installed pkg: `voiceMicAccess` → `{status:granted, granted:true}` and the hands-free capture path was exercised earlier. This row previously read 'complete', which normalised to unverified; it now has direct evidence** | **CLOSED** |
+| 6.8 | Live Caption (Typewriter) | `ChatInput.tsx` | `interimResults = true` → `interimTranscript` | — | — | — | — | **installed pkg: implementation confirmed in source (`interimTranscript` state, `rec.interimResults = true`); not exercised with a live microphone in this pass** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 6.9 | Voice Integrations | ElevenLabs | `voiceTtsStatus` engine choice | **no ElevenLabs credential, so that engine cannot be proven** | Card 7.8 covers the `/IM say` boundary | — | — | **installed pkg: the ElevenLabs engine option renders and `sayVoice`/`sayRate` are honoured (Samantha @175). The paid engine remains unproven** | **PARTIAL** |
+| 6.10 | Voice diagnostics | `runDiagnostic` | `voiceDiagnostics` | — | Card 7.6 skip-logic reuse | — | — | **CLOSED — installed pkg: a real diagnostic ran and returned checks, including `Homebrew → {category:not-applicable, status:ok, detail:Not applicable on this platform}`, confirming the platform-skip logic. This row previously read 'missing' despite the work being done — stale** | **CLOSED** |
+| 6.11 | spokenAssistantName | `electron/voice/greeting.ts` | **all 12 greeting variants hardcode the literal 'Henry'** | there is no name placeholder beyond `{address}`, and no setting for it | — | **a regression test exists** | — | **installed pkg: **DECISIVE NEGATIVE** — setting `brand_name` to 'Zorblax', clearing the greeting cache and re-reading still returned 'Hey, JARVIS — Henry is up and listening.' Owner `{address}` substitution works (owner_name=JARVIS); the assistant's own spoken name is **not** personalisable. **An earlier claim that this row was 'built and exercised' was overstated and is corrected here** | **PARTIAL — owner name works, assistant name hardcoded** |
+| 6.12 | autoplayPolicy override | `electron/main.ts:108` | `autoplayPolicy: 'no-user-gesture-required'` | — | — | — | — | **CLOSED — installed pkg: the override is present on the main window with the regression comment explaining that Chromium blocks playback once the user gesture expires; an un-gestured `audio.play()` was issued successfully** | **CLOSED** |
+| 6.13 | Hosted voice router | cloud router | — | — | — | — | hosted third-party SaaS | **COMMERCIAL BOUNDARY** |
 
 ---
 
