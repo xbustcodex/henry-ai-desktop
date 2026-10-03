@@ -41,6 +41,28 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 
 ## PROGRESS
 
+
+<!-- SUMMARY:BEGIN -->
+
+| Card | Rows | Closed | Hardened | Partial | Missing | Unverified | Unreachable | Excluded | Commercial |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 UI & Core | 10 | 6 | 0 | 0 | 1 | 3 | 0 | 0 | 0 |
+| 2 Chat & Models | 9 | 4 | 0 | 0 | 0 | 5 | 0 | 0 | 0 |
+| 3 Creators & Media | 14 | 12 | 0 | 1 | 0 | 0 | 0 | 1 | 0 |
+| 4 Agents & Tools | 20 | 1 | 1 | 4 | 4 | 9 | 0 | 0 | 1 |
+| 5 Automation | 9 | 2 | 0 | 3 | 0 | 4 | 0 | 0 | 0 |
+| 6 Voice & Input | 13 | 2 | 0 | 4 | 5 | 1 | 0 | 0 | 1 |
+| 7 Computer Control | 10 | 6 | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
+| 8 Companion | 9 | 2 | 0 | 2 | 0 | 5 | 0 | 0 | 0 |
+| 9 Files & Memory | 10 | 1 | 0 | 1 | 2 | 6 | 0 | 0 | 0 |
+| 10 Integrations | 11 | 2 | 0 | 3 | 1 | 4 | 0 | 0 | 1 |
+| 11 Settings & System | 15 | 5 | 0 | 2 | 3 | 4 | 0 | 0 | 1 |
+| **TOTAL** | **130** | 43 | 3 | 22 | 16 | 41 | 0 | 1 | 4 |
+
+> Generated from the rows by `scripts/parity-summary.mjs`. Do not edit these numbers by hand —
+> edit the row status and re-run `node scripts/parity-summary.mjs --write`.
+
+<!-- SUMMARY:END -->
 | Card | Rows | Closed | In progress | Missing | Commercial |
 |---|---|---|---|---|---|
 | 2 Chat & Models | 9 | 5 | 0 | 0 | 0 |
@@ -192,16 +214,16 @@ guarding, `_denyDangerous`).
 
 | # | Row | PAID EVIDENCE | OUR CURRENT | GAP | STATUS |
 |---|---|---|---|---|---|
-| 7.1 | Screen Analysis / capture | ours | ours | — | complete |
-| 7.2 | UI Interaction | ours | ours | — | complete |
-| 7.3 | Mouse / Keyboard | PowerShell SendKeys | ours | keep | complete |
-| 7.4 | Application Control | launch/quit | ours | keep | complete |
-| 7.5 | Window Management | — | ours | keep | complete |
-| 7.6 | File Operations | paid tools | ours shell-based | keep ours | partial |
-| 7.7 | Clipboard Access | — | ours, guarded | keep | complete |
-| 7.8 | Terminal Access | ours | ours | keep | complete |
-| 7.9 | System Monitoring | paid | ours health | keep | complete |
-| 7.10 | Automation Actions | — | ours | keep | complete |
+| 7.1 | Screen Analysis / capture | renderer screen-capture surface | `computerScreenshot`, `computerCaptureSelectedText`, `computerCheckCapabilities` | — | Windows capture via PowerShell System.Drawing; region/window capture not supported on Windows (reported honestly by `capabilities`) | — | — | **CLOSED — installed pkg: `computerScreenshot` returned `ok:true` with image bytes; capabilities report clipboard/selectedText/screenCapture/inputAutomation all `ready` on win32** | **CLOSED** |
+| 7.2 | UI Interaction | renderer UI-interaction surface | `computerClick`, `computerTypeText`, `computerPressKey` | — | coordinate input validated (the AppleScript injection found earlier is closed); text/key handlers now reject wrong types with a message instead of throwing a raw TypeError across IPC | added 5 tests | — | **CLOSED — installed pkg: `computerClick({x:'0; calc',y:0})` rejected by validation; `typeText`/`pressKey` with a wrong shape return `Text to type must be a non-empty string` / `A key name string is required.`** | **CLOSED** |
+| 7.3 | Mouse / Keyboard | PowerShell SendKeys | ours | — | input automation reports `ready` on Windows via PowerShell SendKeys / WScript.Shell | — | — | **PARTIAL — installed pkg: capability probe reports input automation `ready`; the handlers were exercised for validation and error shape, not for actually moving the pointer/typing into another window** | **PARTIAL** |
+| 7.4 | Application Control | launch/quit | `computerListApps`, `computerOpenApp`, `computerCloseApp` | — | — | — | — | **CLOSED — installed pkg: `computerListApps` returned 189 apps (was 6 before the fix); `computerOpenApp('ZZZNoSuchApp9999')` passes through to the launcher and returns a clean "The system cannot find the file" instead of being rejected by my own schema** | **CLOSED** |
+| 7.5 | Window Management | — | `computerDesktopMode` | — | — | — | — | **CLOSED — installed pkg: `computerDesktopMode({enable:false,fullscreen:false})` returned `{ok:true}`** | **CLOSED** |
+| 7.6 | File Operations | filesystem tools | `computerNewFolder` + `file_*` tools | **no path validation at all** — `computerNewFolder` resolved whatever it was given | `computerNewFolder` now refuses anything outside the home directory; fs handlers return errors instead of throwing | — | — | **CLOSED — installed pkg: `computerNewFolder('../../../escape-test')` refused with "Refused: ../../../escape-test is outside your home directory." The earlier run of this same test CREATED `C:\escape-test` outside home; that artifact was removed and the hole closed** | **HARDENED / SUPERSET** |
+| 7.7 | Clipboard Access | — | `computerClipboardWrite`, `computerClipboardRead`, `computerCaptureSelectedText` | — | — | — | — | **CLOSED — installed pkg: wrote `henry-clip-probe-42`, read it back exactly; `computerCaptureSelectedText` captured the same value** | **CLOSED** |
+| 7.8 | Terminal Access | — | `computerRunShell` + `_commandSafety` classifier | **the classifier is Unix-shaped** — `del /f`, `format`, `Remove-Item -Recurse`, `cipher /w`, `diskpart`, `netsh advfirewall set`, `Set-MpPreference -Disable` all passed through and were only stopped by filesystem ACLs | Windows equivalents added to the classifier; shell payload validated | **+17 tests** (11 blocked cases, 6 ordinary Windows commands still allowed) | — | **CLOSED — installed pkg: `del /f /q C:\Windows\System32\...\hosts` now returns "Command blocked for safety: forced delete of a Windows system path." (it previously ran and only failed with "Access is denied"); fork bomb still blocked; wrong-type payload rejected by validation** | **HARDENED / SUPERSET** |
+| 7.9 | System Monitoring | — | `computerSystemInfo`, `computerSystemStats`, `computerListProcesses` | **`computerListProcesses` ran `tasklist /FO CSV \| head -40` — `head` is a Unix command, so the process list was always empty on Windows** | Windows row selection instead of `head`; CSV image-name column kept | — | — | **CLOSED — installed pkg: process list went from 0 to 40 entries; `computerSystemInfo` reports win32; `computerSystemStats` returns CPU data** | **CLOSED** |
+| 7.10 | Automation Actions | — | `computerScheduleTask`, `computerListScheduled`, `computerNotify` | — | — | — | — | **PARTIAL — installed pkg: `computerListScheduled` responds (0 scheduled); `computerNotify` returns `{ok:false}` on this machine, so native toasts are not confirmed working** | **PARTIAL** |
 
 ---
 
@@ -211,15 +233,15 @@ guarding, `_denyDangerous`).
 
 | # | Row | PAID EVIDENCE | OUR CURRENT | GAP | STATUS |
 |---|---|---|---|---|---|
-| 8.1 | AI Companion | ours | ours | keep | complete |
-| 8.2 | Memory Graph | ours | ours | keep | complete |
-| 8.3 | Personality | ours | ours | keep | complete |
-| 8.4 | Emotional Context | ours | ours | keep | complete |
-| 8.5 | Companion Voice | ours TTS | ours | keep | complete |
-| 8.6 | Avatar / Visuals | none | ours orb-less | assess | partial |
-| 8.7 | Daily / Weekly Summary | paid | ours reminders | compare | partial |
-| 8.8 | Cross-Device Search | paid | ours sync | keep | partial |
-| 8.9 | Panel Help Matcher | paid | ours | keep | complete |
+| 8.1 | AI Companion | renderer companion surface | whole Companion subsystem | — | — | — | — | **CLOSED — installed pkg: sync server running, `syncGetState` returns `running:true`, pending-action queue accepts actions** | **CLOSED** |
+| 8.2 | Memory Graph | renderer memory-graph surface | `MemoryGraphView` | — | — | — | — | **UNVERIFIED — implemented and reached in the UI; not re-walked on this package** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 8.3 | Personality | renderer personality surface | profile/persona settings | — | — | — | — | **UNVERIFIED** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 8.4 | Emotional Context | renderer emotional surface | emotional-context memory scoring | — | — | — | — | **UNVERIFIED — note this build also shipped the emotional_significance_score column used here** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 8.5 | Companion Voice | renderer companion-voice surface | ours TTS | — | — | — | — | **UNVERIFIED** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 8.6 | Avatar / Visuals | renderer avatar surface | Reactor + Minimal orb (Card 3) | — | — | — | — | **CLOSED — installed pkg: both orb skins render in the JARVIS stage (Card 3)** | **CLOSED** |
+| 8.7 | Daily / Weekly Summary | renderer daily/weekly surface | reminders + Goals weekly review template | — | — | — | — | **PARTIAL — a weekly-review routine template exists and starts correctly, but scheduled generation itself was not observed** | **PARTIAL** |
+| 8.8 | Cross-Device Search | renderer cross-device surface | sync + FTS5 memory search | — | — | — | — | **PARTIAL — local search verified; cross-device search not exercised** | **PARTIAL** |
+| 8.9 | Panel Help Matcher | renderer help-matcher surface | command palette / global search | — | — | — | — | **UNVERIFIED** | **IMPLEMENTED / NOT LIVE VERIFIED** |
 
 ---
 

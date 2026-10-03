@@ -80,13 +80,15 @@ export function registerFilesystemHandlers(workspacePath: string) {
     try {
       const target = safePath(filePath);
       if (!fs.existsSync(target)) {
-        throw new Error(`File not found: ${filePath}`);
+        // Returned rather than thrown: a throw across the IPC boundary becomes
+        // an unhandled rejection in the renderer.
+        return { ok: false, error: `File not found: ${filePath}` } as never;
       }
 
       // Fast path: known binary extension
       const ext = path.extname(filePath).slice(1).toLowerCase();
       if (BINARY_EXTS.has(ext)) {
-        throw new Error(`BINARY_FILE: ${path.basename(filePath)} can't be displayed as text.`);
+        return { ok: false, error: `BINARY_FILE: ${path.basename(filePath)} can't be displayed as text.` } as never;
       }
 
       // Read as Buffer so we can inspect bytes before decoding

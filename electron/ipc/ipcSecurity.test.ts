@@ -140,10 +140,12 @@ describe('google schemas keep the empty-credential default', () => {
 });
 
 describe('fs channels use their real names', () => {
-  it('validates fs:readFile and not the invented filesystem:read', () => {
-    expect(() => validateRequest('fs:readFile', { filePath: '/tmp/x' })).not.toThrow();
-    // The invented name is simply unguarded, which is exactly why the first
-    // draft was wrong.
+  it('validates fs:readFile under its REAL name and bare-string shape', () => {
+    // preload bridges these as bare strings: readFile: (filePath) => invoke('fs:readFile', filePath)
+    expect(() => validateRequest('fs:readFile', '/tmp/x')).not.toThrow();
+    expect(() => validateRequest('fs:readFile', { filePath: '/tmp/x' })).toThrow(ValidationError);
+    // The invented channel name is simply unguarded, which is why the first
+    // draft of the schema map was wrong.
     expect(() => validateRequest('filesystem:read', { path: '/tmp/x' })).not.toThrow();
   });
 

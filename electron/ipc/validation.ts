@@ -172,12 +172,9 @@ export const channelSchemas: Record<string, z.ZodTypeAny> = {
     })
     .strict(),
 
-  'computer:move': z.object({ x: finiteNumber, y: finiteNumber }).passthrough(),
-  'computer:drag': z.object({ x: finiteNumber, y: finiteNumber }).passthrough(),
-  'computer:scroll': z.object({ amount: z.number().int().max(20_000) }).passthrough(),
-  'computer:type': z.object({ text: z.string().max(32_000) }).passthrough(),
-  'computer:key': z.object({ key: nonEmpty(64) }).passthrough(),
-  'computer:openApp': z.object({ appName: nonEmpty(512) }).passthrough(),
+  // preload and the handler both take a BARE STRING here. An earlier version of
+  // this schema demanded `{ appName }` and rejected every real call.
+  'computer:openApp': nonEmpty(512),
   'computer:screenshot': z
     .object({
       region: z
@@ -194,9 +191,12 @@ export const channelSchemas: Record<string, z.ZodTypeAny> = {
   'computer:desktopMode': z.object({ enable: z.boolean().optional(), fullscreen: z.boolean().optional() }).passthrough(),
 
   // ── Filesystem (real channel names) ────────────────────────────────────
-  'fs:readDirectory': z.object({ dirPath: z.string().max(4096).optional() }).passthrough(),
-  'fs:readFile': z.object({ filePath: z.string().max(4096).optional() }).passthrough(),
-  'fs:pathExists': z.object({ filePath: nonEmpty(4096) }).passthrough(),
+  // These three are bridged as BARE STRINGS (preload: readDirectory: (dirPath?) =>
+  // invoke('fs:readDirectory', dirPath)). The object schemas added here would have
+  // rejected all of them.
+  'fs:readDirectory': z.string().max(4096).optional(),
+  'fs:readFile': z.string().max(4096).optional(),
+  'fs:pathExists': nonEmpty(4096),
   'fs:writeFile': z
     .object({ path: nonEmpty(4096), content: z.string().max(64 * 1024 * 1024) })
     .passthrough(),

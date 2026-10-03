@@ -69,6 +69,43 @@ export function classifyCommand(rawCommand: string): CommandVerdict {
     return { blocked: true, reason: 'recursive force-delete of a system or home root' };
   }
 
+  // ── Windows equivalents ────────────────────────────────────────────────
+  // The classifier above is Unix-shaped. On Windows none of it matched, so a
+  // forced delete of a system file passed straight through and was only
+  // stopped by the filesystem ACL — which is not a boundary, it is luck.
+  // `del /f /q <system path>` ran and returned "Access is denied" during the
+  // Card 7 walk.
+  if (/\bdel\b[^\n]*\/(?:f|force)\b/.test(compact) && /[a-z]:\\|\bwindows\b|\bprogram files\b/.test(compact)) {
+    return { blocked: true, reason: 'forced delete of a Windows system path' };
+  }
+  if (/\bformat\b\s+[a-z]:/.test(compact)) {
+    return { blocked: true, reason: 'format of a Windows volume' };
+  }
+  // `rd`/`rmdir` take SLASH flags on Windows (/s /q), PowerShell takes DASH ones.
+  const winRecursiveDelete =
+    /\b(rd|rmdir)\b[^\n]*\/s\b/.test(compact) ||
+    /\b(remove-item)\b[^\n]*\s-[a-z]*r/i.test(compact);
+  if (winRecursiveDelete && /\bwindows\b|\bprogram files\b|[a-z]:\\/.test(compact)) {
+    return { blocked: true, reason: 'recursive delete of a Windows system path' };
+  }
+  if (/\bcipher\b[^\n]*\/(?:w|r)\b/.test(compact)) {
+    return { blocked: true, reason: 'wiping free space with cipher' };
+  }
+  if (/\bvssadmin\b[^\n]*\bdelete\b/.test(compact)) {
+    return { blocked: true, reason: 'deleting shadow copies' };
+  }
+  if (/\bbcdedit\b/.test(compact) || /\bdiskpart\b/.test(compact)) {
+    return { blocked: true, reason: 'boot or disk configuration change' };
+  }
+  // Disabling the firewall or Defender is not a routine thing to do on
+  // Henry's behalf.
+  if (/\bnetsh\b[^\n]*\badvfirewall\b[^\n]*\b(set|delete)\b/.test(compact)) {
+    return { blocked: true, reason: 'firewall configuration change' };
+  }
+  if (/\bset-mppreference\b[^\n]*-\s*disable/.test(compact)) {
+    return { blocked: true, reason: 'disabling Windows Defender' };
+  }
+
   return { blocked: false };
 }
 

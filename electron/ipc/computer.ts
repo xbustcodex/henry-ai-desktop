@@ -283,12 +283,20 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
       if (platform === 'darwin') {
         cmd = `ps aux | awk 'NR>1 {print $11}' | sort -u | grep -v '\\[' | head -40`;
       } else if (platform === 'win32') {
-        cmd = `tasklist /FO CSV | head -40`;
+        // `head` is a Unix command and is not present on Windows, so this
+        // silently produced an empty process list there. Select the rows instead.
+        cmd = `tasklist /FO CSV /NH`;
       } else {
         cmd = `ps aux | awk 'NR>1 {print $11}' | sort -u | head -40`;
       }
       const result = await runCmd(cmd, 5000);
-      return { processes: result.stdout.trim().split('\n').filter(Boolean) };    } catch (e: unknown) {
+      const rows = result.stdout.trim().split('\n').filter(Boolean).slice(0, 40);
+      // Windows CSV rows lead with the image name; keep that, drop the rest.
+      const processes =
+        platform === 'win32'
+          ? rows.map((r) => (r.split(',')[0] || r).replace(/^"/, '').trim()).filter(Boolean)
+          : rows;
+      return { processes };    } catch (e: unknown) {
       console.error('[computer:listProcesses]', e instanceof Error ? e.message : String(e));
       throw e;
     }
@@ -952,7 +960,24 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
     try {
       const home = os.homedir();
       const username = home.split('/').pop() || '';
-      const target = params.path
+      if (typeof params.path !== 'string' || !params.path.trim()) {
+        return { success: false, error: 'A folder path is required.' };
+      }
+      // This resolved whatever it was given and created it. `../../../escape-test`
+      // made a folder outside the user's home during the Card 7 walk.
+      const requested = params.path.trim();
+      const expanded = requested
+        .replace(/^~[\\/]?/, home + path.sep)
+        .replace(/^[A-Za-z]:[\\/]/, (m) => m);
+      const target = path.resolve(expanded);
+      const root = path.resolve(home);
+      if (target !== root && !target.startsWith(root + path.sep)) {
+        return {
+          success: false,
+          error: `Refused: ${requested} is outside your home directory.`,
+        };
+      }
+      const _unusedLegacy = params.path
         .replace(/^~/, home)
         .replace(/\/Users\/yourusername\//g, home + '/')
         .replace(/\/Users\/your_username\//g, home + '/')
@@ -968,7 +993,16 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
   });
 
   // ── Type text (cross-platform) ──────────────────────────────────────────
-  ipcMain.handle('computer:typeText', async (_event, text: string) => {
+  ipcMain.handle('computer:typeText', guardedEvent('computer:typeText', async (_event, text: string) => {
+    // Validated: this handler calls text.replace() unguarded, so an object
+    // arriving here threw a raw TypeError that surfaced in the renderer as an
+    // unhandled rejection.
+    if (typeof text !== 'string' || text.length === 0) {
+      return { success: false, error: 'Text to type must be a non-empty string.' };
+    }
+    if (text.length > 32_000) {
+      return { success: false, error: 'Text to type is too long.' };
+    }
     try {
       // argv form only — the previous shell string let a backslash or a $(...)
       // inside the typed text escape the quotes and execute as a command.
@@ -995,7 +1029,7 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
       console.error('[computer:typeText]', e instanceof Error ? e.message : String(e));
       throw e;
     }
-  });
+  }));
 
   // ── Activate application (cross-platform) ──────────────────────────────────
   ipcMain.handle('computer:activateApplication', async (_event, appName: string) => {
@@ -1061,7 +1095,14 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
   });
 
   // ── Press a key (cross-platform) ───────────────────────────────────────────
-  ipcMain.handle('computer:pressKey', async (_event, key: string) => {
+  ipcMain.handle('computer:pressKey', guardedEvent('computer:pressKey', async (_event, key: string) => {
+    // Same unguarded-call problem as typeText.
+    if (typeof key !== 'string' || key.length === 0) {
+      return { success: false, error: 'A key name string is required.' };
+    }
+    if (key.length > 64) {
+      return { success: false, error: 'Key name is too long.' };
+    }
     try {
       // argv form only — the previous `xdotool key ${key}` was unquoted, so the
       // key parameter was shell-interpreted.
@@ -1114,7 +1155,7 @@ export function registerComputerHandlers(winGetter: WindowGetter) {
       console.error('[computer:pressKey]', e instanceof Error ? e.message : String(e));
       throw e;
     }
-  });
+  }));
 
   // ── Click at coordinates (requires Accessibility) ─────────────────────
   ipcMain.handle('computer:click', guardedEvent('computer:click', async (_event, params: { x: number; y: number; button?: string }) => {

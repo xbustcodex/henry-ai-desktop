@@ -69,3 +69,41 @@ describe('classifyCommand — allows ordinary commands', () => {
     expect(isDangerousCommand('   ')).toBe(false);
   });
 });
+
+describe('classifyCommand — Windows equivalents', () => {
+  // None of these were recognised before: the classifier was Unix-shaped, so a
+  // forced system delete ran and was only stopped by the filesystem ACL.
+  const blocked: Array<[string, string]> = [
+    ['cmd /c del /f /q C:\\Windows\\System32\\drivers\\etc\\hosts', 'forced delete of a Windows system file'],
+    ['del /force C:\\Windows\\notepad.exe', 'forced delete, windows path'],
+    ['format C: /q', 'format a volume'],
+    ['Remove-Item -Recurse -Force C:\\Windows\\Temp', 'recursive system delete'],
+    ['rd /s /q C:\\Program Files\\Thing', 'recursive program files delete'],
+    ['cipher /w:C', 'wipe free space'],
+    ['vssadmin delete shadows /all', 'delete shadow copies'],
+    ['diskpart', 'disk configuration'],
+    ['bcdedit /set testsigning on', 'boot configuration'],
+    ['netsh advfirewall set allprofiles state off', 'disable firewall'],
+    ['Set-MpPreference -DisableRealtimeMonitoring 1', 'disable Defender'],
+  ];
+
+  for (const [cmd, why] of blocked) {
+    it(`blocks ${why}: ${cmd}`, () => {
+      expect(classifyCommand(cmd).blocked, cmd).toBe(true);
+    });
+  }
+
+  it('still allows ordinary Windows commands', () => {
+    const allowed = [
+      'cmd /c echo hello',
+      'tasklist',
+      'del notes.txt',
+      'del /f temp.log',
+      'netsh advfirewall show allprofiles',
+      'mkdir build',
+    ];
+    for (const cmd of allowed) {
+      expect(classifyCommand(cmd).blocked, cmd).toBe(false);
+    }
+  });
+});

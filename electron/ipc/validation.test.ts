@@ -222,3 +222,41 @@ describe('failure shape', () => {
     expect(f.error).toContain('command');
   });
 });
+
+describe('schema shapes match the real preload bridges', () => {
+  // These were wrong when first written and silently rejected every real call.
+  // The bridge shape is what the renderer actually sends.
+  it('computer:openApp takes a bare string, not an object', () => {
+    expect(() => validateRequest('computer:openApp', 'Notepad')).not.toThrow();
+    const out = validateRequest('computer:openApp', 'Notepad') as string;
+    expect(out).toBe('Notepad');
+    // …and genuinely rejects the empty case
+    expect(() => validateRequest('computer:openApp', '')).toThrow(ValidationError);
+  });
+
+  it('fs:readDirectory takes a bare optional string', () => {
+    expect(() => validateRequest('fs:readDirectory', 'C:\\Users')).not.toThrow();
+    expect(() => validateRequest('fs:readDirectory', undefined)).not.toThrow();
+  });
+
+  it('fs:readFile takes a bare optional string', () => {
+    expect(() => validateRequest('fs:readFile', 'C:\\notes.txt')).not.toThrow();
+    expect(() => validateRequest('fs:readFile', undefined)).not.toThrow();
+  });
+
+  it('fs:pathExists takes a non-empty bare string', () => {
+    expect(() => validateRequest('fs:pathExists', 'C:\\a')).not.toThrow();
+    expect(() => validateRequest('fs:pathExists', '')).toThrow(ValidationError);
+  });
+
+  it('computer:desktopMode keeps the object the panel sends', () => {
+    expect(() =>
+      validateRequest('computer:desktopMode', { enable: true, fullscreen: false })
+    ).not.toThrow();
+  });
+
+  it('creator channels keep their wrapped object shape', () => {
+    expect(() => validateRequest('creators:openMedia', { fileName: 'a.png' })).not.toThrow();
+    expect(() => validateRequest('creators:launchStage', { mode: 'voice' })).not.toThrow();
+  });
+});
