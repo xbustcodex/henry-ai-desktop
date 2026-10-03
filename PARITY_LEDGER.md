@@ -46,18 +46,18 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 
 | Card | Rows | Closed | Hardened | Partial | Missing | Unverified | Unreachable | Excluded | Commercial |
 |---|---|---|---|---|---|---|---|---|---|
-| 1 UI & Core | 10 | 6 | 0 | 0 | 1 | 3 | 0 | 0 | 0 |
+| 1 UI & Core | 10 | 9 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
 | 2 Chat & Models | 9 | 5 | 0 | 3 | 0 | 0 | 1 | 0 | 0 |
 | 3 Creators & Media | 14 | 12 | 0 | 1 | 0 | 0 | 0 | 1 | 0 |
 | 4 Agents & Tools | 20 | 3 | 1 | 7 | 3 | 5 | 0 | 0 | 1 |
 | 5 Automation | 9 | 6 | 0 | 1 | 0 | 2 | 0 | 0 | 0 |
 | 6 Voice & Input | 13 | 6 | 0 | 5 | 0 | 1 | 0 | 0 | 1 |
 | 7 Computer Control | 10 | 6 | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
-| 8 Companion | 9 | 1 | 0 | 3 | 0 | 5 | 0 | 0 | 0 |
+| 8 Companion | 9 | 2 | 0 | 3 | 4 | 0 | 0 | 0 | 0 |
 | 9 Files & Memory | 10 | 2 | 0 | 0 | 2 | 6 | 0 | 0 | 0 |
-| 10 Integrations | 11 | 2 | 0 | 3 | 1 | 4 | 0 | 0 | 1 |
-| 11 Settings & System | 15 | 5 | 0 | 2 | 3 | 4 | 0 | 0 | 1 |
-| **TOTAL** | **130** | 54 | 3 | 27 | 10 | 30 | 1 | 1 | 4 |
+| 10 Integrations | 11 | 4 | 0 | 4 | 1 | 1 | 0 | 0 | 1 |
+| 11 Settings & System | 15 | 6 | 0 | 3 | 3 | 2 | 0 | 0 | 1 |
+| **TOTAL** | **130** | 61 | 3 | 29 | 13 | 18 | 1 | 1 | 4 |
 
 > Generated from the rows by `scripts/parity-summary.mjs`. Do not edit these numbers by hand —
 > edit the row status and re-run `node scripts/parity-summary.mjs --write`.
@@ -103,16 +103,16 @@ ignored. The description is honest that a key is optional; free Zen models stay 
 
 | # | Row | PAID EVIDENCE | OUR CURRENT | GAP | IMPLEMENTATION | TEST | LIVE | INSTALLED | STATUS |
 |---|---|---|---|---|---|---|---|---|---|
-| 1.1 | Main Chat Interface | renderer Chat mode | `ChatView.tsx` | — | — | — | — | — | **complete** |
-| 1.2 | Sidebar Navigation | `app-shell`, `rail`, `sidebar`, `data-collapsed` | `Sidebar.tsx`, 38 destinations | broader than paid's ~10 | keep ours | — | — | — | **different (better)** |
+| 1.1 | Main Chat Interface | chat view | ChatView | — | — | — | — | **CLOSED — installed pkg: the chat view renders and accepts input; a real turn was typed and sent through the UI during this pass** | **CLOSED** |
+| 1.2 | Sidebar Navigation | sidebar | nav rail | — | — | — | — | **CLOSED — installed pkg: the nav rail was driven live during this pass (Settings → Chat), and its entries render. The old 'different (better)' label was not a status** | **CLOSED** |
 | 1.3 | Theme / UI Customisation | `accentColor` zod field, `#5cdcff`; `customization-view` "Make it yours" | `src/henry/theme.ts`, `src/components/settings/CustomizationPanel.tsx` | — | accent presets + custom colour, density, identity (Reactor/Minimal live preview), reduced motion; theme applied to :root before first paint | typecheck + 324 suite | — | **installed pkg: accent #6366f1 -> #5cdcff live on :root, `data-skin`/`data-density` set, persisted to settings** | **CLOSED** |
-| 1.4 | Panel System (22 panels) | n/a | 22 verified live | — | — | — | 22/22 | — | **complete** |
+| 1.4 | Panel System (22 panels) | panel registry | panel switcher | — | — | — | — | **CLOSED — installed pkg: panels render and are navigable; the nav enumerated Home, Chat, Computer, Journal, Book, Reminders, Captures, Memory and HQ** | **CLOSED** |
 | 1.5 | JARVIS Orb Mode entry | `creators-view`, mode toggle Voice/Chat | Creators nav entry | — | see Card 3 | — | — | **installed pkg: Creators in nav, Voice/Chat stage buttons** | **CLOSED (Card 3)** |
 | 1.6 | HUD / Reactor Theme | `data-skin`, `skin: default` | Reactor skin | — | see Card 3 | — | — | **installed pkg: 14-element arc-reactor SVG** | **CLOSED (Card 3)** |
 | 1.7 | Minimal Orb Theme | `skin: minimalistic` | Minimal skin | — | see Card 3 | — | — | **installed pkg: 4-element clean-ring orb** | **CLOSED (Card 3)** |
 | 1.8 | Onboarding Flow | `completedOnboarding`, `seenGuide`, `tutorial:get-progress` | `OnboardingWizard.tsx` + `src/components/onboarding/ProductTour.tsx` | no in-app tour | 6-step dismissible tour with "Show me" navigation; progress persisted so it resumes and never re-nags | typecheck + 324 suite | — | **installed pkg: tour appears, advances 1/6 -> 2/6, Skip closes and persists `done:true`** | **CLOSED** |
 | 1.9 | Multi-window Support | — | second window (demo stage) | — | Card 3 delivered an always-on-top frameless stage window | — | — | **installed pkg: stage window opens alongside the main window** | **CLOSED (Card 3)** |
-| 1.10 | Global Search | n/a | global search present | — | — | — | — | — | **complete** |
+| 1.10 | Global Search | search | `searchFacts` / `sessionSearch` + 'Search and run any' palette | — | — | — | — | **installed pkg: the search surface is present and reachable — `searchFacts`, `sessionSearch` and a visible 'Search and run any' command palette. No query was run through it in this pass** | **IMPLEMENTED / NOT LIVE VERIFIED** |
 
 ---
 
@@ -167,7 +167,7 @@ plus the syncBridge tool router. **Retain our extra tools.**
 | 4.17 | Memory tools (8) | 8 memory tools | `memory_*` agent tools (9 registered) | — | — | — | — | **PARTIAL — 9 memory tools registered and confirmed available to the agent; individual tool execution blocked by the same tool-call blocker as 4.3** | **PARTIAL** |
 | 4.18 | Composio toolkits (~250) | Composio catalogue | — | — | — | — | hosted third-party SaaS | **commercial** | **COMMERCIAL BOUNDARY** |
 | 4.19 | Agent credentials | `agent-credential-store.ts` | `_keyStorage` (OS keystore) | — | — | — | — | **PARTIAL — provider keys are encrypted at rest via safeStorage (Card 11.2); the agent credential store's own surface was not exercised** | **PARTIAL** |
-| 4.20 | AI analytics | `ai-analytics.ts` | local analytics (never transmitted) | — | — | — | — | **UNVERIFIED** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 4.20 | AI analytics | `ai-analytics.ts` | **local-only analytics; CostDashboard consumer exists** | — | — | — | — | **installed pkg: `src/components/costs/CostDashboard.tsx` and ChatView both consume an analytics surface. There is no transmission path — analytics is local by design. Not exercised in this pass** | **IMPLEMENTED / NOT LIVE VERIFIED** |
 
 ---
 
@@ -234,14 +234,14 @@ guarding, `_denyDangerous`).
 | # | Row | PAID EVIDENCE | OUR CURRENT | GAP | STATUS |
 |---|---|---|---|---|---|
 | 8.1 | AI Companion | renderer companion surface | whole Companion subsystem | **LAN discovery picked the wrong interface** (first non-internal IPv4 = Hyper-V vEthernet 172.18.96.1 over real Wi-Fi 192.168.1.110); separately the state payload advertised a LAN URL while the listener was loopback-only | `electron/ipc/network.ts`: default-route-driven selection, virtual adapters demoted as additional evidence, link-local demoted; advertised host honest with `lanReachable` | **14 tests** reproducing the exact reported topology + Ethernet-only, virtual-only, Docker, VPN, non-private default route, IPv6, empty | Windows `route print -4` Active Routes | **installed pkg: localIp 192.168.1.110 (was 172.18.96.1); listener confirmed 0.0.0.0:4242 while LAN enabled; `192.168.1.110:4242` HTTP 200 from Windows** | **PARTIAL — LAN discovery CLOSED; pairing-secret guard defects found and fixed; sustained authenticated session still fails, see KNOWN BUG** | **PARTIAL / KNOWN BUG — DEFERRED** |
-| 8.2 | Memory Graph | renderer memory-graph surface | `MemoryGraphView` | — | — | — | — | **UNVERIFIED — implemented and reachable; not re-walked on this package** | **IMPLEMENTED / NOT LIVE VERIFIED** |
-| 8.3 | Personality | renderer personality surface | profile/persona settings | — | — | — | — | **UNVERIFIED** | **IMPLEMENTED / NOT LIVE VERIFIED** |
-| 8.4 | Emotional Context | renderer emotional surface | emotional-context scoring | — | — | — | — | **UNVERIFIED** | **IMPLEMENTED / NOT LIVE VERIFIED** |
-| 8.5 | Companion Voice | renderer companion-voice surface | ours TTS | — | — | — | — | **UNVERIFIED** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 8.2 | Memory Graph | — | **types + web mock only** | **no `companion*` IPC key exists in preload (zero matches), no route among the 86 sync-bridge routes, and no companion HTML content. `MemoryGraph` appears only in `src/types/index.ts`, `src/global.d.ts` and `src/webMock.ts` — i.e. a type declaration and a browser mock with no Electron implementation** | — | — | — | **source evidence: absence of implementation established, not merely unverified. The type + webMock combination is exactly how a feature looks present while being unreachable in the desktop build** | **MISSING** |
+| 8.3 | Personality | — | **no implementation** | **no `companionPersonality` anywhere; no companion IPC, no sync route, no companion HTML** | — | — | — | **source evidence: absence established** | **MISSING** |
+| 8.4 | Emotional Context | — | **no implementation** | **the only `mood` references in syncBridge are a `journal_entries.mood` column in an INSERT statement — a journal field, not emotional context** | — | — | — | **source evidence: absence established** | **MISSING** |
+| 8.5 | Companion Voice | — | **no implementation** | **no companion voice/TTS/audio API of any kind on the installed package, and `companionHtml.ts` contains no voice feature** | — | — | — | **source + runtime evidence: absence established** | **MISSING** |
 | 8.6 | Avatar / Visuals | renderer avatar surface | Reactor + Minimal orb (Card 3) | — | — | — | — | **CLOSED — installed pkg: both orb skins render in the JARVIS stage** | **CLOSED** |
 | 8.7 | Daily / Weekly Summary | renderer daily/weekly surface | reminders + Goals weekly-review template | — | — | — | — | **PARTIAL — a weekly-review routine template exists and starts correctly; scheduled generation not observed** | **PARTIAL** |
 | 8.8 | Cross-Device Search | renderer cross-device surface | sync + FTS5 memory search | — | — | — | — | **PARTIAL — local search verified; cross-device search not exercised** | **PARTIAL** |
-| 8.9 | Panel Help Matcher | renderer help-matcher surface | command palette / global search | — | — | — | — | **UNVERIFIED** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 8.9 | Panel Help Matcher | `localRouter.ts:161` | `panel_help` intent + `findPanelsByKeyword` | — | — | — | — | **CLOSED — installed pkg: verified live through the real chat UI. Typing 'what is settings' produced a locally-generated panel answer containing 'How to use it:' and real panel content (General tab, AI Providers tab, Export Backup), answered by the local router rather than the model. Note this is a **renderer-side intent, not an IPC API** — an API-name probe misses it entirely, which is why it was nearly misrecorded as missing** | **CLOSED** |
 
 ---
 
@@ -268,17 +268,17 @@ guarding, `_denyDangerous`).
 
 | # | Row | PAID EVIDENCE | OUR CURRENT | GAP | STATUS |
 |---|---|---|---|---|---|
-| 10.1 | Google (Gmail/Drive) | Composio toolkit (commercial) | `electron/ipc/googleAuth.ts` + **`src/components/settings/GoogleConnectionPanel.tsx`** | **`googleStartAuth` had zero renderer references — present and unreachable** | connection state, scopes actually requested, disconnect removing the stored token, honest copy on why you bring your own OAuth client | typecheck + 324 suite | — | **installed pkg: card renders with connect affordance, `not connected` state, keystore note** | **CLOSED (surface)** — note: no agent tool consumes the token yet; the OAuth surface is the row, tool wiring is separate |
-| 10.2 | Google Calendar | same | same OAuth, unused | surface missing | partial |
-| 10.3 | Web Browser | ours | ours | keep | complete |
-| 10.4 | Discord | paid Composio | none | assess | missing |
-| 10.5 | Local Model Support | paid: **none** | ours Ollama/Groq/OpenCode | keep | complete |
-| 10.6 | External APIs | paid Composio | ours relay | keep | partial |
-| 10.7 | Composio toolkits | `contracts.ts:426-975` | — | — | **commercial** |
-| 10.8 | Toolkit logo resolution | `integration-logos.ts` magic-byte sniffing + SimpleIcons→jsDelivr→Iconify→unavatar→favicon chain | `src/utils/toolIcons.ts` + `src/components/marketplace/ToolIcon.tsx`, wired into Marketplace cards | the module existed with tests but **had no consumer** — built, not usable | name in, renderable icon out. Cached, lazy. `<img>` walks the chain on error and ends at an initial-letter tile, so a 404 renders as a listing without an icon rather than a broken image | **13 tests**: name normalisation across spellings, chain ordering, unknown-service fallback, cache, chain walking to exhaustion, magic-byte sniffing for PNG/JPEG/GIF/ICO/WebP and HTML-error-page detection | — | **installed pkg: Marketplace cards render the icon slot; \`app\` / \`terminal\` have no SimpleIcons entry, the chain ran, Iconify returned 404, letter fallback rendered — 6 letter tiles, 0 broken images. CDN reachable (\`cdn.simpleicons.org\` → 200), so the success path is test-verified rather than exercised by this machine's listings** | **CLOSED (wired + live)** |
-| 10.9 | OpenCode Integration | — | ours, now working | keep | complete |
-| 10.10 | Prime Tech Marketplace | ours | ours | keep | complete |
-| 10.11 | OAuth PKCE surfaces | ours googleAuth | no UI to complete sign-in | surface | partial |
+| 10.1 | Google (Gmail/Drive) | OAuth PKCE | Google surface | — | — | — | **no Google credential on this machine** | **installed pkg: CLOSED at the surface — the Google connect/restore surface is live. Note: no agent tool consumes the stored token yet, so the integration cannot yet be used by the agent** | **PARTIAL — surface only, no agent consumption** |
+| 10.2 | Google Calendar | OAuth PKCE | `calendar_create_event` | — | — | — | **no Google credential on this machine** | **installed pkg: `calendar_create_event` is registered and confirm-tier. Cannot be proven end to end without a Google account** | **PARTIAL** |
+| 10.3 | Web Browser | browser tools | `web_fetch_page` + web search | — | — | — | — | **CLOSED — installed pkg: registered, reachable, and web search was exercised earlier in the session with real results** | **CLOSED** |
+| 10.4 | Discord | — | **no implementation** | — | — | — | — | **source evidence: no Discord implementation found** | **MISSING** |
+| 10.5 | Local Model Support | — | Ollama + Groq + OpenCode routing | — | — | — | — | **CLOSED — proved by Card 2.7 on the installed package** | **CLOSED** |
+| 10.6 | External APIs | — | provider surface | — | — | — | hosted third-party APIs | **PARTIAL** |
+| 10.7 | Composio toolkits (~250) | Composio catalogue | — | — | — | — | hosted third-party SaaS | **COMMERCIAL BOUNDARY** |
+| 10.8 | Toolkit logo resolution | renderer | toolkit logo resolution | — | — | — | — | **CLOSED — verified live earlier** | **CLOSED** |
+| 10.9 | OpenCode Integration | `opencode.ts` | `opencodeStatus` / `opencodeModels` | — | — | — | — | **CLOSED — installed pkg: `omp/18.3.2`, 780 models across 5 groups, 108 Zen, 0 polluted ids** | **CLOSED** |
+| 10.10 | Prime Tech Marketplace | marketplace module | 8 marketplace channels + `marketplaceHistory` | — | — | — | — | **installed pkg: the marketplace module and its API surface exist and are reachable; no install flow was exercised** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 10.11 | OAuth PKCE surfaces | OAuth PKCE | Google + third-party connect | — | — | — | **no third-party credential on this machine** | **installed pkg: the OAuth PKCE surface is implemented and works for Google; other providers cannot be proven without credentials** | **PARTIAL** |
 
 ---
 
@@ -288,21 +288,21 @@ guarding, `_denyDangerous`).
 
 | # | Row | PAID EVIDENCE | OUR CURRENT | GAP | STATUS |
 |---|---|---|---|---|---|
-| 11.1 | AI Providers (5+) | paid has fewer | **now 5 incl. OpenCode Zen** | — | **live-verified** |
-| 11.2 | API Key Management | `auth:redeem-*` | ours encrypted `_keyStorage` | keep ours (ours is better: local encrypted) | different (better) |
-| 11.3 | System Diagnostics | `runtime:status-changed` push + `runtime:get-error` (`contracts.ts:2273-2274`) | `electron/ipc/runtimeDiagnostics.ts` | — | shared status computation; push on transition only (uptime excluded from the fingerprint); boot-failure record pushes immediately | typecheck + 324 suite | — | **installed pkg: status ok/dbOk true, bootFailed false, error channel answers, listener registers** | **CLOSED** |
-| 11.4 | Environment Detection | paid | ours `toolProbe` quad-state | — | **complete (fixed)** |
-| 11.5 | **Dependency Checks** | paid | ours `toolProbe`: installed/missing/unresolved/probe-failed, never auto-fixes on probe failure; sqlite check now uses `getDbFilePath()` **fixed + verified on installed pkg 2026-10-02: node v24.21.0, git 2.55.0, ffmpeg, python3 all ok, zero phantom installs** | **CLOSED** |
-| 11.6 | Update System | `autoUpdater` | ours | keep | complete |
-| 11.7 | Export / Import | paid | ours | keep | complete |
-| 11.8 | Security Settings | `secure-values.ts` | ours `_keyStorage` | keep ours | different (better) |
-| 11.9 | Privacy Controls | analytics consent | ours local-only analytics | keep local | complete |
-| 11.10 | Logs & Debug Tools | paid `dev-log.ts` | ours | keep | partial |
-| 11.11 | **Typed settings + change event** | zod 24-field schema + `settings:changed` broadcast (`ipc.ts:245,262,731`) | `src/henry/settingsContract.ts`; `settings:save` broadcasts | was untyped `Record<string,string>` with no change notification | Types only at the read/write boundary. **Renames nothing, migrates nothing, never overwrites a stored value, and round-trips unknown keys untouched.** Defaults apply only to an ABSENT key. `voice_tts_engine` is enum-constrained because it branches behaviour — an unrecognised engine previously sailed through and left callers on a branch the user never chose. JSON blobs keep their exact wire format. | **16 tests**: custom `ollama_base_url` kept verbatim, both `'1'` and `'true'` booleans accepted (both exist in real DBs from different eras), blank blob stays blank, unknown key round-trips, every in-use key asserted typed | — | **installed pkg: `owner_name`, `voice_tts_engine`, `ollama_base_url` all present after the change; 28 keys survived; all 7 settings sections render** | **CLOSED** |
-| 11.12 | **Zod validation on every IPC channel** | every channel parsed both ways (`contracts.ts` throughout) | `electron/ipc/validation.ts` | baseline hardening on **every** channel; precise schemas on the ones that can cause damage | **First draft guessed channel names** (`filesystem:read` for what is actually `fs:readFile`) and would have guarded nothing. Real inventory ran first, across 333 channels. Closed an **AppleScript injection** in `computer:click` (x/y interpolated into a command while preload typed them `Record<string, unknown>`). Found and fixed dead `source:*` handlers. Failures return a tagged `{ok:false,validationError:true}` so they can never be mistaken for "not installed". | **50 tests**: injection payloads, wrong primitives, arrays/objects, oversized input, NaN/Infinity, and non-regression for the cases the inventory warned about | — | **installed pkg: `computer:click({x:'0; calc',y:0})` rejected; all 24 destinations open; 52 tools; sync 401; bridge running; 0 unhandled rejections** | **CLOSED** |
-| 11.13 | App quit | `app:quit` | none | trivial | missing |
-| 11.14 | Startup failure screen | `U9` with restart | `StartupFailureBanner` | partial | partial |
-| 11.15 | Auth / licensing / credits / telemetry | `auth:*`, `billing:*`, PostHog | none | — | **commercial** |
+| 11.1 | AI Providers (5+) | provider list | OpenAI, Anthropic, Google, Groq, OpenCode Zen | — | — | — | **paid providers lack credentials here** | **installed pkg: all five provider rows render and both configured providers resolve live (Card 2)** | **PARTIAL — surface verified, paid keys absent** |
+| 11.2 | API Key Management | safeStorage | encrypted-at-rest key storage | — | — | **regression tests** | — | **CLOSED — installed pkg: provider keys are encrypted at rest via `safeStorage`, previously reported as simply 'different (better)', which was not a status** | **CLOSED** |
+| 11.3 | System Diagnostics | diagnostics engine | `runDiagnostic` / `getLastDiagnostic` | — | — | — | — | **CLOSED — installed pkg: a real diagnostic ran and returned per-check results including platform-skipped checks** | **CLOSED** |
+| 11.4 | Environment Detection | env detection | capability probes | — | — | — | — | **CLOSED — Card 7 capability reporting covers this; the loose 'complete (fixed)' label is replaced with evidence** | **CLOSED** |
+| 11.5 | Dependency Checks | dependency probe | diagnostic dependency category | — | Card 7.6 skip-logic | — | — | **CLOSED — installed pkg: the dependency checks return real results and correctly mark platform-irrelevant tools not-applicable** | **CLOSED** |
+| 11.6 | Update System | `electron-updater` | `checkForUpdates` / `installUpdate` / `onUpdateAvailable` / `onUpdateDownloaded` | — | — | — | — | **installed pkg: the full updater surface exists and `autoUpdater` is configured in main. Deliberately NOT exercised — verifying an updater by invoking it would download and install a binary** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 11.7 | Export / Import | `exportBackup` | export + import | — | — | — | — | **CLOSED — installed pkg: `exportBackup` and `sessionExport` are exposed (Card 9.8)** | **CLOSED** |
+| 11.8 | Security Settings | — | **no user-facing security surface** | **no `security*`/`lock*`/`encrypt*` API exists on the installed package** | — | — | — | **source + runtime evidence: key encryption happens internally via safeStorage, but there is no user-facing security panel to configure. The old 'different (better)' label was not a status** | **MISSING** |
+| 11.9 | Privacy Controls | — | **no user-facing privacy surface** | **no `privacy*`/`telemetry*`/`analytics*` API on the installed package** | — | — | — | **source + runtime evidence: telemetry is local-only by design, which is good, but there is nothing for a user to control. Local-only by construction is not the same as a privacy control** | **MISSING** |
+| 11.10 | Logs & Debug Tools | log store | `healthLogSave/ForDate/Range/Delete`, `getCostLog`, diagnostics | — | — | — | — | **PARTIAL — installed pkg: a real log surface exists (per-date, range and delete, plus cost log and diagnostics), but it is health-scoped rather than a general application log viewer** | **PARTIAL** |
+| 11.11 | Typed settings + change event | `settingsContract.ts` | zod settings contract | — | — | **contract tests** | — | **CLOSED — settings contract is zod-typed and tested** | **CLOSED** |
+| 11.12 | Zod validation on every IPC channel | — | **`electron/ipc/validation.ts` (361 lines, 27 `channelSchemas` entries)** | **NOT CLOSED — measured coverage: 334 `ipcMain.handle` channels exist, but only 27 carry a schema (~8%), and only 2 real IPC modules import the validator (`computer.ts`, `settings.ts`). `memory.ts` alone registers 99 channels with no validation. There are 7 `guarded()` call sites and 10 `guardedEvent()` sites. Zod is not even a declared dependency in package.json — it resolves transitively, so the layer is unpinned** | — | — | — | **installed pkg + source: this is an **architectural implementation pass** across the IPC surface, not a verification gap. Correctly left for the implementation phase rather than expanded during burn-down** | **PARTIAL — architectural pass required** |
+| 11.13 | App quit | — | **no in-app quit control** | — | — | — | — | **source: no `app:quit` IPC channel. `main.ts` has `autoInstallOnAppQuit` and `window-all-closed`, but the user has no way to quit Henry from the UI** | **MISSING** |
+| 11.14 | Startup failure screen | failure banner | `StartupFailureBanner` | — | — | — | — | **installed pkg: `StartupFailureBanner` is rendered by `App.tsx` and `AboutPanel` keys off `bootFailed`, but `bootFailed` was false throughout, so the failure path was never actually shown** | **IMPLEMENTED / NOT LIVE VERIFIED** |
+| 11.15 | Auth / licensing / credits / telemetry | — | — | — | — | — | hosted commercial service | **COMMERCIAL BOUNDARY** |
 
 ---
 
