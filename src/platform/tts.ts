@@ -8,6 +8,13 @@ import { spawn, execFile, type ChildProcess } from 'child_process';
 import type Database from 'better-sqlite3';
 import { decryptKey } from '../../electron/ipc/_keyStorage';
 import { prepareSpeechText } from '../../electron/voice/_speechText';
+import {
+  DEFAULT_LOCAL_VOICE,
+  LOCAL_TTS_ENGINE_ID,
+  getLocalTtsStatus,
+  stopLocalSpeech,
+  synthesizeLocal,
+} from '../../electron/voice/localTts';
 
 /**
  * Available TTS engines
@@ -409,7 +416,7 @@ export async function speak(
         const audio = await fetchElevenLabsAudio(clean, apiKey, voiceId);
         return { engine: 'elevenlabs', audio };
       } catch (e) {
-        console.warn('[Henry voice] ElevenLabs failed, falling back to local voice:', e instanceof Error ? e.message : e);
+        console.warn('[voice] ElevenLabs failed, falling back to local voice:', e instanceof Error ? e.message : e);
       }
     }
     // No key (explicit elevenlabs pick) or request failed → free local voice.
@@ -426,9 +433,33 @@ export async function speak(
 }
 
 /**
- * Platform-specific local speech
+ * The voice a neural local engine should use, from the same setting the
+ * ElevenLabs voice id uses so one picker drives both.
+ */
+function localVoiceSetting(db: Database.Database): string {
+  return (readSetting(db, 'voice_tts_voice') || '').trim() || DEFAULT_LOCAL_VOICE;
+}
+
+/**
+ * Platform-specific local speech.
+ *
+ * The neural engine is tried first and on every platform, because unlike
+ * `say` (macOS) and eSpeak (Linux) it is the one engine that exists on all
+ * three — that was the whole point of adding it: `engine: local` used to be
+ * advertised while only the browser fallback could actually speak.
+ *
+ * A `null` return means "no local engine produced audio", which the callers
+ * already treat as "fall back to web-speech". Never reported as spoken when
+ * nothing was spoken.
  */
 async function speakLocal(db: Database.Database, text: string): Promise<Buffer | null> {
+  try {
+    return await synthesizeLocal(text, { voice: localVoiceSetting(db), rate: sayRateSetting(db) });
+  } catch (neuralError) {
+    // Expected whenever Piper is absent — that is the common case, not a fault.
+    console.warn('[voice] local neural engine unavailable:', neuralError instanceof Error ? neuralError.message : neuralError);
+  }
+
   if (platformString === 'darwin') {
     // macOS: `say` renders straight to the device, so there is no buffer.
     await speakLocalSay(text, sayVoiceSetting(db), sayRateSetting(db));
@@ -442,12 +473,12 @@ async function speakLocal(db: Database.Database, text: string): Promise<Buffer |
       // to try to play.
       return audio.byteLength > 0 ? audio : null;
     } catch (espeakError) {
-      console.warn('[Henry voice] eSpeak failed:', espeakError);
+      console.warn('[voice] eSpeak failed:', espeakError);
       return null;
     }
   }
-  // Windows and anything else have no local engine — the renderer falls back
-  // to the Web Speech API. Return null instead of claiming we spoke.
+  // Windows and anything else have no other local engine — the renderer falls
+  // back to the Web Speech API. Return null instead of claiming we spoke.
   return null;
 }
 
@@ -455,14 +486,20 @@ async function speakLocal(db: Database.Database, text: string): Promise<Buffer |
  * Get TTS status
  */
 export async function getTtsStatus(db: Database.Database): Promise<TtsStatus> {
+  const neuralVoice = localVoiceSetting(db);
+  const neural = getLocalTtsStatus(neuralVoice);
+  const resolved = resolveEngine(db);
+
   const status: TtsStatus = {
     engine: readEngineSetting(db),
-    // 'local' implies a main-process engine. Windows has none (no `say`, no
-    // eSpeak), so reporting 'local' there was a lie; the renderer falls back to
-    // SpeechSynthesis, which is the engine that will actually speak.
-    active: resolveEngine(db) === 'local' && platformString !== 'darwin' && platformString !== 'linux'
-      ? 'web-speech'
-      : resolveEngine(db),
+    // 'local' means "the main process speaks". That is only true when a local
+    // engine really exists — the neural engine, `say` on macOS, eSpeak on
+    // Linux. Anywhere else the browser fallback is what will actually speak,
+    // and saying otherwise is what made this row read as a phantom feature.
+    active:
+      resolved === 'local' && !neural.ready && platformString !== 'darwin' && platformString !== 'linux'
+        ? 'web-speech'
+        : resolved,
     elevenLabsKeyPresent: Boolean(getElevenLabsKey(db)),
     elevenVoiceId: (readSetting(db, 'voice_tts_voice') || DEFAULT_ELEVEN_VOICE).trim() || DEFAULT_ELEVEN_VOICE,
     sayVoice: sayVoiceSetting(db),
@@ -470,15 +507,19 @@ export async function getTtsStatus(db: Database.Database): Promise<TtsStatus> {
     availableEngines: []
   };
 
-  // Add available engines based on platform
+  // Listed ONLY when it is genuinely usable. An engine that is advertised but
+  // absent is the exact defect this row was reopened for.
+  if (neural.ready) {
+    status.availableEngines.push(LOCAL_TTS_ENGINE_ID);
+  }
+
+  // The legacy per-platform engines, likewise only when actually installed.
   if (platformString === 'darwin') {
     status.availableEngines.push('say');
-    const sayVoices = await listSayVoices();
-    // In a full implementation, we'd add voice details to status
+    await listSayVoices();
   } else if (platformString === 'linux') {
     status.availableEngines.push('espeak');
-    const espeakVoices = await listEspeakVoices();
-    // In a full implementation, we'd add voice details to status
+    await listEspeakVoices();
   }
 
   // Web Speech is a RENDERER fallback (src/henry/ttsService.ts), not a main
@@ -497,6 +538,9 @@ export async function getTtsStatus(db: Database.Database): Promise<TtsStatus> {
  * Stop speaking (platform-specific)
  */
 export function stopSpeaking(): boolean {
+  // The neural engine has its own child process; without this, stopSpeaking()
+  // could not interrupt a Piper utterance.
+  if (stopLocalSpeech()) return true;
   if (!espeakProcess) return false;
   try { espeakProcess.kill('SIGTERM'); } catch { /* already gone */ }
   espeakProcess = null;
@@ -510,7 +554,7 @@ export function registerPlatformTtsHandlers(db: Database.Database): void {
   // The renderer checks `res.ok` and reads `res.result` for all three channels
   // (see src/henry/voice.ts and HenryVoiceResult in src/global.d.ts). These
   // handlers used to return the raw value, so every call saw `ok === undefined`
-  // and threw — Henry could never speak.
+  // and threw — speech could never start.
   const envelope = <T>(fn: () => T | Promise<T>) =>
     Promise.resolve()
       .then(fn)

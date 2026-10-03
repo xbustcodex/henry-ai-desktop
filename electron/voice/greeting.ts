@@ -1,10 +1,16 @@
 /**
  * Spoken startup greeting.
  *
- * The text is generated locally (time of day + the owner's name) and the
- * synthesized audio is cached on disk, so it is produced once per variant
- * instead of on every launch. No network call and no AI inference: a greeting
- * is a fixed phrase, and paying for an LLM to generate it would be wasteful.
+ * The text is generated locally (time of day, the owner's name, and the
+ * configured assistant name) and the synthesized audio is cached on disk, so
+ * it is produced once per variant instead of on every launch. No network call
+ * and no AI inference: a greeting is a fixed phrase, and paying for an LLM to
+ * generate it would be wasteful.
+ *
+ * Both names come from settings that already exist. `{address}` is the owner
+ * (`owner_name`); `{name}` is the assistant, read from `creator_orb` via
+ * `readAssistantName`, so the greeting can never disagree with the name the
+ * power-on intro shows.
  */
 
 import { app, ipcMain } from 'electron';
@@ -13,6 +19,7 @@ import path from 'path';
 import crypto from 'crypto';
 import type Database from 'better-sqlite3';
 import { speak } from '../../src/platform/tts';
+import { withSpokenName } from '../../src/henry/spokenName';
 
 /** Time-of-day buckets. */
 export type GreetingPeriod = 'morning' | 'afternoon' | 'evening' | 'lateNight';
@@ -22,28 +29,43 @@ export interface GreetingText {
   period: GreetingPeriod;
 }
 
-const VARIANTS: Record<GreetingPeriod, string[]> = {
+/** The name used when nothing has been configured — a default install. */
+export const DEFAULT_ASSISTANT_NAME = 'Henry';
+
+/**
+ * Twelve variants, three per period. `{address}` is the OWNER (the person
+ * being spoken to); `{name}` is the ASSISTANT's own name.
+ *
+ * Seven of the twelve name the assistant in the third person and so carry
+ * `{name}`. The other five are self-referential in the first person ("I am
+ * up", "All systems online") and carry neither, which is what keeps them
+ * correct for any name without editing the copy.
+ */
+export const GREETING_VARIANTS: Record<GreetingPeriod, readonly string[]> = {
   morning: [
-    'Good morning{address}. Henry is up and ready.',
+    'Good morning{address}. {name} is up and ready.',
     'Morning{address}. All systems online and ready when you are.',
     'Good morning{address}. The day is yours — what are we doing?',
   ],
   afternoon: [
-    'Good afternoon{address}. Henry here, ready to help.',
+    'Good afternoon{address}. {name} here, ready to help.',
     'Afternoon{address}. Systems are online.',
-    'Hey{address} — Henry is up and listening.',
+    'Hey{address} — {name} is up and listening.',
   ],
   evening: [
-    'Good evening{address}. Henry is at your service.',
+    'Good evening{address}. {name} is at your service.',
     'Evening{address}. All systems online — what do you need?',
-    'Good evening{address}. Henry here, ready to get things done.',
+    'Good evening{address}. {name} here, ready to get things done.',
   ],
   lateNight: [
-    'Burning the midnight oil{address}. Henry is here with you.',
+    'Burning the midnight oil{address}. {name} is here with you.',
     'Late night{address}. I am up — what shall we do?',
-    'Still going{address}. Henry is awake and ready.',
+    'Still going{address}. {name} is awake and ready.',
   ],
 };
+
+/** Every variant, flattened, for tests and for anything that enumerates them. */
+export const ALL_GREETING_VARIANTS: readonly string[] = Object.values(GREETING_VARIANTS).flat();
 
 export function greetingPeriod(date = new Date()): GreetingPeriod {
   const h = date.getHours();
@@ -55,26 +77,50 @@ export function greetingPeriod(date = new Date()): GreetingPeriod {
 
 /** Pick a stable variant for today so the greeting doesn't change every launch. */
 function pickVariant(period: GreetingPeriod, date: Date): string {
-  const pool = VARIANTS[period];
+  const pool = GREETING_VARIANTS[period];
   const seed = Number(`${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`);
   return pool[seed % pool.length];
 }
 
-/** "Henry" becomes "Henry" and "Chris" becomes "Mr. Chris"? No — keep it simple. */
+/** "Good morning Henry." — the trailing comma in the template handles pause. */
 function addressFor(ownerName: string | null | undefined): string {
   const name = (ownerName || '').trim();
   if (!name) return '';
-  // "Good morning Henry." — the trailing comma in the template handles pause.
   return `, ${name}`;
+}
+
+/**
+ * Normalise a configured assistant name for insertion into the greeting.
+ *
+ * An unconfigured, blank or whitespace-only name falls back to the default so
+ * a default install reads exactly as it always did. The cap matches the orb
+ * setting's own 32-character limit; anything longer is a paste accident, not a
+ * name someone wants spoken.
+ */
+export function assistantNameFor(raw: string | null | undefined): string {
+  const name = (raw ?? '').trim().slice(0, 32).trim();
+  return name || DEFAULT_ASSISTANT_NAME;
+}
+
+/** Render one variant template. Both placeholders are always resolved. */
+export function renderGreeting(
+  template: string,
+  ownerName: string | null | undefined,
+  assistantName: string | null | undefined,
+): string {
+  return template
+    .replace('{address}', addressFor(ownerName))
+    .replace(/\{name\}/g, assistantNameFor(assistantName));
 }
 
 export function buildGreetingText(
   ownerName: string | null | undefined,
   date = new Date(),
+  assistantName: string | null | undefined = null,
 ): GreetingText {
   const period = greetingPeriod(date);
   const template = pickVariant(period, date);
-  return { text: template.replace('{address}', addressFor(ownerName)), period };
+  return { text: renderGreeting(template, ownerName, assistantName), period };
 }
 
 function cacheDir(): string {
@@ -105,6 +151,28 @@ function readSetting(db: Database.Database, key: string): string {
     return row?.value ?? '';
   } catch {
     return '';
+  }
+}
+
+/**
+ * The authoritative assistant name.
+ *
+ * `creator_orb` is where the app already stores the assistant's name — the
+ * power-on intro shows it and CreatorsPanel edits it. A second
+ * `brand_name`-style key would leave the user with two names that disagree, so
+ * the greeting reads the setting that already exists. An absent, unparseable
+ * or blank orb blob falls back to the default.
+ */
+export function readAssistantName(db: Database.Database): string {
+  try {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('creator_orb') as
+      | { value: string }
+      | undefined;
+    if (!row?.value) return DEFAULT_ASSISTANT_NAME;
+    const orb = JSON.parse(row.value) as { assistantName?: unknown };
+    return assistantNameFor(typeof orb.assistantName === 'string' ? orb.assistantName : null);
+  } catch {
+    return DEFAULT_ASSISTANT_NAME;
   }
 }
 
@@ -148,7 +216,8 @@ export function registerVoiceGreetingHandlers(db: Database.Database): void {
         const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('owner_name') as
           | { value: string }
           | undefined;
-        const { text, period } = buildGreetingText(row?.value);
+        const assistantName = readAssistantName(db);
+        const { text, period } = buildGreetingText(row?.value, new Date(), assistantName);
 
         const engine = readSetting(db, 'voice_tts_engine') || 'auto';
 
@@ -158,15 +227,14 @@ export function registerVoiceGreetingHandlers(db: Database.Database): void {
 
         // Only synthesize when it is actually needed. Previously speak() ran
         // even for speak:false, so merely *asking* for the greeting text made
-        // Henry say it out loud.
+        // the assistant say it out loud.
         if (shouldSpeak) {
           const cached = await readCacheFile(file);
           if (!cached) {
             // Speech synthesis reads "H.E.N.R.Y" as five letters. Normalise
             // the spoken form so the greeting says the name rather than
             // spelling it. The displayed text is left alone.
-            const { withSpokenName } = await import('../../src/henry/spokenName') as typeof import('../../src/henry/spokenName');
-            const spokenText = withSpokenName(text, row?.value);
+            const spokenText = withSpokenName(text, assistantName);
             const res = await speak(db, { text: spokenText, engine: engine === 'auto' ? undefined : engine });
             // A macOS `say` (or any device-rendering engine) returns no buffer:
             // it already spoke. That is success, not an error — it used to

@@ -1,10 +1,11 @@
 /**
- * _speechText.ts — Pure text-prep helpers for TTS.
+ * Keeps markdown out of the assistant's mouth: code blocks become "code
+ * omitted", links collapse to their text, and structural characters (#, *,
+ * backticks, table pipes) are stripped. Pure module — no Electron imports —
+ * so it's unit-testable under vitest's plain-Node environment.
  *
- * Keeps markdown out of Henry's mouth: code blocks become "code omitted",
- * links collapse to their text, and structural characters (#, *, backticks,
- * table pipes) are stripped. Pure module — no Electron imports — so it's
- * unit-testable under vitest's plain-Node environment.
+ * Deliberately free of the assistant's name: this text is fed to whatever
+ * engine is configured, and the greeting/voice identity is the caller's job.
  */
 /**
  * Longest utterance we hand to a speech engine, in characters.
@@ -62,7 +63,7 @@ export function prepareSpeechText(markdown: string): string {
 
 /**
  * Clip to MAX_SPEECH_CHARS, preferring the last complete sentence inside the
- * budget so Henry never stops mid-word or mid-clause. Falls back to the last
+ * budget so speech never stops mid-word or mid-clause. Falls back to the last
  * word boundary, then to a hard cut, because a truncated sentence still beats
  * an unspeakable one.
  */

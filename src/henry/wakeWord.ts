@@ -1,4 +1,36 @@
+/**
+ * Wake word.
+ *
+ * Three engines, tried in order of what actually works on the host:
+ *
+ *   1. Capacitor native (`@capacitor-community/speech-recognition`) — mobile.
+ *   2. Desktop local STT — the rolling capture → whisper loop in
+ *      `wakeWordDesktop.ts`. This is the engine that runs on Windows/Linux/macOS
+ *      desktop, built from the same capture + whisper path hands-free voice
+ *      commands already use.
+ *   3. Web `SpeechRecognition` — kept as a last resort for browsers that do
+ *      implement it. Chromium in Electron does not, which is why it was never
+ *      an answer on desktop.
+ *
+ * The patterns, the 4s cooldown and the `henry_ambient_note` /
+ * `henry_wake_word` events are unchanged, so nothing downstream had to move.
+ */
+
 import { Capacitor } from '@capacitor/core';
+import {
+  createDesktopWakeEngine,
+  matchWakeWord,
+  WakeCooldown,
+  type DesktopWakeEngine,
+  type DesktopWakeUnavailable,
+} from './wakeWordDesktop';
+import {
+  cancelVoiceRecording,
+  startVoiceRecording,
+  stopVoiceRecording,
+  transcribeLocal,
+  voiceIpcAvailable,
+} from './voice';
 
 export type AmbientNote = {
   text: string;
@@ -7,42 +39,81 @@ export type AmbientNote = {
 
 const AMBIENT_KEY = 'henry:ambient_notes';
 const WAKE_STATE_KEY = 'henry:wake_active';
-const COOLDOWN_MS = 4000;
 
-const WAKE_PATTERNS: RegExp[] = [
-  /(?:^|[\s,])(?:hey|okay|ok|yo)\s+henry[,\s]*(.*)/i,
-  /(?:^|[\s])henry\s*[,?!]*\s+(.*)/i,
-  /^henry[,!?\s]*$/i,
-];
+/** The slice of the SpeechRecognition instance this module actually touches. */
+interface WebSpeechSession {
+  abort: () => void;
+}
+
+/** The untyped constructor exposed on `window` by browsers that implement it. */
+interface WebSpeechCtor {
+  new (): {
+    continuous: boolean;
+    interimResults: boolean;
+    lang: string;
+    maxAlternatives: number;
+    onresult: ((event: WebSpeechEvent) => void) | null;
+    onerror: ((event: { error?: string }) => void) | null;
+    onend: (() => void) | null;
+    start: () => void;
+    abort: () => void;
+  };
+}
+
+interface WebSpeechEvent {
+  resultIndex: number;
+  results: { length: number } & Record<number, { isFinal: boolean; 0: { transcript: string } }>;
+}
+
+/** Read the browser constructor off `window` without asserting a shape. */
+function webSpeechCtor(): WebSpeechCtor | null {
+  const w = window as unknown as Record<string, unknown>;
+  const ctor = w.SpeechRecognition ?? w.webkitSpeechRecognition;
+  return typeof ctor === 'function' ? (ctor as WebSpeechCtor) : null;
+}
 
 class WakeWordManager {
-  private webRecognition: any = null;
+  private webRecognition: WebSpeechSession | null = null;
   private _active = false;
   private _ambientLog: AmbientNote[] = [];
-  private _lastWake = 0;
-  private _useNative = false;
+  private cooldown = new WakeCooldown();
+  private desktop: DesktopWakeEngine | null = null;
+  /** Which engine actually started, so `stop()` tears down the right one. */
+  private _engine: 'native' | 'desktop' | 'web' | null = null;
 
   get isActive() {
     return this._active;
   }
 
-  async start(): Promise<'ok' | 'no-api' | 'native-ok'> {
-    this._useNative = Capacitor.isNativePlatform();
+  async start(): Promise<'ok' | 'no-api' | 'native-ok' | 'desktop-ok'> {
+    this.stop();
 
-    if (this._useNative) {
-      return await this._startNative();
-    } else {
+    if (Capacitor.isNativePlatform()) {
+      const started = await this._startNative();
+      if (started === 'native-ok') return 'native-ok';
       return this._startWeb();
     }
+
+    // Desktop Electron: the mobile plugin does not exist here and Chromium
+    // ships no working SpeechRecognition, so the only engine that actually
+    // runs is the one built on the local whisper pipeline.
+    if (await this._startDesktop()) return 'desktop-ok';
+
+    return this._startWeb();
   }
 
   stop() {
     this._active = false;
-    if (this._useNative) {
-      this._stopNative();
-    } else {
+    if (this._engine === 'desktop') {
+      this.desktop?.stop();
+      cancelVoiceRecording();
+    } else if (this._engine === 'native') {
+      void this._stopNative();
+    } else if (this._engine === 'web') {
       this._stopWeb();
     }
+    this.desktop = null;
+    this._engine = null;
     this._persist(false);
     window.dispatchEvent(new CustomEvent('henry_wake_state', { detail: { active: false } }));
   }
@@ -60,9 +131,70 @@ class WakeWordManager {
     try { localStorage.removeItem(AMBIENT_KEY); } catch { /* ignore */ }
   }
 
+  // ── Desktop (local whisper, via the hands-free capture path) ───────────────
+
+  /**
+   * Honest about its own readiness: when the local STT engine is not installed
+   * and downloaded it reports that and lets the caller fall through, rather
+   * than reporting "listening" while nothing can hear anything.
+   */
+  private async _startDesktop(): Promise<boolean> {
+    if (!voiceIpcAvailable() || typeof window.henryAPI.voiceSttStatus !== 'function') return false;
+
+    let ready = false;
+    try {
+      const status = await window.henryAPI.voiceSttStatus();
+      ready = Boolean(status?.ok && status.result?.ready);
+    } catch {
+      return false;
+    }
+    if (!ready) {
+      window.dispatchEvent(new CustomEvent('henry_wake_state', {
+        detail: { active: false, error: 'stt-not-ready' },
+      }));
+      return false;
+    }
+
+    this.desktop = createDesktopWakeEngine({
+      // One utterance: open the mic, let endpointing end it on silence, hand
+      // back the bytes. This is the hands-free path, not a second recorder.
+      capture: async () => {
+        await startVoiceRecording();
+        const blob = await stopVoiceRecording();
+        return blob ? await blob.arrayBuffer() : null;
+      },
+      transcribe: (audio) => transcribeLocal(new Blob([audio])),
+      onTranscript: (text) => this._recordNote(text),
+      onWake: (match) => this._fireWake(match.query, match.fullTranscript),
+      onUnavailable: (reason) => this._onDesktopUnavailable(reason),
+    });
+
+    this._active = true;
+    this._engine = 'desktop';
+    this.cooldown = new WakeCooldown();
+    this._loadAmbientLog();
+    this._persist(true);
+    await this.desktop.start();
+    window.dispatchEvent(new CustomEvent('henry_wake_state', { detail: { active: true, engine: 'desktop' } }));
+    return true;
+  }
+
+  private _onDesktopUnavailable(reason: DesktopWakeUnavailable) {
+    // `stopped` is the deliberate teardown path, which already reported itself.
+    if (reason === 'stopped') return;
+    this._active = false;
+    this.desktop = null;
+    this._engine = null;
+    cancelVoiceRecording();
+    this._persist(false);
+    window.dispatchEvent(new CustomEvent('henry_wake_state', {
+      detail: { active: false, error: reason },
+    }));
+  }
+
   // ── Native (Capacitor) ─────────────────────────────────────────────────────
 
-  private async _startNative(): Promise<'ok' | 'native-ok' | 'no-api'> {
+  private async _startNative(): Promise<'native-ok' | 'no-api'> {
     try {
       const { SpeechRecognition } = await import('@capacitor-community/speech-recognition');
 
@@ -78,6 +210,8 @@ class WakeWordManager {
       }
 
       this._active = true;
+      this._engine = 'native';
+      this.cooldown = new WakeCooldown();
       this._loadAmbientLog();
       this._persist(true);
 
@@ -93,10 +227,10 @@ class WakeWordManager {
         if (text) this._handleTranscript(text);
       });
 
-      window.dispatchEvent(new CustomEvent('henry_wake_state', { detail: { active: true } }));
+      window.dispatchEvent(new CustomEvent('henry_wake_state', { detail: { active: true, engine: 'native' } }));
       return 'native-ok';
     } catch {
-      return this._startWeb();
+      return 'no-api';
     }
   }
 
@@ -108,10 +242,10 @@ class WakeWordManager {
     } catch { /* ignore */ }
   }
 
-  // ── Web (SpeechRecognition API) ────────────────────────────────────────────
+  // ── Web (SpeechRecognition API) — last resort ──────────────────────────────
 
   private _startWeb(): 'ok' | 'no-api' {
-    const API = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const API = webSpeechCtor();
     if (!API) {
       window.dispatchEvent(new CustomEvent('henry_wake_state', {
         detail: { active: false, error: 'no-api' },
@@ -120,10 +254,12 @@ class WakeWordManager {
     }
 
     this._active = true;
+    this._engine = 'web';
+    this.cooldown = new WakeCooldown();
     this._loadAmbientLog();
     this._persist(true);
     this._createAndStartWeb(API);
-    window.dispatchEvent(new CustomEvent('henry_wake_state', { detail: { active: true } }));
+    window.dispatchEvent(new CustomEvent('henry_wake_state', { detail: { active: true, engine: 'web' } }));
     return 'ok';
   }
 
@@ -132,7 +268,7 @@ class WakeWordManager {
     this.webRecognition = null;
   }
 
-  private _createAndStartWeb(API: any) {
+  private _createAndStartWeb(API: WebSpeechCtor) {
     if (!this._active) return;
 
     const r = new API();
@@ -141,7 +277,7 @@ class WakeWordManager {
     r.lang = 'en-US';
     r.maxAlternatives = 1;
 
-    r.onresult = (event: any) => {
+    r.onresult = (event) => {
       for (let i = event.resultIndex; i < event.results.length; i++) {
         if (event.results[i].isFinal) {
           this._handleTranscript(event.results[i][0].transcript.trim());
@@ -149,7 +285,7 @@ class WakeWordManager {
       }
     };
 
-    r.onerror = (e: any) => {
+    r.onerror = (e) => {
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
         this._active = false;
         this._persist(false);
@@ -163,7 +299,7 @@ class WakeWordManager {
       this.webRecognition = null;
       if (this._active) {
         setTimeout(() => {
-          const A = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+          const A = webSpeechCtor();
           if (A && this._active) this._createAndStartWeb(A);
         }, 300);
       }
@@ -173,32 +309,33 @@ class WakeWordManager {
     this.webRecognition = r;
   }
 
-  // ── Shared transcript handler ──────────────────────────────────────────────
+  // ── Shared transcript handling ─────────────────────────────────────────────
 
-  private _handleTranscript(text: string) {
-    if (!text) return;
-
+  private _recordNote(text: string) {
     const note: AmbientNote = { text, timestamp: new Date().toISOString() };
     this._ambientLog.push(note);
     if (this._ambientLog.length > 300) this._ambientLog.shift();
     this._saveAmbientLog();
 
     window.dispatchEvent(new CustomEvent('henry_ambient_note', { detail: { note } }));
+  }
 
-    const now = Date.now();
-    if (now - this._lastWake < COOLDOWN_MS) return;
+  private _fireWake(query: string, fullTranscript: string) {
+    window.dispatchEvent(new CustomEvent('henry_wake_word', {
+      detail: { query, fullTranscript },
+    }));
+  }
 
-    for (const pattern of WAKE_PATTERNS) {
-      const match = text.match(pattern);
-      if (match) {
-        this._lastWake = now;
-        const query = (match[1] || '').trim().replace(/^[,\s]+|[,\s]+$/g, '');
-        window.dispatchEvent(new CustomEvent('henry_wake_word', {
-          detail: { query, fullTranscript: text },
-        }));
-        return;
-      }
-    }
+  private _handleTranscript(text: string) {
+    if (!text) return;
+
+    this._recordNote(text);
+
+    const match = matchWakeWord(text);
+    if (!match) return;
+    if (!this.cooldown.tryAcquire()) return;
+
+    this._fireWake(match.query, match.fullTranscript);
   }
 
   private _persist(active: boolean) {

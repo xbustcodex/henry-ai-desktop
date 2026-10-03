@@ -21,7 +21,7 @@ import { execFile, execSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import https from 'https';
+import { downloadFile, fileLooksComplete } from './_download';
 
 type Envelope<T = unknown> = { ok: true; result: T } | { ok: false; error: string };
 
@@ -60,7 +60,21 @@ export interface SttStatus {
   modelPath: string;
   /** True when both binary + model are in place — transcription will work. */
   ready: boolean;
+  /**
+   * What is still missing, in plain words. `ready: false` on its own tells a
+   * user nothing actionable; this is what the settings panel shows so the
+   * browser fallback is presented as a choice rather than a mystery.
+   */
+  blockers: string[];
+  /** Per-platform command that resolves the binary gap, when there is one. */
+  installHint: string;
 }
+
+const INSTALL_HINTS: Record<string, string> = {
+  darwin: 'brew install whisper-cpp',
+  linux: 'sudo apt-get install whisper-cpp',
+  win32: 'winget install ggml.whisper',
+};
 
 export interface SttSetupProgress {
   phase: 'binary' | 'model';
@@ -151,55 +165,48 @@ export function sttModelPath(): string {
 }
 
 export function sttModelPresent(): boolean {
-  try {
-    const stat = fs.statSync(sttModelPath());
-    return stat.isFile() && stat.size >= STT_MODEL_MIN_BYTES;
-  } catch {
-    return false;
-  }
+  return fileLooksComplete(sttModelPath(), STT_MODEL_MIN_BYTES);
 }
 
+/**
+ * Describe exactly what is missing, in the order it has to be fixed.
+ *
+ * Reporting only `ready: false` is what made this row look like a mystery:
+ * the browser engine silently carried speech while the local engine was
+ * absent, with nothing telling the user which half was missing or how to get
+ * it. The model needs no privileges; the binary does.
+ */
 export function getSttStatus(refresh = false): SttStatus {
   const binaryPath = detectWhisperBinary(refresh);
   const modelPresent = sttModelPresent();
+  const blockers: string[] = [];
+  if (!binaryPath) {
+    blockers.push(`whisper-cpp is not installed — expected ${PROBED_NAMES.join(' or ')}.`);
+  }
+  if (!modelPresent) {
+    blockers.push(`The speech model is not downloaded to ${sttModelPath()}.`);
+  }
   return {
     binaryPresent: Boolean(binaryPath),
     binaryPath,
     modelPresent,
     modelPath: sttModelPath(),
     ready: Boolean(binaryPath) && modelPresent,
+    blockers,
+    installHint: INSTALL_HINTS[process.platform] ?? '',
   };
-}
-
-/** Follow-redirects GET (HuggingFace 302s to its CDN). */
-function httpsGetFollow(
-  url: string,
-  onResponse: (res: import('http').IncomingMessage) => void,
-  onError: (err: Error) => void,
-  redirectsLeft = 5,
-): void {
-  const req = https.get(url, (res) => {
-    const status = res.statusCode ?? 0;
-    if (status >= 300 && status < 400 && res.headers.location && redirectsLeft > 0) {
-      res.resume();
-      httpsGetFollow(new URL(res.headers.location, url).toString(), onResponse, onError, redirectsLeft - 1);
-      return;
-    }
-    if (status !== 200) {
-      res.resume();
-      onError(new Error(`Model download failed: HTTP ${status}`));
-      return;
-    }
-    onResponse(res);
-  });
-  req.on('error', onError);
 }
 
 let downloadInFlight: Promise<void> | null = null;
 
 /**
- * Download ggml-base.en.bin into the voice-models dir. Streams to a .part file,
- * verifies the size, then renames into place. Concurrent calls share one download.
+ * Download ggml-base.en.bin into the voice-models dir.
+ *
+ * The download is deliberately independent of the binary install. Installing
+ * whisper-cpp needs a package manager and, on Linux, root — so when setup ran
+ * the install first, a machine without either could never obtain the model at
+ * all. The model needs no privileges; having it on disk means the only thing
+ * left blocking local transcription is a binary the user can install by hand.
  */
 export function downloadSttModel(
   onProgress?: (p: SttSetupProgress) => void,
@@ -207,60 +214,25 @@ export function downloadSttModel(
   if (sttModelPresent()) return Promise.resolve();
   if (downloadInFlight) return downloadInFlight;
 
-  downloadInFlight = new Promise<void>((resolve, reject) => {
-    const dir = sttModelDir();
-    fs.mkdirSync(dir, { recursive: true });
-    const finalPath = sttModelPath();
-    const partPath = finalPath + '.part';
-
-    const fail = (err: Error) => {
-      try { fs.unlinkSync(partPath); } catch { /* already gone */ }
-      reject(err);
-    };
-
-    httpsGetFollow(
-      STT_MODEL_URL,
-      (res) => {
-        const total = Number(res.headers['content-length'] || 0);
-        let downloaded = 0;
-        const out = fs.createWriteStream(partPath);
-
-        res.on('data', (chunk: Buffer) => {
-          downloaded += chunk.length;
-          onProgress?.({
-            phase: 'model',
-            message: 'Downloading speech model…',
-            downloaded,
-            total,
-            pct: total > 0 ? Math.round((downloaded / total) * 100) : 0,
-          });
-        });
-        res.pipe(out);
-
-        out.on('finish', () => {
-          out.close(() => {
-            try {
-              const size = fs.statSync(partPath).size;
-              if (size < STT_MODEL_MIN_BYTES || (total > 0 && size !== total)) {
-                fail(new Error(`Model download incomplete (${size} bytes) — try again.`));
-                return;
-              }
-              fs.renameSync(partPath, finalPath);
-              onProgress?.({ phase: 'model', message: 'Speech model ready.', downloaded: size, total: size, pct: 100 });
-              resolve();
-            } catch (e) {
-              fail(e instanceof Error ? e : new Error(String(e)));
-            }
-          });
-        });
-        out.on('error', fail);
-        res.on('error', fail);
-      },
-      fail,
-    );
-  }).finally(() => {
-    downloadInFlight = null;
-  });
+  downloadInFlight = downloadFile(STT_MODEL_URL, {
+    dest: sttModelPath(),
+    minBytes: STT_MODEL_MIN_BYTES,
+    onProgress: (p) =>
+      onProgress?.({
+        phase: 'model',
+        message: 'Downloading speech model…',
+        downloaded: p.downloaded,
+        total: p.total,
+        pct: p.pct,
+      }),
+  })
+    .then(() => {
+      if (!sttModelPresent()) throw new Error('Speech model download did not produce a usable file.');
+      onProgress?.({ phase: 'model', message: 'Speech model ready.', pct: 100 });
+    })
+    .finally(() => {
+      downloadInFlight = null;
+    });
 
   return downloadInFlight;
 }
@@ -461,13 +433,27 @@ export function registerVoiceSttHandlers(getWindow: () => BrowserWindow | null):
     envelope(() => getSttStatus(Boolean(opts?.refresh))),
   );
 
+  /**
+   * Fetch the model on its own.
+   *
+   * This is the half of setup that always works: no package manager, no root,
+   * no admin prompt. Splitting it out means a user on a locked-down machine can
+   * still obtain the model, and the remaining blocker (the binary) is a single
+   * command they can see in `status.installHint`.
+   */
+  ipcMain.handle('voice:sttDownloadModel', () =>
+    envelope(() => downloadSttModel(sendProgress).then(() => getSttStatus(true))),
+  );
+
   let setupInFlight: Promise<SttStatus> | null = null;
   ipcMain.handle('voice:sttSetup', () =>
     envelope(() => {
       if (!setupInFlight) {
         setupInFlight = (async () => {
-          if (!detectWhisperBinary(true)) await installWhisperBinary(sendProgress);
+          // Model first: it is the unprivileged half, so a machine with no
+          // package manager still ends up with the file on disk.
           if (!sttModelPresent()) await downloadSttModel(sendProgress);
+          if (!detectWhisperBinary(true)) await installWhisperBinary(sendProgress);
           return getSttStatus(true);
         })().finally(() => {
           setupInFlight = null;

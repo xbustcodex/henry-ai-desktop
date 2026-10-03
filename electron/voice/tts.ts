@@ -1,21 +1,19 @@
 /**
- * Voice TTS — Henry's speaking voice, with an engine ladder.
+ * Voice TTS — the assistant's speaking voice, with an engine ladder.
  *
- *   1. ElevenLabs — auto-enabled when an ElevenLabs API key is saved (providers
- *      table, encrypted like every other provider key) and the request succeeds.
- *      Returns an mp3 Buffer the renderer plays through an <audio> element.
- *   2. Platform-specific local voice — macOS `say`, Linux eSpeak, or Web Speech API fallback
+ * Three engines, in order of what the user actually configured:
  *
- * Channels (uniform `{ ok, result | error }` envelope, matching machines/ipc.ts):
- *   voice:speak        — { text, engine?: 'auto'|'local'|'elevenlabs' }
- *                        local → speaks + resolves when done ({ engine:'local', spoke:true })
- *                        elevenlabs → { engine:'elevenlabs', audio: Buffer }
- *                        elevenlabs failure falls back to local ({ fellBack:true })
- *   voice:stopSpeaking — kills any in-flight speech process
- *   voice:ttsStatus    — active engine, key presence, configured voices, available engines
+ *   1. ElevenLabs — hosted and paid, used when a key is saved (providers table,
+ *      encrypted like every other provider key). Returns an mp3 Buffer.
+ *   2. Piper — the local neural engine in `localTts.ts`. Free, offline, and the
+ *      only local engine that exists on Windows, Linux AND macOS.
+ *   3. `say` (macOS) / eSpeak (Linux) — the older, lower-quality local voices.
  *
- * Settings keys: voice_tts_engine (auto|local|elevenlabs), voice_tts_voice
- * (ElevenLabs voice id), voice_say_voice, voice_say_rate, voice_espeak_voice, voice_espeak_rate.
+ * With none able to run, the call falls back to the renderer's Web Speech API
+ * and says so: reporting an engine the app cannot actually use is the defect
+ * row 6.2 was reopened for.
+ *
+ * `registerVoiceTtsHandlers` is the single entry point for every TTS channel.
  */
 
 import { ipcMain } from 'electron';
@@ -111,6 +109,16 @@ export async function speak(
 
 // ── IPC registration ────────────────────────────────────────────────────────
 
+/**
+ * Every TTS channel the app exposes.
+ *
+ * The two extra engines register from here rather than from `electron/main.ts`
+ * so the whole TTS surface stays in one place: `main.ts` already calls
+ * `registerVoiceTtsHandlers(db)`, and adding a second voice module there for
+ * no reason is how channels end up half-registered.
+ */
 export function registerVoiceTtsHandlers(db: Database.Database): void {
   registerPlatformTtsHandlers(db);
+  registerLocalTtsHandlers();
+  registerElevenLabsHandlers(db);
 }

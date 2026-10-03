@@ -1,15 +1,19 @@
 /**
- * Henry AI — Voice layer (renderer side).
+ * Voice layer (renderer side).
  *
  * Talk-and-listen wrapper over the Electron voice IPC:
  *   - Listening: MediaRecorder → voice:transcribe (FREE local whisper.cpp).
- *   - Speaking: voice:speak — macOS `say` by default (speaks from the main
- *     process), ElevenLabs mp3 buffer (played here via an Audio element) when
- *     a key is saved. Everything works offline at $0.
+ *   - Speaking: voice:speak — the local neural engine (Piper) when installed,
+ *     else macOS `say` / Linux eSpeak, else ElevenLabs mp3 when a key is saved.
+ *     Everything works offline at $0 without a key.
  *
  * Also owns the shared voice UI state (zustand): idle / listening /
  * transcribing / speaking, plus the persisted "voice replies" + hands-free
  * toggles. Web mode (no Electron IPC) degrades to the legacy ttsService.
+ *
+ * "Henry AI" in the mic-permission strings below is the APPLICATION name the
+ * OS lists under Privacy & Security, not the assistant's persona — it must
+ * match what the user sees in System Settings, so it is not configurable.
  */
 
 import { create } from 'zustand';
@@ -95,8 +99,34 @@ export async function getVoiceSttStatus(refresh = false): Promise<HenryVoiceSttS
 }
 
 /**
- * One-time free-voice setup: installs whisper-cpp (brew) if missing, then
- * downloads the ~148MB base.en model. Progress arrives via onProgress.
+ * Fetch the ~148 MB speech model on its own.
+ *
+ * The download needs no package manager and no admin rights, so it is offered
+ * separately from the binary install. On a machine where installing
+ * whisper-cpp is impossible — no brew, no root, no winget — this is the half
+ * that still succeeds, and it leaves exactly one blocker the user can see.
+ */
+export async function downloadVoiceSttModel(
+  onProgress?: (p: HenryVoiceSetupProgress) => void,
+): Promise<HenryVoiceSttStatus> {
+  if (!window.henryAPI?.voiceSttDownloadModel) {
+    throw new Error('Downloading the speech model needs the desktop app.');
+  }
+  const unsub = onProgress ? window.henryAPI.onVoiceSttSetupProgress?.(onProgress) : undefined;
+  try {
+    const res = await window.henryAPI.voiceSttDownloadModel();
+    if (!res.ok) throw new Error(res.error);
+    useVoiceStore.getState().setSttReady(res.result.ready);
+    return res.result;
+  } finally {
+    unsub?.();
+  }
+}
+
+/**
+ * One-time free-voice setup: downloads the base.en model, then installs
+ * whisper-cpp with the host platform's package manager if it is still missing.
+ * Progress arrives via onProgress.
  */
 export async function runVoiceSetup(
   onProgress?: (p: HenryVoiceSetupProgress) => void,
@@ -173,7 +203,7 @@ export async function ensureMicAccess(): Promise<void> {
     throw new Error(
       access.status === 'not-determined' || access.status === 'unknown'
         ? 'Microphone permission was not granted — try the mic button again and click OK on the system prompt.'
-        : 'Microphone access is off for Henry. I opened System Settings → Privacy & Security → Microphone — flip Henry AI on, then try again.',
+        : 'Microphone access is off. I opened System Settings → Privacy & Security → Microphone — flip Henry AI on, then try again.',
     );
   }
 }
