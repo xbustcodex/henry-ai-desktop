@@ -51,13 +51,13 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 | 3 Creators & Media | 14 | 12 | 0 | 1 | 0 | 0 | 0 | 1 | 0 |
 | 4 Agents & Tools | 20 | 12 | 0 | 4 | 0 | 3 | 0 | 0 | 1 |
 | 5 Automation | 9 | 7 | 0 | 1 | 0 | 1 | 0 | 0 | 0 |
-| 6 Voice & Input | 13 | 6 | 0 | 5 | 0 | 1 | 0 | 0 | 1 |
+| 6 Voice & Input | 13 | 7 | 0 | 4 | 0 | 1 | 0 | 0 | 1 |
 | 7 Computer Control | 10 | 7 | 1 | 2 | 0 | 0 | 0 | 0 | 0 |
 | 8 Companion | 9 | 6 | 0 | 3 | 0 | 0 | 0 | 0 | 0 |
 | 9 Files & Memory | 10 | 6 | 0 | 1 | 0 | 3 | 0 | 0 | 0 |
 | 10 Integrations | 11 | 5 | 0 | 5 | 0 | 0 | 0 | 0 | 1 |
-| 11 Settings & System | 15 | 9 | 0 | 4 | 0 | 1 | 0 | 0 | 1 |
-| **TOTAL** | **130** | 86 | 1 | 28 | 0 | 9 | 1 | 1 | 4 |
+| 11 Settings & System | 15 | 10 | 0 | 3 | 0 | 1 | 0 | 0 | 1 |
+| **TOTAL** | **130** | 88 | 1 | 26 | 0 | 9 | 1 | 1 | 4 |
 
 > Generated from the rows by `scripts/parity-summary.mjs`. Do not edit these numbers by hand —
 > edit the row status and re-run `node scripts/parity-summary.mjs --write`.
@@ -201,7 +201,7 @@ plus the syncBridge tool router. **Retain our extra tools.**
 | 6.8 | Live Caption (Typewriter) | `ChatInput.tsx` | `interimResults = true` → `interimTranscript` | — | — | — | — | **installed pkg: implementation confirmed in source (`interimTranscript` state, `rec.interimResults = true`); not exercised with a live microphone in this pass** | **IMPLEMENTED / NOT LIVE VERIFIED** |
 | 6.9 | Voice Integrations | ElevenLabs | `voiceTtsStatus` engine choice | **no ElevenLabs credential, so that engine cannot be proven** | Card 7.8 covers the `/IM say` boundary | — | — | **installed pkg: the ElevenLabs engine option renders and `sayVoice`/`sayRate` are honoured (Samantha @175). The paid engine remains unproven** | **PARTIAL** |
 | 6.10 | Voice diagnostics | `runDiagnostic` | `voiceDiagnostics` | — | Card 7.6 skip-logic reuse | — | — | **CLOSED — installed pkg: a real diagnostic ran and returned checks, including `Homebrew → {category:not-applicable, status:ok, detail:Not applicable on this platform}`, confirming the platform-skip logic. This row previously read 'missing' despite the work being done — stale** | **CLOSED** |
-| 6.11 | spokenAssistantName | **the 12 variants are correctly reparameterised, but the WIRED path does not honour the setting** | `electron/voice/greeting.ts` | all 12 variants use `{name}`; Henry is the default | — | `greetingAssistantName.test.ts` exercises all 12 with 'Zorblax' and passes — **but it calls `renderGreeting(..., 'Zorblax')` directly, so it proves the renderer, not the wiring** | — | **installed pkg, LIVE: FAILED.** Setting `brand_name` to 'Zorblax' and clearing the greeting cache returned the unchanged greeting. A second probe showed the assistant slot rendering the OWNER name ('JARVIS here') rather than the configured name. `brand_name` is not the key the greeting reads; `creator_orb` — which the code consults — is a JSON blob describing the orb (skin/speed/accent), not an assistant name, so no setting currently drives it. **This is the 'a unit test passing is not proof' trap: the test exercises the function directly and never goes through the IPC path that the user reaches.** Both settings were restored to their defaults afterwards | **PARTIAL — renderer proven, wiring does not honour any setting** |
+| 6.11 | spokenAssistantName | **RESOLVED — hardcoded in all 12 variants, then parameterised but wired to nothing** | `electron/voice/greeting.ts` + `src/henry/assistantName.ts` | `assistant_name` in the settings contract, default `Henry`, one resolver shared by main and renderer | all 12 variants, 4 periods and the per-day seed unchanged | 15 wiring tests through the real handlers + 16 resolver tests; fail-before verified (reverting the resolver fails 7) | DB file closed and reopened to prove persistence | **installed pkg, LIVE: `assistant_name=Zorblax` -> `'Still going, JARVIS. Zorblax is awake and ready.'`; RESTARTED Henry -> still Zorblax; restored -> `'Still going, JARVIS. Henry is awake and ready.'` Owner `{address}` (JARVIS) preserved and independent. Three competing hardcoded identities routed through the resolver, including CreatorsPanel's orb Name field, which wrote only the orb blob and so changed nothing audible** | **CLOSED — LIVE-VERIFIED** |
 | 6.12 | autoplayPolicy override | `electron/main.ts:108` | `autoplayPolicy: 'no-user-gesture-required'` | — | — | — | — | **CLOSED — installed pkg: the override is present on the main window with the regression comment explaining that Chromium blocks playback once the user gesture expires; an un-gestured `audio.play()` was issued successfully** | **CLOSED** |
 | 6.13 | Hosted voice router | cloud router | — | — | — | — | hosted third-party SaaS | **COMMERCIAL BOUNDARY** |
 
@@ -295,11 +295,11 @@ guarding, `_denyDangerous`).
 | 11.5 | Dependency Checks | dependency probe | diagnostic dependency category | — | Card 7.6 skip-logic | — | — | **CLOSED — installed pkg: the dependency checks return real results and correctly mark platform-irrelevant tools not-applicable** | **CLOSED** |
 | 11.6 | Update System | `electron-updater` | `checkForUpdates` / `installUpdate` / `onUpdateAvailable` / `onUpdateDownloaded` | — | — | — | — | **installed pkg: the full updater surface exists and `autoUpdater` is configured in main. Deliberately NOT exercised — verifying an updater by invoking it would download and install a binary** | **IMPLEMENTED / NOT LIVE VERIFIED** |
 | 11.7 | Export / Import | `exportBackup` | export + import | — | — | — | — | **CLOSED — installed pkg: `exportBackup` and `sessionExport` are exposed (Card 9.8)** | **CLOSED** |
-| 11.8 | Security Settings | was MISSING | `securityPolicy.ts` + IPC boundary | — | 11 switches, each gating a named main-process path; **approval bound to a SHA-256 fingerprint of the payload** so consent for `ls` cannot cover `rm -rf`; live tool-tier counts derived from the registry | 44 boundary tests + 161 in slice | security regression re-run | `confirmDeleteOutsideHome` is exported and defaulted but **has no call site yet — a switch that currently changes UI state only** | **PARTIAL — mounted and real, one switch ungated** |
+| 11.8 | Security Settings | `securityPolicy.ts` + boundary + panels | 10 switches each gating a named main-process path; approval bound to a SHA-256 fingerprint of the sanitised payload | — | 161 slice tests | **installed pkg, LIVE: all 4 filesystem confinement probes REFUSED in 5-8 ms** | **`confirmDeleteOutsideHome` REMOVED** — proven semantically redundant (evaluateDeleteRequest refuses an outside-home target unconditionally before `confirmed` is consulted; confineToHome never produces one), so it could only ever add attribution, never permission. Wiring it would have meant weakening confinement to make a toggle look live. The seven destructive `computer:*` schemas were kept. **Two regressions found by the reachability audit and fixed:** `securityApproveChannel` had ZERO callers, so five gated channels were permanently refused on every default install — HQPanel shell auto-run and PrinterPanel G-code were dead behind a swallowed `.catch`; a real approval flow now exists. `appLock` had no unlock screen, so enabling it bricked the app; an AppLockGate now exists. Mutation: removing the fileDelete schema fails 12; bypassing confinement alone fails only 1 (the realpath check catches everything independently); bypassing both fails 5 | **CLOSED — live-verified; 10 switches, 0 dead** |
 | 11.9 | Privacy Controls | was MISSING | same | — | persistence switches + real DELETE with row counts | as 11.8 | — | `persistMemory` gates 24 memory write handlers, each returning its own success envelope without writing; **reads deliberately NOT gated**, proven by a test | **CLOSED (implemented + test-proven; live acceptance not yet run)** |
 | 11.10 | Logs & Debug Tools | was health-scoped | `appLog.ts` + `consoleCapture.ts` | — | general viewer, export, retention; **redaction at CAPTURE** so a secret is never written | 161 in slice | — | **self-caught bug: nothing called `capture()`, so the Logs panel would have rendered empty forever in production. Fixed with a boot-time console wrapper** | **CLOSED (implemented + test-proven; live acceptance not yet run)** |
 | 11.11 | Typed settings + change event | `settingsContract.ts` | zod settings contract | — | — | **contract tests** | — | **CLOSED — settings contract is zod-typed and tested** | **CLOSED** |
-| 11.12 | Zod validation on every IPC channel | was recorded CLOSED and was wrong | `installIpcBoundary()` wraps `ipcMain.handle` at MODULE SCOPE | — | zod pinned ^3.25.76 (was transitive); boundary covers all channels by construction | 161 in slice | — | **MEASURED by `scripts/ipc-coverage.mjs`: 27/355 (7.6%) → 233/409 (57.0%), per channel, orphaned schemas 0.** memory.ts 96/100, sessionStore 18/18, integrations 5/5. 176 channels still on baseline sanitisation only | **PARTIAL — measurable, not exhaustive** |
+| 11.12 | Zod validation on every IPC channel | was recorded CLOSED and was wrong | `installIpcBoundary()` wraps `ipcMain.handle` at MODULE SCOPE | — | zod pinned ^3.25.76; 161 slice tests | **installed pkg, LIVE: malformed payloads rejected with `validationError:true` at the boundary** | **MEASURED per channel by `scripts/ipc-coverage.mjs`, orphaned schemas 0.** The audit found the seven destructive `computer:*` file channels had NO schema at all, and that a generic `invoke(channel,...)` preload passthrough made every registered channel reachable regardless of whether preload named it — so those schemas were the ONLY validation those channels received, not defence in depth. **The passthrough is removed** and its three callers migrated to named bridges | **PARTIAL — measurable at 57.0%, not exhaustive** |
 | 11.13 | App quit | was MISSING | `app:quit` | — | graceful shutdown with active-work surfacing and a two-step force | tested | — | mounted in Settings | **CLOSED (implemented + test-proven; live acceptance not yet run)** |
 | 11.14 | Startup failure screen | failure banner | `startupGetFailure` / `StartupFailureBanner` | — | — | — | — | **installed pkg, LIVE: `startupGetFailure()` → `null` and `runtimeGetStatus()` → `bootFailed:false`, confirming the banner's hide-path on a healthy boot. **The failure path itself was not injected — forcing a boot failure risks corrupting the installation** | **PARTIAL — healthy path verified live, failure path not injected** |
 | 11.15 | Auth / licensing / credits / telemetry | — | — | — | — | — | hosted commercial service | **COMMERCIAL BOUNDARY** |
@@ -658,13 +658,13 @@ All of these are assigned to sub-agents and being completed in this run.
 
 | Row | Gap | Work |
 |---|---|---|
-| 6.11 | Assistant name reached no setting | `assistant_name` in the settings contract, single resolver, Settings field, three competing hardcoded identities routed through it. **Landed — awaiting live test.** |
-| 11.8 | `confirmDeleteOutsideHome` gated nothing | Proved semantically redundant with confinement and **removed the toggle** rather than weakening confinement to make it look live. Two swallowed refusals fixed in the same pass. **Landed.** |
-| 4.16 | Lessons ranked as ordinary memory | Type-aware, trigger-conditioned ranking + a self-healing index. **Landed — awaiting live test.** |
-| 4.17 | Memory tools not proven authoritative | Verified against the real store. **Landed.** |
-| 8.7 | Weekly summary never exercised | **Landed.** |
-| 8.8 | Cross-device search had no peer semantics | Peer-absent reporting instead of a fake empty result. **Landed.** |
-| 11.12 | 176 channels on baseline sanitisation | Measured at 57.0%; the seven destructive `computer:*` file channels had **no schema at all** and are now covered. **Partially landed.** |
+| Row 6.11 | Assistant name reached no setting | `assistant_name` in the settings contract, single resolver, Settings field, three competing hardcoded identities routed through it. **Landed — awaiting live test.** |
+| Row 11.8 | `confirmDeleteOutsideHome` gated nothing | Proved semantically redundant with confinement and **removed the toggle** rather than weakening confinement to make it look live. Two swallowed refusals fixed in the same pass. **Landed.** |
+| Row 4.16 | Lessons ranked as ordinary memory | Type-aware, trigger-conditioned ranking + a self-healing index. **Landed — awaiting live test.** |
+| Row 4.17 | Memory tools not proven authoritative | Verified against the real store. **Landed.** |
+| Row 8.7 | Weekly summary never exercised | **Landed.** |
+| Row 8.8 | Cross-device search had no peer semantics | Peer-absent reporting instead of a fake empty result. **Landed.** |
+| Row 11.12 | 176 channels on baseline sanitisation | Measured at 57.0%; the seven destructive `computer:*` file channels had **no schema at all** and are now covered. **Partially landed.** |
 
 ### ACTIONABLE NOW — found by the reachability audit, assigned this run
 
@@ -687,17 +687,17 @@ four dead ends. Two of these are regressions this campaign introduced.
 |---|---|
 | 2.3, 2.4, 11.1 | OpenAI / Anthropic API key. Adapter shape is test-proven; no live call was ever made and none was faked. |
 | 10.1, 10.2 | Google account. Accounts connected before `gmail.send`/`drive.file` were added will 403 — reconnect required. |
-| 10.4 | Discord bot token plus a server with the bot invited and Message Content enabled. |
+| Row 10.4 | Discord bot token plus a server with the bot invited and Message Content enabled. |
 | 10.6, 10.11 | Upstream OAuth leg needs a real Google credential. |
-| 6.9 | ElevenLabs API key. |
-| 6.2 | Piper binary for local neural TTS; the engine is implemented and reports honestly when absent. |
+| Row 6.9 | ElevenLabs API key. |
+| Row 6.2 | Piper binary for local neural TTS; the engine is implemented and reports honestly when absent. |
 | 6.3, 6.4 | Local STT is installed and live-verified (`whisper-cli` plus a real `ggml-base.en.bin`); the remaining gap is a live microphone session. |
-| 6.8 | Physical microphone for interim/caption results. |
-| 7.3 | Live hardware test drives the **real mouse and keyboard**; acceptance is possible here but must be announced first. |
+| Row 6.8 | Physical microphone for interim/caption results. |
+| Row 7.3 | Live hardware test drives the **real mouse and keyboard**; acceptance is possible here but must be announced first. |
 | 5.3, 5.4 | A routine must actually execute; that fires real scheduled work and leaves residue, so it is a deliberate decision rather than a silent probe. |
-| 9.10 | Session lifecycle create→resume needs generated session state. |
-| 11.6 | Updater verification means installing a binary. Left to an explicit decision. |
-| 11.14 | Healthy hide-path verified; forcing a boot failure risks corrupting the installation. |
+| Row 9.10 | Session lifecycle create→resume needs generated session state. |
+| Row 11.6 | Updater verification means installing a binary. Left to an explicit decision. |
+| Row 11.14 | Healthy hide-path verified; forcing a boot failure risks corrupting the installation. |
 | **8.1** | **Deferred physical Android QR bug.** LAN discovery, binding and the pair-token guard are fixed; the device still dies after first render and the boundary is undiagnosed. Must not stop other work. |
 
 ### Deliberately not exercised
