@@ -47,7 +47,7 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 | 1 UI & Core | 10 | 10 | 0 | 0 | 0 |
 | 3 Creators & Media | 14 | 13 | 0 | 0 | 0 |
 | 4 Agents & Tools | 20 | 2 | 0 | 9 | 4 |
-| 5 Automation | 9 | 2 | 0 | 3 | 0 |
+| 5 Automation | 9 | 3 | 0 | 2 | 0 |
 | 6 Voice & Input | 13 | 3 | 0 | 3 | 2 |
 | 7 Computer Control | 16 | 0 | 0 | 3 | 0 |
 | 8 Companion | 9 | 0 | 0 | 3 | 0 |
@@ -161,7 +161,7 @@ plus the syncBridge tool router. **Retain our extra tools.**
 | 5.6 | Goal Planning | goal schema (`contracts.ts`) | `src/components/goals/GoalsPanel.tsx` (414 lines) + `henry/commitmentStore` + `brain/reflectiveMind` | **already implemented and richer than the reference** — goals + commitments tabs, priority/emotional/strategic significance scoring, a coaching function, and neglected-commitment detection. The gap was discoverability: Goals sat in the hidden `···` group AND shared `◎` with Reminders | moved to the primary rail with its own icon | typecheck + 499 suite | **CRUD verified live on the installed build: create, read, update all work** | **installed pkg: reachable in the visible rail; panel renders with commitments** | **COMPLETE (exceeds reference)** |
 | 5.7 | Run management | runs + attachments + deep-link | runs only | no attachments, no notification deep-link | partial |
 | 5.8 | Native notifications | `automation-notifications.ts`; OS permission 6-state enum; click routes to the run; per-job all/failures/none with reasons | `electron/ipc/automationNotifications.ts`; scheduler emits on success and failure/abort | the main process routed the click correctly and **nothing subscribed**, so it went nowhere | click routing into the exact run; requests queued when no window is listening yet; notify mode with an explicit reason per suppression; **App.tsx now drains the queue on mount and follows live clicks, navigating to the run** | **11 tests**: click routing, window restore/focus, no-window queue, ordering | — | **installed pkg: permission reports the OS value; fires; failures-only suppresses; listener subscribes** | **CLOSED** |
-| 5.9 | Automation ideas | renderer `ideas` tab | none | portable | missing |
+| 5.9 | Automation ideas | renderer `ideas` tab beside the automations list — *"Start quickly with ready-made ideas"* (`automation-tab`, `ideas`) | `src/henry/routineTemplates.ts` + an Ideas tab in `RoutinesPanel.tsx` | **none** — ours opened a blank form expecting the user to know cron syntax | 8 ready-made templates (Morning briefing, Daily review, Weekly review, Client follow-up check, Inbox triage, Quotes going cold, Machine and filament check, Capture review), category filter, one-click start through the same `addRoutine` path as the form so behaviour cannot drift | **14 tests**: unique ids, non-empty copy, cron validity, "at HH:MM" templates are not hourly, weekday templates are not weekend-bound, filtering, and the exact `addRoutine` input shape | — | **installed pkg: Ideas (8) tab renders all 8 cards with 8 "Start this" buttons and 4 categories; starting one created a real routine — name "Morning briefing", cron `0 7 * * 1-5`, enabled, prompt present; deleted again so no test data was left** | **CLOSED** |
 
 ---
 
@@ -253,7 +253,7 @@ guarding, `_denyDangerous`).
 | 10.5 | Local Model Support | paid: **none** | ours Ollama/Groq/OpenCode | keep | complete |
 | 10.6 | External APIs | paid Composio | ours relay | keep | partial |
 | 10.7 | Composio toolkits | `contracts.ts:426-975` | — | — | **commercial** |
-| 10.8 | Toolkit logo resolution | `integration-logos.ts` magic-byte sniffing + SimpleIcons→jsDelivr→Iconify→unavatar→favicon chain | `src/utils/toolIcons.ts` | — | name in, renderable icon out; callers never know where an icon lives. Cached, lazy, every step degrades rather than throwing | **13 tests**: name normalisation across spellings, chain ordering, unknown-service fallback, cache, chain walking to exhaustion, and magic-byte sniffing for PNG/JPEG/GIF/ICO/WebP plus HTML-error-page detection | — | packaged | **CLOSED** |
+| 10.8 | Toolkit logo resolution | `integration-logos.ts` magic-byte sniffing + SimpleIcons→jsDelivr→Iconify→unavatar→favicon chain | `src/utils/toolIcons.ts` + `src/components/marketplace/ToolIcon.tsx`, wired into Marketplace cards | the module existed with tests but **had no consumer** — built, not usable | name in, renderable icon out. Cached, lazy. `<img>` walks the chain on error and ends at an initial-letter tile, so a 404 renders as a listing without an icon rather than a broken image | **13 tests**: name normalisation across spellings, chain ordering, unknown-service fallback, cache, chain walking to exhaustion, magic-byte sniffing for PNG/JPEG/GIF/ICO/WebP and HTML-error-page detection | — | **installed pkg: Marketplace cards render the icon slot; \`app\` / \`terminal\` have no SimpleIcons entry, the chain ran, Iconify returned 404, letter fallback rendered — 6 letter tiles, 0 broken images. CDN reachable (\`cdn.simpleicons.org\` → 200), so the success path is test-verified rather than exercised by this machine's listings** | **CLOSED (wired + live)** |
 | 10.9 | OpenCode Integration | — | ours, now working | keep | complete |
 | 10.10 | Prime Tech Marketplace | ours | ours | keep | complete |
 | 10.11 | OAuth PKCE surfaces | ours googleAuth | no UI to complete sign-in | surface | partial |
