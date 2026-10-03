@@ -16,6 +16,7 @@
  * than a live microphone so the whole state machine — wake, cooldown, silence,
  * STT-absent — is unit-testable without hardware.
  */
+import { DEFAULT_ASSISTANT_NAME } from './assistantName';
 
 /** How long after a wake the next wake is ignored. Unchanged from the original. */
 export const COOLDOWN_MS = 4000;
@@ -32,10 +33,13 @@ export const WAKE_PATTERNS: readonly RegExp[] = [
 ];
 
 /**
- * The wake word itself, as spoken. Extracted so the engine can be driven from a
- * configured assistant name rather than only the hardcoded one above.
+ * The wake word an unconfigured install listens for.
+ *
+ * Derived from `DEFAULT_ASSISTANT_NAME` so renaming the assistant and
+ * re-reading the default wake word can never disagree. A CONFIGURED name is
+ * resolved at match time by `wakeWord.ts` via `patternsForWakeWord`.
  */
-export const DEFAULT_WAKE_WORD = 'henry';
+export const DEFAULT_WAKE_WORD = DEFAULT_ASSISTANT_NAME.toLowerCase();
 
 export interface WakeMatch {
   /** Text after the wake word, trimmed. Empty when the utterance was just the name. */

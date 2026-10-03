@@ -7,10 +7,11 @@
  * and no AI inference: a greeting is a fixed phrase, and paying for an LLM to
  * generate it would be wasteful.
  *
- * Both names come from settings that already exist. `{address}` is the owner
- * (`owner_name`); `{name}` is the assistant, read from `creator_orb` via
- * `readAssistantName`, so the greeting can never disagree with the name the
- * power-on intro shows.
+ * `{address}` is the OWNER (`owner_name`); `{name}` is the ASSISTANT, resolved
+ * by `assistantNameFrom` in `src/henry/assistantName.ts` from the
+ * `assistant_name` setting. That module is the only place the assistant's own
+ * name is decided — this file used to read `creator_orb`, which is an orb
+ * appearance blob, so no setting ever actually reached the greeting.
  */
 
 import { app, ipcMain } from 'electron';
@@ -20,6 +21,7 @@ import crypto from 'crypto';
 import type Database from 'better-sqlite3';
 import { speak } from '../../src/platform/tts';
 import { withSpokenName } from '../../src/henry/spokenName';
+import { assistantNameFrom, normalizeAssistantName } from '../../src/henry/assistantName';
 
 /** Time-of-day buckets. */
 export type GreetingPeriod = 'morning' | 'afternoon' | 'evening' | 'lateNight';
@@ -29,8 +31,11 @@ export interface GreetingText {
   period: GreetingPeriod;
 }
 
-/** The name used when nothing has been configured — a default install. */
-export const DEFAULT_ASSISTANT_NAME = 'Henry';
+/**
+ * Re-exported so a caller already holding this module does not need a second
+ * import just to compare against the default.
+ */
+export { DEFAULT_ASSISTANT_NAME } from '../../src/henry/assistantName';
 
 /**
  * Twelve variants, three per period. `{address}` is the OWNER (the person
@@ -89,19 +94,6 @@ function addressFor(ownerName: string | null | undefined): string {
   return `, ${name}`;
 }
 
-/**
- * Normalise a configured assistant name for insertion into the greeting.
- *
- * An unconfigured, blank or whitespace-only name falls back to the default so
- * a default install reads exactly as it always did. The cap matches the orb
- * setting's own 32-character limit; anything longer is a paste accident, not a
- * name someone wants spoken.
- */
-export function assistantNameFor(raw: string | null | undefined): string {
-  const name = (raw ?? '').trim().slice(0, 32).trim();
-  return name || DEFAULT_ASSISTANT_NAME;
-}
-
 /** Render one variant template. Both placeholders are always resolved. */
 export function renderGreeting(
   template: string,
@@ -110,7 +102,7 @@ export function renderGreeting(
 ): string {
   return template
     .replace('{address}', addressFor(ownerName))
-    .replace(/\{name\}/g, assistantNameFor(assistantName));
+    .replace(/\{name\}/g, normalizeAssistantName(assistantName));
 }
 
 export function buildGreetingText(
@@ -155,25 +147,19 @@ function readSetting(db: Database.Database, key: string): string {
 }
 
 /**
- * The authoritative assistant name.
+ * The authoritative assistant name, straight out of the settings table.
  *
- * `creator_orb` is where the app already stores the assistant's name — the
- * power-on intro shows it and CreatorsPanel edits it. A second
- * `brand_name`-style key would leave the user with two names that disagree, so
- * the greeting reads the setting that already exists. An absent, unparseable
- * or blank orb blob falls back to the default.
+ * Reads `assistant_name` — the key declared in `settingsContract.ts` and
+ * written by the voice settings panel — and hands the whole settings map to
+ * the one resolver in `src/henry/assistantName.ts`. Nothing here parses a
+ * blob or guesses a key: that is exactly what went wrong before, when the
+ * greeting consulted `creator_orb` and no setting could ever reach it.
  */
 export function readAssistantName(db: Database.Database): string {
-  try {
-    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('creator_orb') as
-      | { value: string }
-      | undefined;
-    if (!row?.value) return DEFAULT_ASSISTANT_NAME;
-    const orb = JSON.parse(row.value) as { assistantName?: unknown };
-    return assistantNameFor(typeof orb.assistantName === 'string' ? orb.assistantName : null);
-  } catch {
-    return DEFAULT_ASSISTANT_NAME;
-  }
+  return assistantNameFrom({
+    assistant_name: readSetting(db, 'assistant_name'),
+    creator_orb: readSetting(db, 'creator_orb'),
+  });
 }
 
 /** Read a cache file, treating a missing OR empty file as a miss. */

@@ -54,6 +54,11 @@ export const settingsSchema = {
 
   // ── Voice ───────────────────────────────────────────────────────────────
   owner_name: passthroughString.default(''),
+  // The assistant's own name — spoken by the greeting, matched by the wake
+  // word, shown in the voice panel. Defaults to "Henry" so an unconfigured
+  // install behaves exactly as it did before the key existed. Resolved
+  // through `assistantName.ts`, never re-derived at a call site.
+  assistant_name: passthroughString.default('Henry'),
   // Constrained, because this value branches behaviour: an unrecognised engine
   // would otherwise sail through a plain string schema and leave the caller
   // falling through to a branch the user never chose. The UI offers exactly

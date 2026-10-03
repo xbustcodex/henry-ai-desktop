@@ -25,10 +25,13 @@ import { Capacitor } from '@capacitor/core';
 import {
   createDesktopWakeEngine,
   matchWakeWord,
+  patternsForWakeWord,
   WakeCooldown,
   type DesktopWakeEngine,
   type DesktopWakeUnavailable,
 } from './wakeWordDesktop';
+import { assistantNameFrom } from './assistantName';
+import { useStore } from '../store';
 import {
   cancelVoiceRecording,
   startVoiceRecording,
@@ -36,6 +39,18 @@ import {
   transcribeLocal,
   voiceIpcAvailable,
 } from './voice';
+
+/**
+ * The patterns the wake word currently listens for.
+ *
+ * Read fresh on every match rather than captured at start-up, so renaming the
+ * assistant takes effect on the next utterance without a restart. It resolves
+ * through the same function the spoken greeting uses, so the greeting and the
+ * wake word can never answer to different names.
+ */
+function wakePatterns(): readonly RegExp[] {
+  return patternsForWakeWord(assistantNameFrom(useStore.getState().settings));
+}
 
 export type AmbientNote = {
   text: string;
@@ -183,6 +198,11 @@ class WakeWordManager {
         const blob = await stopVoiceRecording();
         return blob ? await blob.arrayBuffer() : null;
       },
+      // Match on the configured name, resolved from the settings the same way
+      // the greeting resolves it — not the built-in literal. Snapshotted when
+      // listening starts, so a rename mid-session takes effect the next time
+      // the wake listener is started.
+      patterns: wakePatterns(),
       transcribe: (audio) => transcribeLocal(new Blob([audio])),
       onTranscript: (text) => this._recordNote(text),
       onWake: (match) => this._fireWake(match.query, match.fullTranscript),
@@ -355,7 +375,7 @@ class WakeWordManager {
 
     this._recordNote(text);
 
-    const match = matchWakeWord(text);
+    const match = matchWakeWord(text, wakePatterns());
     if (!match) return;
     if (!this.cooldown.tryAcquire()) return;
 

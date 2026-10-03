@@ -33,6 +33,13 @@ import LogsPanel from './LogsPanel';
 import { isMacOS, getPlatformName } from '../../utils/platform';
 import type { EndpointingSettings } from '../../henry/voiceEndpointing';
 import { getEndpointingSettings, saveEndpointingSettings } from '../../henry/voice';
+import {
+  ASSISTANT_NAME_SETTING_KEY,
+  DEFAULT_ASSISTANT_NAME,
+  MAX_ASSISTANT_NAME_LENGTH,
+  assistantNameFrom,
+  normalizeAssistantName,
+} from '../../henry/assistantName';
 
 import {
   CODER_ENGINE_LABELS,
@@ -652,6 +659,28 @@ function VoiceSection() {
   const [speakBusy, setSpeakBusy] = useState(false);
   const [listenTest, setListenTest] = useState<'idle' | 'recording' | 'transcribing'>('idle');
   const [listenResult, setListenResult] = useState<string | null>(null);
+  // The stored value is the truth; the draft is what the input is editing.
+  // `useEffect` re-syncs it when the setting changes elsewhere, so a save
+  // made in another panel is not silently clobbered by a stale draft.
+  const [assistantNameDraft, setAssistantNameDraft] = useState(assistantNameFrom(settings));
+  useEffect(() => setAssistantNameDraft(assistantNameFrom(settings)), [settings]);
+
+  /**
+   * Persist the assistant's own name, then drop the cached greeting audio.
+   * The cache is content-addressed on the rendered text, so a new name already
+   * misses — but clearing keeps a rename from leaving yesterday's voice on disk
+   * for the variants it no longer applies to.
+   */
+  const commitAssistantName = async () => {
+    const next = normalizeAssistantName(assistantNameDraft);
+    if (next === assistantNameFrom(settings)) {
+      setAssistantNameDraft(next);
+      return;
+    }
+    setAssistantNameDraft(next);
+    await saveVoiceSetting(ASSISTANT_NAME_SETTING_KEY, next);
+    await window.henryAPI.voiceGreetingClearCache?.();
+  };
 
   const refresh = async (refreshBinary = false) => {
     const [s, t] = await Promise.all([getVoiceSttStatus(refreshBinary), getVoiceTtsStatus()]);
@@ -725,7 +754,9 @@ function VoiceSection() {
   const testSpeaking = async () => {
     setSpeakBusy(true);
     try {
-      await voiceSpeak("Hi, it's Henry. This is how I sound.");
+      // Self-identifying, so it follows the configured name rather than a
+      // literal — this is the voice panel claiming to be the voice.
+      await voiceSpeak(`Hi, it's ${assistantNameFrom(settings)}. This is how I sound.`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Speaking test failed');
     } finally {
@@ -772,6 +803,25 @@ function VoiceSection() {
         sub={voiceSubtitle()}
       />
       <div className="space-y-4">
+        {/* ── Assistant identity ── */}
+        <div>
+          <label className={labelCls}>Assistant name</label>
+          <input
+            className={inputCls}
+            value={assistantNameDraft}
+            onChange={(e) => setAssistantNameDraft(e.target.value)}
+            onBlur={() => void commitAssistantName()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void commitAssistantName();
+            }}
+            maxLength={MAX_ASSISTANT_NAME_LENGTH}
+            placeholder={DEFAULT_ASSISTANT_NAME}
+          />
+          <p className="text-[10px] text-henry-text-muted mt-1">
+            What the greeting calls itself, and the name the wake word listens for. Leave it blank
+            to go back to {DEFAULT_ASSISTANT_NAME}.
+          </p>
+        </div>
         {/* ── Listening (STT) ── */}
         <div>
           <label className={labelCls}>Listening (speech-to-text)</label>

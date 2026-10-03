@@ -19,6 +19,12 @@ import type {
   CreatorTurn,
   OrbSettings,
 } from '../../global';
+import {
+  ASSISTANT_NAME_SETTING_KEY,
+  DEFAULT_ASSISTANT_NAME,
+  MAX_ASSISTANT_NAME_LENGTH,
+  normalizeAssistantName,
+} from '../../henry/assistantName';
 
 const cardCls = 'bg-henry-surface border border-henry-border/20 rounded-2xl p-4';
 const labelCls = 'block text-[11px] font-medium text-henry-text-muted mb-1';
@@ -110,9 +116,26 @@ export default function CreatorsPanel() {
     }
   };
 
+
   if (!demo || !orb) {
     return <div className="p-6 text-sm text-henry-text-muted">Loading demo mode…</div>;
   }
+  /**
+   * The orb's Name field is the same identity the greeting speaks, so it must
+   * land in the ONE authoritative setting rather than only inside the orb
+   * blob. Both are written: the blob because the intro stage renders it, the
+   * setting because everything that actually speaks or listens — the greeting,
+   * the wake word, the voice panel — reads the setting. Writing the blob alone
+   * is what made this name look configurable while changing nothing audible.
+   */
+  const saveAssistantName = async (raw: string) => {
+    const name = normalizeAssistantName(raw);
+    await saveOrb({ ...orb, assistantName: name });
+    await window.henryAPI.saveSetting?.(ASSISTANT_NAME_SETTING_KEY, name);
+    // The greeting cache is content-addressed on the rendered text, so a rename
+    // already misses — clearing just drops the previous name's audio promptly.
+    await window.henryAPI.voiceGreetingClearCache?.();
+  };
 
   return (
     <div className="p-5 space-y-4 overflow-y-auto">
@@ -253,7 +276,9 @@ export default function CreatorsPanel() {
             <input
               className="bg-henry-bg border border-henry-border/40 rounded-lg px-2 py-1 text-xs w-28"
               value={orb.assistantName}
-              onChange={(e) => void saveOrb({ ...orb, assistantName: e.target.value })}
+              maxLength={MAX_ASSISTANT_NAME_LENGTH}
+              placeholder={DEFAULT_ASSISTANT_NAME}
+              onChange={(e) => void saveAssistantName(e.target.value)}
             />
           </label>
           <label className="text-xs text-henry-text flex items-center gap-2">
