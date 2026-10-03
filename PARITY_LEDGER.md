@@ -51,13 +51,13 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 | 3 Creators & Media | 14 | 12 | 0 | 1 | 0 | 0 | 0 | 1 | 0 |
 | 4 Agents & Tools | 20 | 11 | 0 | 4 | 0 | 4 | 0 | 0 | 1 |
 | 5 Automation | 9 | 7 | 0 | 0 | 0 | 2 | 0 | 0 | 0 |
-| 6 Voice & Input | 13 | 7 | 0 | 4 | 0 | 1 | 0 | 0 | 1 |
+| 6 Voice & Input | 13 | 6 | 0 | 5 | 0 | 1 | 0 | 0 | 1 |
 | 7 Computer Control | 10 | 7 | 1 | 2 | 0 | 0 | 0 | 0 | 0 |
 | 8 Companion | 9 | 6 | 0 | 3 | 0 | 0 | 0 | 0 | 0 |
 | 9 Files & Memory | 10 | 4 | 0 | 0 | 0 | 6 | 0 | 0 | 0 |
 | 10 Integrations | 11 | 4 | 0 | 5 | 0 | 1 | 0 | 0 | 1 |
 | 11 Settings & System | 15 | 9 | 0 | 3 | 0 | 2 | 0 | 0 | 1 |
-| **TOTAL** | **130** | 82 | 1 | 24 | 0 | 17 | 1 | 1 | 4 |
+| **TOTAL** | **130** | 81 | 1 | 25 | 0 | 17 | 1 | 1 | 4 |
 
 > Generated from the rows by `scripts/parity-summary.mjs`. Do not edit these numbers by hand —
 > edit the row status and re-run `node scripts/parity-summary.mjs --write`.
@@ -201,7 +201,7 @@ plus the syncBridge tool router. **Retain our extra tools.**
 | 6.8 | Live Caption (Typewriter) | `ChatInput.tsx` | `interimResults = true` → `interimTranscript` | — | — | — | — | **installed pkg: implementation confirmed in source (`interimTranscript` state, `rec.interimResults = true`); not exercised with a live microphone in this pass** | **IMPLEMENTED / NOT LIVE VERIFIED** |
 | 6.9 | Voice Integrations | ElevenLabs | `voiceTtsStatus` engine choice | **no ElevenLabs credential, so that engine cannot be proven** | Card 7.8 covers the `/IM say` boundary | — | — | **installed pkg: the ElevenLabs engine option renders and `sayVoice`/`sayRate` are honoured (Samantha @175). The paid engine remains unproven** | **PARTIAL** |
 | 6.10 | Voice diagnostics | `runDiagnostic` | `voiceDiagnostics` | — | Card 7.6 skip-logic reuse | — | — | **CLOSED — installed pkg: a real diagnostic ran and returned checks, including `Homebrew → {category:not-applicable, status:ok, detail:Not applicable on this platform}`, confirming the platform-skip logic. This row previously read 'missing' despite the work being done — stale** | **CLOSED** |
-| 6.11 | spokenAssistantName | was hardcoded 'Henry' in all 12 variants | `electron/voice/greeting.ts` | — | all 12 variants reparameterised with `{name}`; Henry remains the default | `greetingAssistantName.test.ts` exercises all 12 with 'Zorblax', asserts no stale identity, tests `{address}` separately, and checks variant count and period selection are unchanged | — | **test-proven; the live Settings-UI → greeting → restart cycle was NOT run in this pass** | **PARTIAL — test-proven, not live-verified** |
+| 6.11 | spokenAssistantName | **the 12 variants are correctly reparameterised, but the WIRED path does not honour the setting** | `electron/voice/greeting.ts` | all 12 variants use `{name}`; Henry is the default | — | `greetingAssistantName.test.ts` exercises all 12 with 'Zorblax' and passes — **but it calls `renderGreeting(..., 'Zorblax')` directly, so it proves the renderer, not the wiring** | — | **installed pkg, LIVE: FAILED.** Setting `brand_name` to 'Zorblax' and clearing the greeting cache returned the unchanged greeting. A second probe showed the assistant slot rendering the OWNER name ('JARVIS here') rather than the configured name. `brand_name` is not the key the greeting reads; `creator_orb` — which the code consults — is a JSON blob describing the orb (skin/speed/accent), not an assistant name, so no setting currently drives it. **This is the 'a unit test passing is not proof' trap: the test exercises the function directly and never goes through the IPC path that the user reaches.** Both settings were restored to their defaults afterwards | **PARTIAL — renderer proven, wiring does not honour any setting** |
 | 6.12 | autoplayPolicy override | `electron/main.ts:108` | `autoplayPolicy: 'no-user-gesture-required'` | — | — | — | — | **CLOSED — installed pkg: the override is present on the main window with the regression comment explaining that Chromium blocks playback once the user gesture expires; an un-gestured `audio.play()` was issued successfully** | **CLOSED** |
 | 6.13 | Hosted voice router | cloud router | — | — | — | — | hosted third-party SaaS | **COMMERCIAL BOUNDARY** |
 
