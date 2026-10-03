@@ -22,6 +22,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { createElement } from 'react';
+import type { z } from 'zod';
 import PrinterPanel from './PrinterPanel';
 import {
   channelSchemas,
@@ -53,7 +54,7 @@ beforeEach(() => {
     printerDisconnect: () => Promise.resolve({ success: true }),
     printerSendGcode: (command: string) => {
       // The real boundary: schema-validate, fingerprint, spend the grant.
-      const cleaned = channelSchemas['printer:sendGcode'].parse(command);
+      const cleaned = (channelSchemas['printer:sendGcode'] as z.ZodTypeAny).parse(command);
       if (!consumeChannelApproval('printer:sendGcode', payloadFingerprint([cleaned]))) {
         return Promise.resolve(confirmationRequired('printer:sendGcode'));
       }

@@ -28,6 +28,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { createElement } from 'react';
+import type { z } from 'zod';
 import HQPanel from './HQPanel';
 import {
   channelSchemas,
@@ -61,7 +62,7 @@ beforeEach(() => {
     computerListWindows: () => Promise.resolve([]),
     computerGetVolume: () => Promise.resolve({}),
     computerRunShell: (params: { command: string; timeout?: number }) => {
-      const cleaned = channelSchemas['computer:runShell'].parse(params);
+      const cleaned = (channelSchemas['computer:runShell'] as z.ZodTypeAny).parse(params);
       if (!consumeChannelApproval('computer:runShell', payloadFingerprint([cleaned]))) {
         return Promise.resolve(confirmationRequired('computer:runShell'));
       }
