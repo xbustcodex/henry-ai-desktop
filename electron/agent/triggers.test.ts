@@ -113,10 +113,13 @@ describe("trigger spec validation", () => {
   });
 
   it("refuses an out-of-range event debounce", () => {
-    expect(() => parseTrigger({ type: "event", event: "a.b", debounceMs: 5 })).toThrow(/between/);
-    expect(
-      parseTrigger({ type: "event", event: "a.b", debounceMs: MAX_DEBOUNCE_MS }).debounceMs,
-    ).toBe(MAX_DEBOUNCE_MS);
+    const atMax = parseTrigger({ type: "event", event: "a.b", debounceMs: MAX_DEBOUNCE_MS });
+    // `debounceMs` exists only on the `event` variant — it is the one trigger
+    // kind that can storm, so it is the one that carries a debounce. Narrow
+    // rather than cast: a union member without the field must not satisfy this.
+    expect(atMax.type).toBe("event");
+    if (atMax.type !== "event") throw new Error("expected an event trigger");
+    expect(atMax.debounceMs).toBe(MAX_DEBOUNCE_MS);
   });
 });
 

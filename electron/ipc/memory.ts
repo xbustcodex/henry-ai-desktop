@@ -17,6 +17,9 @@
 import { ipcMain } from 'electron';
 import type Database from 'better-sqlite3';
 import type { HenryLeanMemoryParts } from '../../src/types';
+import { registerKnowledgeHandlers, getMemoryRecallService, type MemoryRecallResult } from '../knowledge/handlers';
+import { registerCompanionHandlers } from '../companion/handlers';
+import { policyFlag } from './securityPolicy';
 
 let db: Database.Database;
 
@@ -64,19 +67,49 @@ function safeHandle<T>(channel: string, fn: () => T): T {
 }
 
 
+/**
+ * Privacy gate for memory WRITES — the Security switch `persistMemory`.
+ *
+ * Every `memory:save*` / `memory:update*` / `memory:delete*` handler opens with
+ *   if (!policyFlag('persistMemory')) return <its own success shape>;
+ * so a user who has turned persistence off writes nothing, and the renderer
+ * still receives the exact envelope it would have on success. It must NOT
+ * throw: the caller did nothing wrong, and callers that destructure
+ * `saved.id` / `saved.error` would break on a privacy setting rather than on
+ * an error.
+ *
+ * Reads are deliberately NOT gated. Someone who disabled persistence must still
+ * be able to read the memories that already exist — otherwise the switch
+ * becomes destructive instead of protective.
+ *
+ * `policyFlag` is a synchronous, allocation-free read that fails closed before
+ * boot and on a corrupt settings row.
+ */
 export function registerMemoryHandlers(database: Database.Database) {
   db = database;
+
+  // Knowledge base + semantic memory recall (rows 9.4 / 9.5 / 9.3). They
+  // share this exact database handle — the vector index and the knowledge
+  // documents are additional tables in the one existing store, not a
+  // second database.
+  registerKnowledgeHandlers(database);
+
+  // Companion personality / emotional context / voice / memory graph
+  // (rows 8.2–8.5). Same database handle — these are additional tables in
+  // the one existing store, not a second store.
+  registerCompanionHandlers(database);
 
   // ══════════════════════════════════════════════════════════════════════
   // LEGACY — keep backward-compatible channels for memory_facts
   // ══════════════════════════════════════════════════════════════════════
 
-  ipcMain.handle('memory:saveFact', async (_e, fact: {
+  ipcMain.handle('memory:saveFact',  async (_e, fact: {
     conversationId?: string; conversation_id?: string;
     fact: string;
     category?: string;
     importance?: number;
   }) => {
+    if (!policyFlag('persistMemory')) return { skipped: true, reason: 'memory persistence is off' };
     try {
       // Only save real extracted facts — never raw conversation messages
       const BLOCKED_CATEGORIES = ['conversation', 'message', 'raw', 'chat'];
@@ -161,6 +194,83 @@ export function registerMemoryHandlers(database: Database.Database) {
     return db.prepare(sql).all(...params);
   });
 
+  // ══════════════════════════════════════════════════════════════════════
+  // UNIFIED MEMORY SEARCH (row 9.3)
+  //
+  // `memory:searchFacts` above is FTS5/LIKE over `memory_facts` only, so it
+  // cannot answer "what did I decide about retention?" — the answer lives in
+  // personal_memory or narrative_memory and shares no vocabulary with the
+  // query. This channel searches EVERY memory layer and merges two signals:
+  // exact lexical matches (which catch SKUs, names and identifiers that no
+  // embedding ranks well) and semantic recall through the vector store.
+  // ══════════════════════════════════════════════════════════════════════
+
+  ipcMain.handle('memory:searchAll', async (_e, payload: {
+    query?: string; limit?: number; includeSemantic?: boolean;
+  } = {}) => {
+    return safeHandle('memory:searchAll', async () => {
+      const query = String(payload.query ?? '').trim();
+      const limit = Math.min(Math.max(Number(payload.limit) || 20, 1), 100);
+      const includeSemantic = payload.includeSemantic !== false;
+
+      /** One `memory_facts` row, as the lexical half of the merge returns it. */
+      interface LexicalFactRow {
+        id: string;
+        label: string;
+        detail: string | null;
+        updated_at: string;
+        weight: number | null;
+      }
+
+      const lexical: LexicalFactRow[] = query
+        ? (db.prepare(`
+              SELECT id, fact AS label, category AS detail, created_at AS updated_at,
+                     importance AS weight
+              FROM memory_facts
+              WHERE fact LIKE ?
+              ORDER BY importance DESC, created_at DESC
+              LIMIT ?
+            `).all(`%${query}%`, limit) as LexicalFactRow[])
+        : [];
+
+      // An index that has not been built yet yields nothing rather than an
+      // error, so keyword search still works on a fresh install.
+      let semantic: MemoryRecallResult = { memories: [], backend: 'hashed-fallback', model: '' };
+      if (includeSemantic && query) {
+        try {
+          semantic = await getMemoryRecallService().recall(query, limit);
+        } catch (e: unknown) {
+          // A vector index that is not built yet must not break keyword search.
+          console.error('[memory:searchAll] semantic recall unavailable:', e instanceof Error ? e.message : String(e));
+        }
+      }
+
+      const results = [
+        ...lexical.map((r) => ({
+          id: String(r.id), table: 'memory_facts' as const,
+          label: String(r.label), detail: String(r.detail ?? ''),
+          // Lexical hits start from a fixed high floor so an exact substring
+          // match outranks a merely similar one, then importance nudges it.
+          score: 0.6 + Math.min(Number(r.weight ?? 0) / 20, 0.4),
+          updatedAt: String(r.updated_at ?? ''), match: 'lexical' as const,
+        })),
+        ...semantic.memories.map((m) => ({
+          id: m.id, table: m.table,
+          label: m.label, detail: m.detail,
+          score: m.score, updatedAt: m.updatedAt, match: 'semantic' as const,
+        })),
+      ].sort((a, b) => b.score - a.score);
+
+      return {
+        query,
+        results: results.slice(0, limit),
+        backend: semantic.backend,
+        model: semantic.model,
+        note: semantic.note,
+      };
+    });
+  });
+
   ipcMain.handle('memory:getAllFacts', async (_e, limit?: number) =>
     db.prepare(`SELECT * FROM memory_facts ORDER BY importance DESC, created_at DESC LIMIT ?`)
       .all(limit || 50)
@@ -170,7 +280,8 @@ export function registerMemoryHandlers(database: Database.Database) {
   // CONVERSATION SUMMARIES
   // ══════════════════════════════════════════════════════════════════════
 
-  ipcMain.handle('memory:saveSummary', async (_e, payload: Record<string, unknown>) => {
+  ipcMain.handle('memory:saveSummary',  async (_e, payload: Record<string, unknown>) => {
+    if (!policyFlag('persistMemory')) return { id: null as string | null };
     try {
       const conversationId =
         (typeof payload.conversationId === 'string' && payload.conversationId) ||
@@ -209,9 +320,10 @@ export function registerMemoryHandlers(database: Database.Database) {
   // WORKSPACE INDEX
   // ══════════════════════════════════════════════════════════════════════
 
-  ipcMain.handle('memory:indexFile', async (_e, file: {
+  ipcMain.handle('memory:indexFile',  async (_e, file: {
     path: string; type: string; summary: string; sizeBytes: number;
   }) => {
+    if (!policyFlag('persistMemory')) return { id: null };
     try {
       const id = crypto.randomUUID();
       db.prepare(`INSERT OR REPLACE INTO workspace_index (id, file_path, file_type, summary, last_indexed, size_bytes) VALUES (?, ?, ?, ?, ?, ?)`)
@@ -238,7 +350,7 @@ export function registerMemoryHandlers(database: Database.Database) {
   // LAYER 4 — PERSONAL MEMORY (scored, typed)
   // ══════════════════════════════════════════════════════════════════════
 
-  ipcMain.handle('memory:savePersonalMemory', async (_e, item: {
+  ipcMain.handle('memory:savePersonalMemory',  async (_e, item: {
     memoryKey: string;
     memoryValue: string;
     memoryType?: string;
@@ -249,6 +361,7 @@ export function registerMemoryHandlers(database: Database.Database) {
     strategicSignificanceScore?: number;
     tags?: string[];
   }) => {
+    if (!policyFlag('persistMemory')) return { id: null };
     try {
       const id = crypto.randomUUID();
       const now = new Date().toISOString();
@@ -294,7 +407,8 @@ export function registerMemoryHandlers(database: Database.Database) {
     }
   });
 
-  ipcMain.handle('memory:updatePersonalMemory', async (_e, id: string, updates: Record<string, unknown>) => {
+  ipcMain.handle('memory:updatePersonalMemory',  async (_e, id: string, updates: Record<string, unknown>) => {
+    if (!policyFlag('persistMemory')) return { updated: false };
     try {
       const allowed = ['memory_value','summary','confidence_score','emotional_significance_score',
                        'strategic_significance_score','active_status','tags_json'];
@@ -315,7 +429,8 @@ export function registerMemoryHandlers(database: Database.Database) {
     }
   });
 
-  ipcMain.handle('memory:deletePersonalMemory', async (_e, id: string) => {
+  ipcMain.handle('memory:deletePersonalMemory',  async (_e, id: string) => {
+    if (!policyFlag('persistMemory')) return { deleted: false };
     try {
       db.prepare('UPDATE personal_memory SET active_status = 0, updated_at = ? WHERE id = ?')
         .run(new Date().toISOString(), id);
@@ -340,10 +455,11 @@ export function registerMemoryHandlers(database: Database.Database) {
   // LAYER 5 — PROJECTS
   // ══════════════════════════════════════════════════════════════════════
 
-  ipcMain.handle('memory:saveProject', async (_e, project: {
+  ipcMain.handle('memory:saveProject',  async (_e, project: {
     name: string; type?: string; summary?: string;
     strategicImportanceScore?: number; emotionalImportanceScore?: number;
   }) => {
+    if (!policyFlag('persistMemory')) return { id: null };
     try {
       const id = crypto.randomUUID();
       const now = new Date().toISOString();
@@ -374,7 +490,8 @@ export function registerMemoryHandlers(database: Database.Database) {
     }
   });
 
-  ipcMain.handle('memory:updateProject', async (_e, id: string, updates: Record<string, unknown>) => {
+  ipcMain.handle('memory:updateProject',  async (_e, id: string, updates: Record<string, unknown>) => {
+    if (!policyFlag('persistMemory')) return { updated: false };
     try {
       const allowed = ['name','type','status','summary','strategic_importance_score','emotional_importance_score'];
       const sets: string[] = [];
@@ -392,11 +509,12 @@ export function registerMemoryHandlers(database: Database.Database) {
     }
   });
 
-  ipcMain.handle('memory:saveProjectMemory', async (_e, item: {
+  ipcMain.handle('memory:saveProjectMemory',  async (_e, item: {
     projectId: string; memoryKey: string; memoryValue: string;
     summary?: string; blockerFlag?: boolean; deadline?: string;
     confidenceScore?: number; relevanceScore?: number;
   }) => {
+    if (!policyFlag('persistMemory')) return { id: null };
     try {
       const id = crypto.randomUUID();
       const now = new Date().toISOString();
@@ -427,11 +545,12 @@ export function registerMemoryHandlers(database: Database.Database) {
   // LAYER 2 — SESSION MEMORY
   // ══════════════════════════════════════════════════════════════════════
 
-  ipcMain.handle('memory:saveSessionMemory', async (_e, session: {
+  ipcMain.handle('memory:saveSessionMemory',  async (_e, session: {
     conversationId: string; summary?: string;
     activeGoals?: string[]; activeTasks?: string[]; activeFiles?: string[];
     emotionalPattern?: string; unresolvedItems?: string[]; projectId?: string;
   }) => {
+    if (!policyFlag('persistMemory')) return { id: '', created: false, skipped: true };
     try {
       const now = new Date().toISOString();
       const existing = db.prepare('SELECT id FROM session_memory WHERE conversation_id = ?')
@@ -495,7 +614,7 @@ export function registerMemoryHandlers(database: Database.Database) {
     db.prepare('SELECT * FROM working_memory WHERE user_id = ?').get(userId)
   );
 
-  ipcMain.handle('memory:updateWorkingMemory', async (_e, updates: {
+  ipcMain.handle('memory:updateWorkingMemory',  async (_e, updates: {
     userId?: string;
     activeContextSummary?: string;
     activeProjectIds?: string[];
@@ -504,6 +623,7 @@ export function registerMemoryHandlers(database: Database.Database) {
     relevantFileIds?: string[];
     relevantMemoryIds?: string[];
   }) => {
+    if (!policyFlag('persistMemory')) return { updated: false };
     try {
       const userId = updates.userId || 'default';
       const now = new Date().toISOString();
@@ -547,10 +667,11 @@ export function registerMemoryHandlers(database: Database.Database) {
   // GOALS
   // ══════════════════════════════════════════════════════════════════════
 
-  ipcMain.handle('memory:saveGoal', async (_e, goal: {
+  ipcMain.handle('memory:saveGoal',  async (_e, goal: {
     title: string; summary?: string;
     priorityScore?: number; emotionalSignificanceScore?: number; strategicSignificanceScore?: number;
   }) => {
+    if (!policyFlag('persistMemory')) return { id: null };
     try {
       const id = crypto.randomUUID();
       const now = new Date().toISOString();
@@ -570,7 +691,8 @@ export function registerMemoryHandlers(database: Database.Database) {
   // Goals could be created, edited and archived, but never removed — so a
   // goal you did not want was stuck in the table forever. Deleting is
   // irreversible, so the panel asks first.
-  ipcMain.handle('memory:deleteGoal', async (_e, id: string) => {
+  ipcMain.handle('memory:deleteGoal',  async (_e, id: string) => {
+    if (!policyFlag('persistMemory')) return { deleted: false };
     try {
       if (typeof id !== 'string' || !id) return { deleted: false, error: 'A goal id is required.' };
       const info = db.prepare('DELETE FROM goals WHERE id = ?').run(id);
@@ -596,7 +718,8 @@ export function registerMemoryHandlers(database: Database.Database) {
     }
   });
 
-  ipcMain.handle('memory:updateGoal', async (_e, id: string, updates: Record<string, unknown>) => {
+  ipcMain.handle('memory:updateGoal',  async (_e, id: string, updates: Record<string, unknown>) => {
+    if (!policyFlag('persistMemory')) return { updated: false };
     try {
       const allowed = ['title','summary','status','priority_score','emotional_significance_score','strategic_significance_score'];
       const sets: string[] = [];
@@ -618,10 +741,11 @@ export function registerMemoryHandlers(database: Database.Database) {
   // COMMITMENTS (Henry's explicit promises)
   // ══════════════════════════════════════════════════════════════════════
 
-  ipcMain.handle('memory:saveCommitment', async (_e, c: {
+  ipcMain.handle('memory:saveCommitment',  async (_e, c: {
     description: string; sourceConversationId?: string; projectId?: string;
     dueDate?: string; importanceScore?: number;
   }) => {
+    if (!policyFlag('persistMemory')) return { id: null };
     try {
       const id = crypto.randomUUID();
       const now = new Date().toISOString();
@@ -652,7 +776,8 @@ export function registerMemoryHandlers(database: Database.Database) {
     }
   });
 
-  ipcMain.handle('memory:resolveCommitment', async (_e, id: string) => {
+  ipcMain.handle('memory:resolveCommitment',  async (_e, id: string) => {
+    if (!policyFlag('persistMemory')) return { resolved: false };
     try {
       const now = new Date().toISOString();
       db.prepare(`UPDATE commitments SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?`)
@@ -664,7 +789,8 @@ export function registerMemoryHandlers(database: Database.Database) {
     }
   });
 
-  ipcMain.handle('memory:updateCommitment', async (_e, id: string, updates: Record<string, unknown>) => {
+  ipcMain.handle('memory:updateCommitment',  async (_e, id: string, updates: Record<string, unknown>) => {
+    if (!policyFlag('persistMemory')) return { updated: false };
     try {
       const allowed = ['description','status','due_date','importance_score','project_id'];
       const sets: string[] = [];
@@ -685,10 +811,11 @@ export function registerMemoryHandlers(database: Database.Database) {
   // MILESTONES
   // ══════════════════════════════════════════════════════════════════════
 
-  ipcMain.handle('memory:saveMilestone', async (_e, m: {
+  ipcMain.handle('memory:saveMilestone',  async (_e, m: {
     title: string; summary?: string; milestoneType?: string;
     projectId?: string; significanceScore?: number;
   }) => {
+    if (!policyFlag('persistMemory')) return { id: null };
     try {
       const id = crypto.randomUUID();
       db.prepare(`
@@ -721,11 +848,12 @@ export function registerMemoryHandlers(database: Database.Database) {
   // LAYER 6 — RELATIONSHIP MEMORY
   // ══════════════════════════════════════════════════════════════════════
 
-  ipcMain.handle('memory:saveRelationshipMemory', async (_e, item: {
+  ipcMain.handle('memory:saveRelationshipMemory',  async (_e, item: {
     patternType: string; summary: string;
     supportPreference?: string; contextTrigger?: string;
     confidenceScore?: number; relevanceScore?: number;
   }) => {
+    if (!policyFlag('persistMemory')) return { id: null };
     try {
       const now = new Date().toISOString();
       // Upsert by pattern_type — merge with existing if confidence is higher
@@ -759,10 +887,11 @@ export function registerMemoryHandlers(database: Database.Database) {
   // LAYER 7 — NARRATIVE MEMORY (life/work arcs)
   // ══════════════════════════════════════════════════════════════════════
 
-  ipcMain.handle('memory:saveNarrativeMemory', async (_e, arc: {
+  ipcMain.handle('memory:saveNarrativeMemory',  async (_e, arc: {
     arcName: string; summary: string; startDate?: string; endDate?: string;
     importanceScore?: number; linkedProjectIds?: string[]; linkedMemoryIds?: string[];
   }) => {
+    if (!policyFlag('persistMemory')) return { id: null };
     try {
       const now = new Date().toISOString();
       // Update existing arc by name if it exists
@@ -809,10 +938,11 @@ export function registerMemoryHandlers(database: Database.Database) {
   // MEMORY SUMMARIES (daily/weekly/monthly/where-left-off)
   // ══════════════════════════════════════════════════════════════════════
 
-  ipcMain.handle('memory:saveMemorySummary', async (_e, s: {
+  ipcMain.handle('memory:saveMemorySummary',  async (_e, s: {
     summaryType: string; periodLabel?: string; summary: string;
     linkedMemoryIds?: string[]; linkedProjectIds?: string[];
   }) => {
+    if (!policyFlag('persistMemory')) return { id: null };
     try {
       const id = crypto.randomUUID();
       db.prepare(`
@@ -850,11 +980,12 @@ export function registerMemoryHandlers(database: Database.Database) {
   // MEMORY GRAPH EDGES
   // ══════════════════════════════════════════════════════════════════════
 
-  ipcMain.handle('memory:saveGraphEdge', async (_e, edge: {
+  ipcMain.handle('memory:saveGraphEdge',  async (_e, edge: {
     fromEntityType: string; fromEntityId: string;
     toEntityType: string; toEntityId: string;
     relationshipType: string; weightScore?: number;
   }) => {
+    if (!policyFlag('persistMemory')) return { id: null };
     try {
       const id = crypto.randomUUID();
       const now = new Date().toISOString();
@@ -938,7 +1069,8 @@ export function registerMemoryHandlers(database: Database.Database) {
     }
   });
 
-  ipcMain.handle('memory:saveWhereWeLeftOff', async (_e, summary: string) => {
+  ipcMain.handle('memory:saveWhereWeLeftOff',  async (_e, summary: string) => {
+    if (!policyFlag('persistMemory')) return { id: null };
     try {
       const id = crypto.randomUUID();
       const now = new Date().toISOString();
@@ -958,12 +1090,13 @@ export function registerMemoryHandlers(database: Database.Database) {
   // COMPRESSION — session end handler
   // ══════════════════════════════════════════════════════════════════════
 
-  ipcMain.handle('memory:compressSession', async (_e, opts: {
+  ipcMain.handle('memory:compressSession',  async (_e, opts: {
     conversationId: string;
     summary: string;
     unresolvedItems?: string[];
     emotionalPattern?: string;
   }) => {
+    if (!policyFlag('persistMemory')) return { compressed: false };
     try {
       const now = new Date().toISOString();
       // Save session end summary

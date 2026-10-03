@@ -89,10 +89,35 @@ export interface ModelCompletion {
   usage?: { input: number; output: number };
 }
 
-/** Runs one model round with the given tools. Supplied by `ai.ts`. */
+/**
+ * Optional incremental channel for a model round.
+ *
+ * `onDelta` is PROVISIONAL. A provider that streams a tool-calling round emits
+ * the raw tool call itself as text — measured live on both llama3.2:3b and
+ * qwen2.5-coder:7b — so the user will briefly see `{"name":"get_weather"...}`
+ * stream into the bubble before the round resolves and it is known to be a
+ * call rather than prose. The runner therefore treats deltas as display-only
+ * and always lets the round's final `content` win. Deltas are never persisted
+ * and never logged as conversation content.
+ *
+ * A provider that does not stream simply never calls `onDelta`, which is why
+ * it is optional and why behaviour is unchanged for every caller that omits it.
+ */
+export interface CompleteHandlers {
+  onDelta?: (text: string) => void;
+}
+
+/**
+ * Runs one model round with the given tools. Supplied by `ai.ts`.
+ *
+ * The third parameter is optional and additive: existing two-argument callers
+ * (`ai.ts`, `scheduler.ts`) keep working with no change, and the provider
+ * decides whether to call `onDelta` at all.
+ */
 export type CompleteFn = (
   messages: RunnerMessage[],
   modelTools: ModelTool[],
+  handlers?: CompleteHandlers,
 ) => Promise<ModelCompletion>;
 
 // ── Confirmation bus (confirm-tier tools) ──────────────────────────────────
@@ -252,8 +277,8 @@ async function executeToolCall(
   let args: Record<string, unknown> = call.arguments ?? {};
   const describe = tool.confirmPrompt ? tool.confirmPrompt(args) : `Run ${tool.name}`;
 
-  // confirm tier — pause for the user before doing anything.
-
+  // confirm tier, plus the security policy's silent-tier escalation.
+  //
   // Security policy: when `confirmSilentTools` is on, the SILENT tier also
   // pauses for the user. This is a gate ABOVE the tier, not a reclassification
   // — no tool's declared `safetyLevel` changes, so the tier counts and the
@@ -261,10 +286,26 @@ async function executeToolCall(
   // `requestConfirmation` as confirm-tier, so there is exactly one gate and
   // one place where the no-renderer fail-safe lives.
   //
-  // It fails closed: `policyFlag` returns the policy default (true) before
-  // the store has loaded and on any unreadable stored value, so an
-  // uninitialised or corrupt policy blocks silent tools rather than
-  // silently permitting them.
+  // DEFAULT IS OFF — this gate is permissive by default, deliberately.
+  // `DEFAULT_POLICY.confirmSilentTools` is `false`, and it is `false` in three
+  // distinct cases: before the store has loaded (`cached` is seeded from
+  // DEFAULT_POLICY), when the key is unset, and when a stored value is
+  // unreadable (`resolvePolicy` builds on `{...DEFAULT_POLICY}` and `asBool`
+  // falls back to `DEFAULT_POLICY[key]` per key). So an uninitialised or
+  // corrupt policy PERMITS silent tools rather than blocking them.
+  //
+  // That is a considered decision, not an oversight: the silent tier is a
+  // pre-existing, deliberately-designed classification that has always run
+  // unattended, and defaulting this on would change every existing install's
+  // behaviour on upgrade while collapsing the silent/confirm distinction the
+  // tier system exists to carry. Do not "fix" this to fail-closed without
+  // re-deciding that trade-off.
+  //
+  // Scope note, because it matters: this switch gates only the SILENT tier.
+  // The confirm tier above is unconditional and unaffected by the policy — a
+  // confirm-tier tool always requires approval, and still fails closed when
+  // no renderer is present. So the security boundary around real-world side
+  // effects does not depend on this flag.
   const needsApproval =
     tool.safetyLevel === 'confirm' ||
     (tool.safetyLevel === 'silent' && policyFlag('confirmSilentTools'));
@@ -334,10 +375,27 @@ export async function runToolConversation(
   let rounds = 0;
   while (rounds < maxRounds) {
     rounds++;
-    const completion = await complete(messages, modelTools);
+    const round = rounds;
+    let streamed = false;
+    const completion = await complete(messages, modelTools, {
+      onDelta: (text: string) => {
+        if (!text) return;
+        streamed = true;
+        // Provisional display only. Never persisted, never logged as content.
+        send(context, 'agent:tool-stream-delta', { round, text });
+      },
+    });
     if (completion.usage) {
       usage.input += completion.usage.input;
       usage.output += completion.usage.output;
+    }
+
+    // If anything streamed, close the provisional bubble with the round's
+    // authoritative text. For a tool-calling round this is what replaces the
+    // raw tool-call JSON the user saw go by, so it must be sent on EVERY
+    // round that streamed — not just the final one.
+    if (streamed) {
+      send(context, 'agent:tool-stream-final', { round, content: completion.content ?? '' });
     }
 
     // No tool calls → the model is done; return its answer.

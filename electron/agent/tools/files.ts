@@ -16,7 +16,7 @@
  * everything to the user's home directory and rejects traversal, and writes are
  * create-only by default. Destroys still require approval.
  */
-import { promises as fsp } from 'fs';
+import { promises as fsp, realpathSync } from 'fs';
 import { createHash } from 'crypto';
 import path from 'path';
 import os from 'os';
@@ -28,12 +28,41 @@ const MAX_LIST_ENTRIES = 5000;
 const MAX_SEARCH_HITS = 100;
 
 /**
+ * Resolve `p` to its real location, tolerating components that do not exist yet.
+ *
+ * A write target may legitimately not exist, but `realpathSync` throws on a
+ * missing path, so walk up to the nearest ancestor that does exist, resolve
+ * that, then re-attach the segments that were not there. The result still
+ * carries every symlink hop in the existing prefix, which is the part that
+ * matters for confinement.
+ */
+function realpathNearestExisting(p: string): string {
+  const tail: string[] = [];
+  let probe = p;
+  for (;;) {
+    try {
+      return path.join(realpathSync(probe), ...tail);
+    } catch {
+      const parent = path.dirname(probe);
+      if (parent === probe) return p; // reached the filesystem root; nothing to resolve
+      tail.unshift(path.basename(probe));
+      probe = parent;
+    }
+  }
+}
+
+/**
  * Resolve a user-supplied path inside their home directory.
  *
  * Relative paths are treated as home-relative so the model can say
  * `Documents/notes.md` rather than guessing an absolute path. Anything that
  * escapes home — via `..`, a symlink, or an absolute path elsewhere — is
  * refused rather than clamped.
+ *
+ * Symlink escape is enforced by resolving the REAL path and re-checking it
+ * against the real home directory, not by string prefix alone. A purely
+ * lexical check passes `~/link` even when that symlink points at `/etc/shadow`,
+ * which is exactly the case this now refuses.
  */
 export function resolveUserPath(input: unknown): { ok: true; path: string } | { ok: false; error: string } {
   if (typeof input !== 'string' || input.trim() === '') {
@@ -58,6 +87,17 @@ export function resolveUserPath(input: unknown): { ok: true; path: string } | { 
   const root = path.resolve(home);
   if (resolved !== root && !resolved.startsWith(root + path.sep)) {
     return { ok: false, error: `Refused: ${raw} is outside your home directory.` };
+  }
+  // Lexical containment passed; now re-check after following symlinks. The
+  // home directory itself may be a symlink (a relocated or network home), so
+  // both sides have to be real paths for the comparison to mean anything.
+  const realRoot = realpathNearestExisting(root);
+  const real = realpathNearestExisting(resolved);
+  if (real !== realRoot && !real.startsWith(realRoot + path.sep)) {
+    return {
+      ok: false,
+      error: `Refused: ${raw} resolves outside your home directory through a link.`,
+    };
   }
   return { ok: true, path: resolved };
 }

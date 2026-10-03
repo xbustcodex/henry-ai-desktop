@@ -62,6 +62,10 @@ import {
 } from './remoteSession';
 import { attachScreenWs as remoteAttachScreenWs } from './companionScreenWs';
 import { PAIR_HTML as REMOTE_PAIR_HTML, CONTROL_HTML as REMOTE_CONTROL_HTML } from './companionControlHtml';
+// Companion feature routes (personality, emotional context, voice, memory
+// graph, cross-device search). Mounted below, AFTER the device-token gate.
+import { handleCompanionRoute } from '../companion/routes';
+import { getCompanionProfileService } from '../companion/handlers';
 
 /* === henry-remote-control v2-pencil === */
 import {
@@ -1501,6 +1505,21 @@ self.addEventListener('fetch', (event) => {
   if (!deviceId) {
     jsonResponse(res, 401, { error: 'Unauthorized' });
     return;
+  }
+
+  // ── Companion feature routes (personality, emotional context, voice,
+  // memory graph, cross-device search) ──────────────────────────────────
+  // Placed HERE, after the token gate above, deliberately: every companion
+  // route requires a valid device token, none is in the LAN-only
+  // companion-web allow-list, and none is reachable through the tunnel
+  // unauthenticated. The routes themselves live in electron/companion/routes.ts
+  // rather than inline here, to keep this 9.7k-line file from growing further.
+  if (urlPath.startsWith('/sync/companion/')) {
+    const handled = await handleCompanionRoute(req, res, urlPath, url, {
+      db: _db as import('better-sqlite3').Database,
+      companion: getCompanionProfileService(),
+    });
+    if (handled) return;
   }
 
   // Update last seen (+ sync time for companion device model)

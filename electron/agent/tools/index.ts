@@ -34,6 +34,7 @@ import { lessonsTools } from "./lessons";
 import { pythonTools } from "./python";
 import { credentialTools } from "./credentials";
 import { integrationTools } from "../../integrations";
+import { knowledgeTools } from "../../knowledge/tools";
 
 export function registerAllTools(registry: ToolRegistry): void {
   registry.registerAll([
@@ -57,6 +58,7 @@ export function registerAllTools(registry: ToolRegistry): void {
     ...pythonTools(),
     ...credentialTools(),
     ...integrationTools(),
+    ...knowledgeTools(),
     ...fileTools,
   ]);
 }

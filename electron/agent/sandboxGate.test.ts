@@ -124,8 +124,24 @@ function spyExecute(reg: ToolRegistry, name: string, execute: Execute): void {
 }
 
 /** An execute stub that always resolves to `result`. */
-function stub(result: ToolResult = { ok: true, data: 'stubbed' }): Execute {
-  return vi.fn(async () => result);
+/**
+ * A stub tool body that also records the args it was called with.
+ *
+ * `seenArgs` is a plain array the test owns, so assertions read the
+ * observable call rather than the spy's `.mock` internals — the spy's type is
+ * a bare function signature with no `.mock` member, and asserting through a
+ * mock's internals tests the mock rather than the gate.
+ */
+function stub(result: ToolResult = { ok: true, data: 'stubbed' }): Execute & {
+  seenArgs: Array<Record<string, unknown>>;
+} {
+  const seenArgs: Array<Record<string, unknown>> = [];
+  const fn = vi.fn(async (args: Record<string, unknown>) => {
+    seenArgs.push(args);
+    return result;
+  }) as unknown as Execute & { seenArgs: Array<Record<string, unknown>> };
+  fn.seenArgs = seenArgs;
+  return fn;
 }
 
 /**
@@ -187,6 +203,11 @@ function toolResult(scripts: ScriptedComplete, index = -1): ToolResult {
   const msgs = scripts.rounds.at(index) ?? [];
   const msg = [...msgs].reverse().find((m) => m.role === 'tool');
   if (!msg) throw new Error('no tool message was fed back to the model');
+  // A tool turn is text; the `MessagePart[]` arm is for image-bearing user
+  // turns and cannot occur here, so narrow rather than cast.
+  if (typeof msg.content !== 'string') {
+    throw new Error('tool message content should be a string');
+  }
   return JSON.parse(msg.content) as ToolResult;
 }
 
@@ -294,7 +315,7 @@ describe('sandbox gate — explicit denial', () => {
     // Only the approved second call may reach the body — one refusal must not
     // carry over and unlock the next request in the same turn.
     expect(exec).toHaveBeenCalledTimes(1);
-    expect(exec.mock.calls[0][0]).toMatchObject({ to: 'd@e.f' });
+    expect(exec.seenArgs[0]).toMatchObject({ to: 'd@e.f' });
   });
 });
 
@@ -626,7 +647,7 @@ describe('sandbox gate — unknown tool names', () => {
     expect(first.error).toMatch(/unknown tool/i);
     // The unknown name never reached a body; only the approved real call ran.
     expect(exec).toHaveBeenCalledTimes(1);
-    expect(exec.mock.calls[0][0]).toMatchObject({ to: 'a@b.c' });
+    expect(exec.seenArgs[0]).toMatchObject({ to: 'a@b.c' });
   });
 
   it('an unknown tool name never reaches any registered tool body', async () => {

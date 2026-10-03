@@ -55,6 +55,62 @@ describe('path resolution', () => {
     expect(resolveUserPath(os.homedir()).ok).toBe(true);
   });
 
+  // The bug this guards: the confinement check used `path.resolve` only, so a
+  // symlink INSIDE the home directory pointing outside it passed the prefix
+  // test and then read through to the target. Lexically this path looks fine;
+  // only resolving it reveals the escape.
+  it('refuses a symlink inside home that points outside it', async () => {
+    const link = path.join(os.homedir(), '.henry-symlink-escape-test');
+    await fsp.rm(link, { force: true });
+    // /etc/passwd exists on every platform this suite runs on (POSIX); skip
+    // cleanly rather than failing on a box that lacks it.
+    if (!(await fsp.stat('/etc/passwd').catch(() => null))) return;
+    await fsp.symlink('/etc/passwd', link);
+    try {
+      const r = resolveUserPath(link);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error).toMatch(/link|outside/i);
+    } finally {
+      await fsp.rm(link, { force: true });
+    }
+  });
+
+  it('refuses a symlinked directory that leads outside home', async () => {
+    const link = path.join(os.homedir(), '.henry-symlink-dir-test');
+    await fsp.rm(link, { force: true, recursive: true });
+    if (!(await fsp.stat('/etc').catch(() => null))) return;
+    await fsp.symlink('/etc', link, 'dir');
+    try {
+      // Both the link itself and a file reached through it must be refused.
+      expect(resolveUserPath(link).ok).toBe(false);
+      expect(resolveUserPath(`${link}/passwd`).ok).toBe(false);
+    } finally {
+      await fsp.rm(link, { force: true, recursive: true });
+    }
+  });
+
+  // The fix must not break ordinary writes, where the target does not exist
+  // yet — realpathNearestExisting has to tolerate the missing tail.
+  it('still accepts a path whose target does not exist yet', () => {
+    const r = resolveUserPath('.henry-not-created-yet/deeper/still-new.md');
+    expect(r.ok).toBe(true);
+  });
+
+  // A symlink that stays INSIDE home is legitimate and must keep working.
+  it('allows a symlink that resolves within the home directory', async () => {
+    const dirLink = path.join(dir, 'inside-link');
+    const realDir = path.join(dir, 'real');
+    await fsp.mkdir(realDir, { recursive: true });
+    await fsp.writeFile(path.join(realDir, 'ok.txt'), 'fine');
+    await fsp.rm(dirLink, { force: true, recursive: true });
+    await fsp.symlink(realDir, dirLink, 'dir');
+    try {
+      expect(resolveUserPath(path.join(dirLink, 'ok.txt')).ok).toBe(true);
+    } finally {
+      await fsp.rm(dirLink, { force: true, recursive: true });
+    }
+  });
+
   it('rejects a non-string path', () => {
     expect(resolveUserPath(42).ok).toBe(false);
     expect(resolveUserPath('').ok).toBe(false);
