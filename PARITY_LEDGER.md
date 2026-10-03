@@ -54,10 +54,10 @@ Where a legitimate local equivalent exists, it is listed as our own implementati
 | 6 Voice & Input | 13 | 6 | 0 | 5 | 0 | 1 | 0 | 0 | 1 |
 | 7 Computer Control | 10 | 7 | 1 | 2 | 0 | 0 | 0 | 0 | 0 |
 | 8 Companion | 9 | 6 | 0 | 3 | 0 | 0 | 0 | 0 | 0 |
-| 9 Files & Memory | 10 | 5 | 0 | 1 | 0 | 4 | 0 | 0 | 0 |
+| 9 Files & Memory | 10 | 5 | 0 | 0 | 0 | 5 | 0 | 0 | 0 |
 | 10 Integrations | 11 | 4 | 0 | 5 | 0 | 1 | 0 | 0 | 1 |
 | 11 Settings & System | 15 | 9 | 0 | 3 | 0 | 2 | 0 | 0 | 1 |
-| **TOTAL** | **130** | 82 | 1 | 26 | 0 | 15 | 1 | 1 | 4 |
+| **TOTAL** | **130** | 82 | 1 | 25 | 0 | 16 | 1 | 1 | 4 |
 
 > Generated from the rows by `scripts/parity-summary.mjs`. Do not edit these numbers by hand —
 > edit the row status and re-run `node scripts/parity-summary.mjs --write`.
@@ -249,7 +249,7 @@ guarding, `_denyDangerous`).
 
 | # | Row | PAID EVIDENCE | OUR CURRENT | GAP | STATUS |
 |---|---|---|---|---|---|
-| 9.1 | File Attachments | attachment store | 7 attachment channels | **REGRESSION INTRODUCED BY 11.12** | — | — | — | **installed pkg, LIVE: `listAttachments('...')` is REJECTED — `validationError:true, 'Rejected: payload Required', channel:'attachments:list'`. `electron/preload.ts:86` bridges this channel as a BARE STRING (`listAttachments: (conversationId: string) => invoke('attachments:list', conversationId)`) while the zod schema installed by the validation pass expects an object. Any user opening attachments now fails. **This is the same bridge-shape class the validation work was warned about, and it is a regression of a previously working feature** | **PARTIAL — REGRESSED, must be fixed by aligning the schema with the preload contract** |
+| 9.1 | File Attachments | attachment store | 7 attachment channels | — | — | — | — | **installed pkg, LIVE: `listAttachments('w3-probe-conversation')` → `[]`; the seven-channel CRUD surface is present and callable. A first probe called it with NO argument and was rejected with `validationError:true, 'Rejected: payload Required'` — **that was my probe's error, not a regression**: `validation.ts:466` declares `attachments:list` as `nonEmpty(128)` and preload bridges it as a bare string, so a missing argument is correctly refused. **A false regression was recorded here and has been retracted** | **IMPLEMENTED / NOT LIVE VERIFIED** |
 | 9.2 | Document Parsing / multimodal | **TWO SEPARATE STATUSES — do not collapse** | — | — | — | — | **(a) Ollama vision: CLOSED** — genuine installed-package end-to-end evidence with Moondream. **(b) Anthropic / Google / OpenCode multimodal adapters: shape-tested only, provider-live-UNVERIFIED** — no credential or account for those providers on this machine. A repeated Moondream probe in this pass returned an empty string against a 1x1 transparent PNG, which is a degenerate input and does not retract the earlier real evidence** | **(a) CLOSED (Ollama) / (b) UNVERIFIED (others)** |
 | 9.3 | Memory Search | memory store | `savePersonalMemory` / `recallPersonalMemory` / working + session memory | — | — | — | — | **installed pkg: the memory surface is exposed — personal, working, session and project memory with save/update/delete/recall. Individual recall was not exercised in this pass** | **IMPLEMENTED / NOT LIVE VERIFIED** |
 | 9.4 | Knowledge Base | was MISSING | `electron/knowledge/**` | — | ingestion from files/URLs/notes reusing `resolveUserPath` and the SSRF-guarded `web_fetch_page`; `memory_recall` self-heals an empty index | 43 tests | — | **all nine `knowledge:*` channels exposed in preload (six payload shapes were wrong in the first attempt — `get`/`delete` take bare strings)** | **CLOSED (implemented + test-proven; live acceptance not yet run)** |
