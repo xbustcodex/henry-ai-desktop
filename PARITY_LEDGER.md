@@ -233,7 +233,7 @@ guarding, `_denyDangerous`).
 
 | # | Row | PAID EVIDENCE | OUR CURRENT | GAP | STATUS |
 |---|---|---|---|---|---|
-| 8.1 | AI Companion | renderer companion surface | whole Companion subsystem | — | — | — | — | **CLOSED — installed pkg: sync server running, `syncGetState` returns `running:true`, pending-action queue accepts actions** | **CLOSED** |
+| 8.1 | AI Companion | renderer companion surface | whole Companion subsystem | **LAN discovery picked the wrong interface**: `getLocalIp()` returned the FIRST non-internal IPv4, which on Windows is enumeration order, so Hyper-V `vEthernet (Default Switch)` 172.18.96.1 won over the real Wi-Fi 192.168.1.110. Separately the state payload advertised `http://<lanIp>:4242` while the listener was bound to loopback | `electron/ipc/network.ts`: default-route-driven selection, virtual adapters demoted as additional evidence, link-local demoted; advertised host now honest (`lanReachable` flag) | **14 tests** covering the exact reported topology: disconnected Ethernet, connected vEthernet with IPv4 and no gateway, connected Wi-Fi with default gateway — selection is the Wi-Fi; plus Ethernet-only, virtual-only, Docker, VPN, non-private default route, empty and IPv6 cases | route detection reads Windows `route print -4` Active Routes | **installed pkg: `localIp` now reports `192.168.1.110` (was 172.18.96.1); listener confirmed bound to 127.0.0.1 only and `192.168.1.110:4242` correctly unreachable while LAN access is off** | **CLOSED (discovery)** — the Android QR test is blocked: it needs `sync_allow_lan` enabled and a physical phone | **CLOSED** |
 | 8.2 | Memory Graph | renderer memory-graph surface | `MemoryGraphView` | — | — | — | — | **UNVERIFIED — implemented and reached in the UI; not re-walked on this package** | **IMPLEMENTED / NOT LIVE VERIFIED** |
 | 8.3 | Personality | renderer personality surface | profile/persona settings | — | — | — | — | **UNVERIFIED** | **IMPLEMENTED / NOT LIVE VERIFIED** |
 | 8.4 | Emotional Context | renderer emotional surface | emotional-context memory scoring | — | — | — | — | **UNVERIFIED — note this build also shipped the emotional_significance_score column used here** | **IMPLEMENTED / NOT LIVE VERIFIED** |
@@ -525,3 +525,41 @@ supposed to eliminate.
 **Anthropic, Google and the opencode/bridge adapters remain adapter-tested / provider-live-unverified.**
 Their converters have shape-test coverage and share the same gate architecture, but no key or
 vision-capable remote model was configured for this run, and none is claimed as verified.
+
+
+---
+
+## LAN discovery defect — root cause and fix (2026-10-03)
+
+**Reported:** Henry generated `172.18.96.1:4242` for the companion QR. On this machine the
+correct physical LAN address is `192.168.1.110` (Wi-Fi 2). `ipconfig` confirmed the ordinary
+Ethernet adapter is disconnected and a Hyper-V `vEthernet (Default Switch)` holds 172.18.96.1
+with no gateway.
+
+**Cause.** `getLocalIp()` returned the first `IPv4 && !internal` entry from
+`os.networkInterfaces()` — pure enumeration order, with no notion of which interface is actually
+carrying traffic.
+
+**Fix.** `electron/ipc/network.ts` selects on evidence:
+1. the source address of the **active default route** (decisive; `route print -4` on Windows,
+   `netstat -rn` elsewhere);
+2. virtual/container/tunnel adapters demoted — *additional* evidence, never the sole mechanism,
+   so a machine whose only link is virtual still gets an answer;
+3. RFC1918 preferred over self-assigned `169.254` links;
+4. anything else with a unicast IPv4 still usable.
+
+No IP or interface name is hardcoded.
+
+**Verified on the installed package:** `localIp` now reports **192.168.1.110**. The parser reads
+the `Active Routes` row `0.0.0.0 0.0.0.0 192.168.1.1 192.168.1.110` and correctly ignores the
+separate `172.18.96.0` on-link route.
+
+**Second defect found while verifying.** The state payload advertised `http://<lanIp>:4242`
+regardless of the bind host, so a phone would be handed an address nothing listened on. The
+advertised host is now `127.0.0.1` with `lanReachable:false` unless LAN access is enabled. No IP
+or interface name is hardcoded.
+
+**Blocked, deliberately:** the Android QR acceptance test and the full pairing lifecycle. The
+listener is confirmed bound to `127.0.0.1:4242` and `192.168.1.110:4242` is correctly unreachable,
+because `sync_allow_lan` is off. Enabling it exposes 4242 to every host on the network, which is
+the user's security decision to make, not one to flip unasked.

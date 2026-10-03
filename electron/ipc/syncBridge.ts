@@ -39,6 +39,7 @@ import { IS_MAC, IS_WIN, IS_LINUX, tryExec, desktopPath, downloadPath, revealFil
 import crypto from 'crypto';
 import os from 'os';
 import fs from 'fs';
+import { getLanAddressSync, getLanAddress, detectDefaultRouteSource } from './network';
 import { ipcMain, BrowserWindow, webContents, app } from 'electron';
 
 /* === henry-remote-control v1 === */
@@ -213,16 +214,42 @@ let tunnelProcess: import('child_process').ChildProcess | null = null;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function getLocalIp(): string {
-  const ifaces = os.networkInterfaces();
-  for (const name of Object.keys(ifaces)) {
-    for (const iface of ifaces[name] ?? []) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
-      }
+/**
+ * The machine's real LAN address.
+ *
+ * This used to return the FIRST non-internal IPv4 out of
+ * `os.networkInterfaces()`, i.e. whatever the OS enumerated first. On Windows
+ * that is frequently a Hyper-V "vEthernet (Default Switch)", so a phone was
+ * handed a QR pointing at an address that is not on the real network. Now it
+ * prefers the interface carrying the active default route and demotes
+ * virtual/container/tunnel adapters — see electron/ipc/network.ts, which also
+ * holds the regression tests for that exact topology.
+ */
+/**
+ * The host to advertise for the companion.
+ *
+ * The state payload used to report `http://<lanIp>:4242` unconditionally,
+ * even when the server was bound to loopback — so a phone scanning a QR got an
+ * address nothing was listening on. LAN-reachable only when the listener is
+ * actually bound to a non-loopback interface.
+ */
+function advertisedHost(): string {
+  const allowLan = (() => {
+    try {
+      const row = dbGetOne<{ value: string }>("SELECT value FROM settings WHERE key='sync_allow_lan'");
+      return row?.value === 'true' || row?.value === '1';
+    } catch {
+      return false;
     }
-  }
-  return '127.0.0.1';
+  })();
+  if (!allowLan) return '127.0.0.1';
+  return getLanAddressSync() ?? '127.0.0.1';
+}
+
+function getLocalIp(): string {
+  // Prefer a previously resolved value: route detection is a child process and
+  // this is called on every state read.
+  return getLanAddressSync() ?? '127.0.0.1';
 }
 
 function generateToken(bytes = 24): string {
@@ -856,8 +883,12 @@ async function handleRequest(
       jsonResponse(res, 200, {
         running: serverRunning,
         port: currentPort,
+        // localIp is the machine's real LAN address (informational);
+        // companionUrl is only usable from another device when the listener is
+        // actually LAN-reachable.
         localIp: getLocalIp(),
-        companionUrl: `http://${getLocalIp()}:${currentPort}`,
+        companionUrl: `http://${advertisedHost()}:${currentPort}`,
+        lanReachable: advertisedHost() !== '127.0.0.1',
         tunnelUrl,
         pairToken: pairToken && Date.now() < pairTokenExpiry ? pairToken : null,
         pairTokenExpiry,
@@ -9471,6 +9502,10 @@ export function startSyncServer(port = 4242, host?: string): SyncServerState {
   } catch (e) {
     console.error('[SyncBridge] Failed to attach screen WS:', e);
   }
+
+  // Resolve the real LAN address once, up front: the first QR code a creator
+  // generates must not be built from an uncached guess.
+  void getLanAddress();
 
   server.listen(port, bindHost, async () => {
     console.log(`[SyncBridge] Sync server listening on ${bindHost}:${port} (${bindHost === '0.0.0.0' ? 'LAN-reachable' : 'loopback-only — set sync_allow_lan=true for direct LAN'})`);
