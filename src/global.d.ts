@@ -1093,6 +1093,12 @@ declare global {
     knowledgeStats?: () => Promise<{ ok: boolean; result?: unknown; error?: string }>;
     knowledgeReindexMemory?: () => Promise<{ ok: boolean; result?: unknown; error?: string }>;
     knowledgeRecallMemory?: (query: string, k?: number) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
+
+    // ── Agent tool streaming ─────────────────────────────────────────────────
+    // Emitted by the tool runner while a tool-calling round streams. Without a
+    // consumer the user sees the whole answer arrive at once.
+    onAgentToolStreamDelta?: (cb: (p: { round: number; text: string }) => void) => () => void;
+    onAgentToolStreamFinal?: (cb: (p: { round: number; content: string }) => void) => () => void;
   voiceGreeting?: (opts?: { speak?: boolean }) => Promise<HenryVoiceResult<{
     text: string;
     period: 'morning' | 'afternoon' | 'evening' | 'lateNight';

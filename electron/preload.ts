@@ -467,6 +467,19 @@ contextBridge.exposeInMainWorld('henryAPI', {
   knowledgeReindexMemory: () => ipcRenderer.invoke('knowledge:reindexMemory'),
   knowledgeRecallMemory: (query: string, k?: number) =>
     ipcRenderer.invoke('knowledge:recallMemory', { query, k: k ?? 10 }),
+  // ── Agent tool streaming ─────────────────────────────────────────────────
+  // Without these the runner emits deltas into the void and the user sees the
+  // whole answer arrive at once, which looks exactly like not streaming.
+  onAgentToolStreamDelta: (cb: (p: { round: number; text: string }) => void) => {
+    const handler = (_: IpcRendererEvent, p: { round: number; text: string }) => cb(p);
+    ipcRenderer.on('agent:tool-stream-delta', handler);
+    return () => ipcRenderer.removeListener('agent:tool-stream-delta', handler);
+  },
+  onAgentToolStreamFinal: (cb: (p: { round: number; content: string }) => void) => {
+    const handler = (_: IpcRendererEvent, p: { round: number; content: string }) => cb(p);
+    ipcRenderer.on('agent:tool-stream-final', handler);
+    return () => ipcRenderer.removeListener('agent:tool-stream-final', handler);
+  },
   // Recordings (Meeting Recorder → SQLite)
   recordingsList: () => ipcRenderer.invoke('recordings:list'),
   recordingsGet: (id: string) => ipcRenderer.invoke('recordings:get', id),

@@ -1511,7 +1511,11 @@ export function registerAIHandlers(_db: Database.Database, getWindow: WindowGett
         // final fullText, and the user learns why the agent did nothing
         // instead of being left to guess.
         let toolsUnavailable: string | undefined;
-        const complete = (msgs: RunnerMessage[], modelTools: ModelTool[]) =>
+        // The third parameter carries the runner's delta handler. It must be
+        // forwarded: dropping it made every agent turn fall through to the
+        // buffered round, which is indistinguishable from not streaming at all
+        // and is exactly the defect row 2.1 was recorded against.
+        const complete = (msgs: RunnerMessage[], modelTools: ModelTool[], handlers?: { onDelta?: (text: string) => void }) =>
           callAIWithTools({
             provider: params.provider,
             model: params.model,
@@ -1522,6 +1526,7 @@ export function registerAIHandlers(_db: Database.Database, getWindow: WindowGett
             signal: controller.signal,
             messages: msgs,
             modelTools,
+            onDelta: handlers?.onDelta,
             onToolsUnavailable: (notice) => {
               toolsUnavailable = notice;
             },
