@@ -6,12 +6,14 @@ import type { MessagePart } from '../ipc/contentParts';
  * The runner is provider-agnostic: `ai.ts` supplies a `complete` callback that
  * runs one model round (with the registry's tools attached) and returns the
  * assistant's text plus any tool calls. The runner then, per tool:
- *   - silent : execute immediately, log it, continue
+ *   - silent : execute immediately, log it, continue — UNLESS the security
+ *              policy's `confirmSilentTools` flag is on, in which case it
+ *              routes through the same approval gate as confirm-tier. That
+ *              flag is a gate ABOVE the tier: no tool is reclassified.
  *   - notify : execute, fire a renderer toast, continue
  *   - confirm: emit `agent:confirm-required`, await `agent:confirm-response`,
  *              and only execute if approved (using edited args if provided)
  * Every call + result is written to the session store as a `tool` message.
- *
  * Loops at most `maxRounds` (default 10) to prevent runaway tool use.
  */
 
@@ -19,6 +21,7 @@ import { randomUUID } from 'crypto';
 import type { AgentContext, ModelTool, ToolResult } from './types';
 import type { ToolRegistry } from './toolRegistry';
 import { log } from '../lib/log';
+import { policyFlag } from '../ipc/securityPolicy';
 
 // ── Conversation shape passed to / from the model ──────────────────────────
 
@@ -250,7 +253,23 @@ async function executeToolCall(
   const describe = tool.confirmPrompt ? tool.confirmPrompt(args) : `Run ${tool.name}`;
 
   // confirm tier — pause for the user before doing anything.
-  if (tool.safetyLevel === 'confirm') {
+
+  // Security policy: when `confirmSilentTools` is on, the SILENT tier also
+  // pauses for the user. This is a gate ABOVE the tier, not a reclassification
+  // — no tool's declared `safetyLevel` changes, so the tier counts and the
+  // safety-policy tests still describe reality. It routes through the SAME
+  // `requestConfirmation` as confirm-tier, so there is exactly one gate and
+  // one place where the no-renderer fail-safe lives.
+  //
+  // It fails closed: `policyFlag` returns the policy default (true) before
+  // the store has loaded and on any unreadable stored value, so an
+  // uninitialised or corrupt policy blocks silent tools rather than
+  // silently permitting them.
+  const needsApproval =
+    tool.safetyLevel === 'confirm' ||
+    (tool.safetyLevel === 'silent' && policyFlag('confirmSilentTools'));
+
+  if (needsApproval) {
     const decision = await requestConfirmation(context, {
       id: randomUUID(),
       toolName: tool.name,
@@ -258,6 +277,8 @@ async function executeToolCall(
       description: describe,
     });
     if (!decision.approved) {
+      // Deliberately the same error a confirm-tier denial produces: a caller
+      // must not be able to tell the two apart and branch on it.
       return { ok: false, error: 'User declined the action.' };
     }
     if (decision.editedArgs) args = decision.editedArgs;

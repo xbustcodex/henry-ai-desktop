@@ -9,8 +9,9 @@
  *   Sprint 1: memory, finance
  *   Sprint 2: calendar, messages, email (macOS automation) + permissions_check
  *   Sprint 4: web (search + fetch), quickbooks (QBO REST API)
+ *   Parity: goals + plans (agent-authored plans the user reviews), GitHub
+ *   research, self-improvement lessons, jailed Python, git integration.
  */
-
 import type { ToolRegistry } from "../toolRegistry";
 import { memoryTools } from "./memory";
 import { financeTools } from "./finance";
@@ -26,6 +27,13 @@ import { bookTools } from "./book";
 import { repoTools } from "./repo";
 import { machineTools } from "./machines";
 import { fileTools } from "./files";
+import { goalsTools } from "./goals";
+import { plansTools } from "./plans";
+import { githubTools } from "./github";
+import { lessonsTools } from "./lessons";
+import { pythonTools } from "./python";
+import { credentialTools } from "./credentials";
+import { integrationTools } from "../../integrations";
 
 export function registerAllTools(registry: ToolRegistry): void {
   registry.registerAll([
@@ -42,7 +50,13 @@ export function registerAllTools(registry: ToolRegistry): void {
     ...quickbooksTools(),
     ...repoTools(),
     ...machineTools(),
-  
-        ...fileTools,
+    ...goalsTools(),
+    ...plansTools(),
+    ...githubTools(),
+    ...lessonsTools(),
+    ...pythonTools(),
+    ...credentialTools(),
+    ...integrationTools(),
+    ...fileTools,
   ]);
 }
