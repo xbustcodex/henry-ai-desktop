@@ -766,6 +766,18 @@ contextBridge.exposeInMainWorld('henryAPI', {
   voiceTtsStatus: () => ipcRenderer.invoke('voice:ttsStatus'),
   voiceGreeting: (opts?: { speak?: boolean }) => ipcRenderer.invoke('voice:greeting', opts ?? {}),
   voiceGreetingClearCache: () => ipcRenderer.invoke('voice:greeting:clearCache'),
+  voiceSttDownloadModel: () => ipcRenderer.invoke('voice:sttDownloadModel'),
+  voiceTtsLocalStatus: (opts?: { voice?: string; refresh?: boolean }) => ipcRenderer.invoke('voice:ttsLocalStatus', opts ?? {}),
+  voiceTtsLocalVoices: () => ipcRenderer.invoke('voice:ttsLocalVoices'),
+  voiceTtsLocalSetup: (opts?: { voice?: string }) => ipcRenderer.invoke('voice:ttsLocalSetup', opts ?? {}),
+  voiceTtsLocalStop: () => ipcRenderer.invoke('voice:ttsLocalStop'),
+  voiceTtsLocalSetupProgress: (cb: (p: unknown) => void) => {
+    const handler = (_e: unknown, p: unknown) => cb(p);
+    ipcRenderer.on('voice:ttsLocal:setup-progress', handler);
+    return () => ipcRenderer.removeListener('voice:ttsLocal:setup-progress', handler);
+  },
+  voiceElevenLabsStatus: () => ipcRenderer.invoke('voice:elevenlabsStatus'),
+  voiceElevenLabsVoices: () => ipcRenderer.invoke('voice:elevenlabsVoices'),
 
   // ── Companion Sync Bridge ─────────────────────────────────
   syncStart: (port?: number) => ipcRenderer.invoke('henry:sync:start', port),
@@ -841,4 +853,57 @@ contextBridge.exposeInMainWorld('henryAPI', {
     ipcRenderer.on('updater:update-downloaded', handler);
     return () => ipcRenderer.removeListener('updater:update-downloaded', handler);
   },
+
+  // ── Security / privacy / logs / quit ─────────────────────────────────
+  // Each of these maps to a switch that gates real behaviour in the main
+  // process (see electron/ipc/securityPolicy.ts). None of them is UI-only
+  // state: `securitySet` writes the row the IPC boundary consults on the very
+  // next call.
+
+  /** Full policy + defaults + lock state, for the Security panel to render. */
+  securityGet: () => ipcRenderer.invoke('security:get'),
+  securitySet: (key: string, value: boolean) => ipcRenderer.invoke('security:set', { key, value }),
+  /** Stores a scrypt hash — the PIN itself is never written to disk. */
+  securitySetPin: (pin: string) => ipcRenderer.invoke('security:setPin', { pin }),
+  securityClearPin: () => ipcRenderer.invoke('security:clearPin'),
+  securityUnlock: (pin: string) => ipcRenderer.invoke('security:unlock', { pin }),
+
+  privacyGet: () => ipcRenderer.invoke('privacy:get'),
+  privacyClear: (what: string[]) => ipcRenderer.invoke('privacy:clear', { what }),
+
+  logsQuery: (q?: Record<string, unknown>) => ipcRenderer.invoke('logs:query', q ?? {}),
+  logsStats: () => ipcRenderer.invoke('logs:stats'),
+  logsClear: (before?: string) => ipcRenderer.invoke('logs:clear', before ? { before } : {}),
+  logsSetRetention: (days: number) => ipcRenderer.invoke('logs:retention', { days }),
+  logsGetRetention: () => ipcRenderer.invoke('logs:retention:get'),
+  /** Returns redacted text. Writes no file — the caller decides where it goes. */
+  logsExport: (q?: Record<string, unknown>) => ipcRenderer.invoke('logs:export', q ?? {}),
+
+  /**
+   * Quit Henry.
+   *
+   * Returns `{ ok: false, needsConfirmation: true, activeWork: [...] }` rather
+   * than quitting when a Routine or task is still running; pass `confirm: true`
+   * after the user has acknowledged the lost work.
+   */
+  quitApp: (opts?: { force?: boolean; confirm?: boolean }) =>
+    ipcRenderer.invoke('app:quit', opts ?? {}),
+  appActiveWork: () => ipcRenderer.invoke('app:activeWork'),
+  /** Main tells the renderer it has begun teardown, so it can show "saving…". */
+  onAppQuitting: (cb: (info: { forced: boolean; abandonedWork: string[] }) => void) => {
+    const handler = (_: IpcRendererEvent, info: { forced: boolean; abandonedWork: string[] }) =>
+      cb(info);
+    ipcRenderer.on('app:quitting', handler);
+    return () => ipcRenderer.removeListener('app:quitting', handler);
+  },
+
+  /**
+   * Grant one execution of a gated channel (shell/terminal/printer).
+   *
+   * Must be called ONLY after the user has actually confirmed — the main
+   * process treats a grant as that decision having been made. Grants are
+   * single-use and expire in 60s.
+   */
+  securityApproveChannel: (channel: string) =>
+    ipcRenderer.invoke('security:approve-channel', { channel }),
 });

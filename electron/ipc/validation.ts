@@ -36,6 +36,7 @@
  * phantom install prompt.
  */
 import { z } from 'zod';
+import { ipcMain } from 'electron';
 
 // ── Baseline ────────────────────────────────────────────────────────────────
 
@@ -151,7 +152,7 @@ const nonEmpty = (max = 4096) => z.string().trim().min(1).max(max);
 /** Coordinates and other geometry reach a shell command on macOS, so they must
  *  be finite numbers rather than whatever the renderer sent. */
 
-export const channelSchemas: Record<string, z.ZodTypeAny> = {
+export const channelSchemas: Record<string, ChannelSchema> = {
   // ── Shell / process execution ──────────────────────────────────────────
   'computer:runShell': z
     .object({
@@ -254,6 +255,238 @@ export const channelSchemas: Record<string, z.ZodTypeAny> = {
     })
     // Strict: both ends are ours, and nothing legitimate sends extra fields.
     .strict(),
+  // ── Conversations / messages / cost ───────────────────────────────────
+  // Bare strings, per preload: createConversation(title) →
+  // invoke('conversations:create', title).
+  'conversations:create': nonEmpty(1000),
+  'conversations:update': z.object({ id: nonEmpty(128), title: z.string().max(1000) }).passthrough(),
+  'conversations:delete': nonEmpty(128),
+  'messages:getAll': nonEmpty(128),
+  'messages:save': z
+    .object({
+      id: nonEmpty(128),
+      conversation_id: nonEmpty(128),
+      role: z.string().max(32),
+      content: z.string().max(16 * 1024 * 1024),
+      model: z.string().max(200).optional(),
+      provider: z.string().max(200).optional(),
+      tokens_used: finiteNumber.optional(),
+      cost: finiteNumber.optional(),
+      engine: z.string().max(64).optional(),
+    })
+    .passthrough(),
+  'cost:getAll': z.enum(['7d', '30d']).optional(),
+
+  // ── Memory ────────────────────────────────────────────────────────────
+  // preload passes a bare string for every id-taking memory channel and a bare
+  // number for the limit variant — an object schema would reject all of them.
+  'memory:getAllFacts': z.number().int().min(1).max(10_000).optional(),
+  'memory:getSummary': nonEmpty(128),
+  'memory:getSessionMemory': nonEmpty(128),
+  'memory:getWorkingMemory': z.string().max(128).optional(),
+  'memory:getProjectMemory': nonEmpty(128),
+  'memory:saveWhereWeLeftOff': z.string().max(100_000),
+  'memory:searchWorkspace': z.string().max(4096),
+  // Positional: preload's updatePersonalMemory(id, updates).
+  'memory:updatePersonalMemory': [nonEmpty(128), z.record(z.string(), z.unknown())],
+  'memory:updateProject': [nonEmpty(128), z.record(z.string(), z.unknown())],
+  'memory:updateGoal': [nonEmpty(128), z.record(z.string(), z.unknown())],
+  'memory:updateCommitment': [nonEmpty(128), z.record(z.string(), z.unknown())],
+  'memory:deletePersonalMemory': nonEmpty(128),
+  'memory:recallPersonalMemory': nonEmpty(128),
+  'memory:deleteGoal': nonEmpty(128),
+  'memory:resolveCommitment': nonEmpty(128),
+
+  // ── Memory: options objects ────────────────────────────────────────────
+  'memory:getPersonalMemory': z
+    .object({ limit: z.number().int().min(1).max(1000).optional(), category: z.string().max(64).optional() })
+    .passthrough()
+    .optional(),
+  'memory:getProjects': z
+    .object({ status: z.string().max(32).optional(), limit: z.number().int().min(1).max(1000).optional() })
+    .passthrough()
+    .optional(),
+  'memory:getGoals': z
+    .object({ status: z.string().max(32).optional(), limit: z.number().int().min(1).max(1000).optional() })
+    .passthrough()
+    .optional(),
+  'memory:getCommitments': z
+    .object({ status: z.string().max(32).optional(), limit: z.number().int().min(1).max(1000).optional() })
+    .passthrough()
+    .optional(),
+  'memory:getMilestones': z
+    .object({ projectId: z.string().max(128).optional(), limit: z.number().int().min(1).max(1000).optional() })
+    .passthrough()
+    .optional(),
+  'memory:getRelationshipMemory': z
+    .object({ limit: z.number().int().min(1).max(1000).optional() })
+    .passthrough()
+    .optional(),
+  'memory:getNarrativeMemory': z
+    .object({ activeOnly: z.boolean().optional(), limit: z.number().int().min(1).max(1000).optional() })
+    .passthrough()
+    .optional(),
+  'memory:getMemorySummaries': z
+    .object({ conversationId: z.string().max(128).optional(), limit: z.number().int().min(1).max(1000).optional() })
+    .passthrough()
+    .optional(),
+  'memory:getGraphEdges': z
+    .object({ kind: z.string().max(64).optional(), limit: z.number().int().min(1).max(5000).optional() })
+    .passthrough()
+    .optional(),
+
+  // ── Tasks / contacts / finance / journal / lists (all bare-string ids) ──
+  'tasks:list': z.object({ status: z.string().max(32).optional() }).passthrough().optional(),
+  'tasks:update': [nonEmpty(128), z.record(z.string(), z.unknown())],
+  'tasks:delete': nonEmpty(128),
+  'contacts:list': z.string().max(4096).optional(),
+  'contacts:get': nonEmpty(128),
+  'contacts:update': [nonEmpty(128), z.record(z.string(), z.unknown())],
+  'contacts:delete': nonEmpty(128),
+  'finance:list': z.string().max(32).optional(),
+  'finance:delete': nonEmpty(128),
+  'finance:summary': z.string().max(32),
+  'finance:recurring:delete': nonEmpty(128),
+  'journal:list': z.string().max(4096).optional(),
+  'journal:get': nonEmpty(128),
+  'journal:delete': nonEmpty(128),
+  'reminders:delete': nonEmpty(128),
+  'lists:delete': nonEmpty(128),
+  // Positional: preload's listsAddItem(listId, item).
+  'lists:add-item': [nonEmpty(128), z.record(z.string(), z.unknown())],
+  'lists:toggle-item': nonEmpty(128),
+  'lists:delete-item': nonEmpty(128),
+  'lists:clear-done': nonEmpty(128),
+  'focus:list': z.number().int().min(1).max(1000).optional(),
+  'capture:list': z.number().int().min(1).max(1000).optional(),
+
+  // ── Health (analytics rows — gated by persistAnalytics at the call site) ─
+  'health:logsForDate': z.string().max(32),
+  'health:logDelete': nonEmpty(128),
+  'health:habitDelete': nonEmpty(128),
+  'health:habitLog': z
+    .object({ habit_id: nonEmpty(128), date: z.string().max(32), count: z.number().int().min(0).max(10_000).optional() })
+    .strict(),
+  'health:habitUnlog': z.object({ habit_id: nonEmpty(128), date: z.string().max(32) }).strict(),
+  // Positional: preload's healthLogsRange(from, to) and habitLogsRange.
+  'health:logsRange': [z.string().max(32), z.string().max(32)],
+  'health:habitLogsForDate': z.string().max(32),
+  'health:habitLogsRange': [z.string().max(32), z.string().max(32)],
+
+  // ── Maker Studio ──────────────────────────────────────────────────────
+  'maker:machines:delete': nonEmpty(128),
+  'maker:materials:delete': nonEmpty(128),
+  'maker:runs:delete': nonEmpty(128),
+  'maker:waste:delete': nonEmpty(128),
+  'maker:maintenance:delete': nonEmpty(128),
+  'maker:bom:delete': nonEmpty(128),
+  'maker:waste:list': z.number().int().min(1).max(1000).optional(),
+  'maker:maintenance:list': z.string().max(128).optional(),
+  'maker:bom:list': z.string().max(256).optional(),
+
+  // ── Quoting ───────────────────────────────────────────────────────────
+  'quote:get': nonEmpty(128),
+  'quote:delete': nonEmpty(128),
+  'quote:duplicate': nonEmpty(128),
+  'quote:lineItem:delete': nonEmpty(128),
+  'quote:exportMarkdown': nonEmpty(128),
+  // Positional: preload's quoteSetStatus(id, status).
+  'quote:setStatus': [nonEmpty(128), z.string().max(32)],
+  // Positional: preload's quoteLineItemsReorder(quoteId, ids).
+  'quote:lineItems:reorder': [nonEmpty(128), z.array(nonEmpty(128)).max(1000)],
+
+  // ── Sync bridge (companion pairing / LAN surface) ──────────────────────
+  'henry:sync:start': z.number().int().min(1).max(65_535).optional(),
+  'henry:sync:unlink-device': nonEmpty(128),
+  'henry:sync:generate-pair-token': z.number().int().min(1000).max(86_400_000).optional(),
+
+  // ── Terminal / printer ────────────────────────────────────────────────
+  'terminal:exec': z
+    .object({
+      command: nonEmpty(32_000),
+      cwd: z.string().max(4096).optional(),
+      timeout: z.number().int().min(100).max(600_000).optional(),
+      channelId: z.string().max(128).optional(),
+    })
+    .passthrough(),
+  'terminal:kill': nonEmpty(128),
+  'printer:sendGcode': z.string().max(1_000_000),
+  'printer:printGcode': z.string().max(64 * 1024 * 1024),
+
+  // ── Computer control: bare-string app names ────────────────────────────
+  'computer:closeApp': nonEmpty(512),
+  'computer:activateApplication': nonEmpty(512),
+  'computer:focusAiInput': nonEmpty(512),
+  'computer:osascript': nonEmpty(32_000),
+  'computer:typeText': z.string().max(100_000),
+  'computer:pressKey': nonEmpty(64),
+  'computer:openUrl': z.string().max(4096),
+  'computer:killProcess': z.number().int().positive().max(2 ** 31),
+  'computer:setVolume': z.number().min(0).max(1),
+  'computer:clipboard:write': z.string().max(16 * 1024 * 1024),
+
+  // ── Sessions ──────────────────────────────────────────────────────────
+  'session:delete': z.record(z.string(), z.unknown()),
+
+  // ── Attachments / media / recordings (bare-string ids) ─────────────────
+  'attachments:list': nonEmpty(128),
+  'attachments:listForMessage': nonEmpty(128),
+  'attachments:get': nonEmpty(128),
+  'attachments:delete': nonEmpty(128),
+  'attachments:open': nonEmpty(128),
+  // Positional: preload's linkAttachmentsToMessage(ids, messageId, conversationId).
+  'attachments:linkToMessage': [z.array(nonEmpty(128)).max(1000), nonEmpty(128), z.string().max(128).optional()],
+  'media:get': nonEmpty(128),
+  'media:open': nonEmpty(128),
+  'media:reveal': nonEmpty(128),
+  'media:delete': nonEmpty(128),
+  'recordings:get': nonEmpty(128),
+  'recordings:delete': nonEmpty(128),
+
+  // ── Marketplace ───────────────────────────────────────────────────────
+  'marketplace:fetch': nonEmpty(128),
+  'marketplace:openEntry': nonEmpty(128),
+  'marketplace:reveal': nonEmpty(4096),
+  'marketplace:remove': nonEmpty(128),
+
+  // ── Ollama ────────────────────────────────────────────────────────────
+  'ollama:status': z.string().max(2048).optional(),
+  'ollama:models': z.string().max(2048).optional(),
+  'ollama:launch': z.string().max(4096).optional(),
+  // Positional: preload's ollamaPull(model, baseUrl) and ollamaDelete.
+  'ollama:pull': [nonEmpty(512), z.string().max(2048).optional()],
+  'ollama:delete': [nonEmpty(512), z.string().max(2048).optional()],
+
+  // ── Lessons ───────────────────────────────────────────────────────────
+  'lessons:courses:get': nonEmpty(128),
+  'lessons:courses:delete': nonEmpty(128),
+  'lessons:lessons:get': nonEmpty(128),
+  'lessons:reviews:listForCourse': nonEmpty(128),
+
+  // ── Security / privacy / logs / quit (see securityPolicy.ts) ───────────
+  'security:set': z.object({ key: z.string().max(64), value: z.boolean() }).strict(),
+  'security:unlock': z.object({ pin: z.string().min(4).max(128) }).strict(),
+  'security:setPin': z.object({ pin: z.string().min(4).max(128) }).strict(),
+  'privacy:clear': z
+    .object({
+      what: z
+        .array(z.enum(['conversations', 'messages', 'memory', 'analytics', 'attachments', 'media', 'logs']))
+        .min(1),
+    })
+    .strict(),
+  'logs:query': z
+    .object({
+      level: z.enum(['debug', 'info', 'warn', 'error', 'all']).optional(),
+      scope: z.string().max(120).optional(),
+      search: z.string().max(200).optional(),
+      since: z.string().max(64).optional(),
+      until: z.string().max(64).optional(),
+      limit: z.number().int().min(1).max(5000).optional(),
+    })
+    .strict(),
+  'logs:clear': z.object({ before: z.string().max(64).optional() }).strict(),
+  'logs:retention': z.object({ days: z.number().int().min(1).max(365) }).strict(),
+  'app:quit': z.object({ force: z.boolean().optional(), confirm: z.boolean().optional() }).strict(),
 };
 
 /** Channels whose payload must never be a bare string. */
@@ -261,7 +494,11 @@ export function validateRequest(channel: string, payload: unknown): unknown {
   const schema = channelSchemas[channel];
   const cleaned = sanitizePayload(payload);
   assertPayloadSize(channel, cleaned);
-  if (!schema) return cleaned;
+  // A positional (array) schema describes a multi-argument channel, which
+  // `validateRequest` — a single-payload helper used by the `guarded*`
+  // wrappers — cannot express. Such channels are enforced by the global
+  // boundary instead, so here they take the baseline only.
+  if (!schema || Array.isArray(schema)) return cleaned;
   const result = schema.safeParse(cleaned);
   if (result.success) return result.data;
   throw new ValidationError(
@@ -359,4 +596,240 @@ export function guardedEvent<Req, Res>(
 export function sanitizeArg<T>(channel: string, value: T): T {
   assertPayloadSize(channel, value);
   return sanitizePayload(value);
+}
+
+// ── The global boundary ─────────────────────────────────────────────────────
+
+/**
+ * ## Why one interception point instead of 367 edits
+ *
+ * Hand-writing a call to `guarded()` into every `ipcMain.handle` site was the
+ * previous approach and it does not scale: it was applied to 2 of 367
+ * channels, and every future handler is another chance to forget. Worse, it
+ * spreads a security-relevant decision across dozens of files, so "is channel
+ * X validated?" is only answerable by reading all of them.
+ *
+ * Instead we wrap `ipcMain.handle` itself, once, before any handler is
+ * registered. From that point on every channel — present or future — passes
+ * through the baseline and through its schema if it has one. A new handler is
+ * covered by construction rather than by discipline.
+ *
+ * ## What it does and does not change
+ *
+ * It does not alter handler signatures, return shapes, or the set of arguments
+ * a handler receives (all arguments are forwarded, in order, after
+ * sanitisation). A channel with no schema still works exactly as before; it
+ * simply gets the baseline. This is the property that kept the earlier
+ * migrations from breaking working calls.
+ */
+
+/**
+ * A schema for a channel that takes several arguments. The array is positional
+ * and matches the renderer's `invoke(channel, a, b, c)` call exactly — see
+ * `contacts:update(id, patch)` and `attachments:linkToMessage(ids, id, convId)`.
+ */
+export type ChannelSchema = z.ZodTypeAny | z.ZodTypeAny[];
+
+/**
+ * Channels whose execution the security policy can require confirmation for.
+ *
+ * Membership is decided by what the channel DOES, not by what module it lives
+ * in: every entry can reach a shell, and none of them is reachable without a
+ * renderer-side approval grant when `confirmShell` is on.
+ */
+export const SHELL_GATED_CHANNELS: ReadonlySet<string> = new Set([
+  'computer:runShell',
+  'computer:osascript',
+  'terminal:exec',
+  'printer:sendGcode',
+  'printer:printGcode',
+]);
+
+/**
+ * One-shot approval grants, keyed by channel.
+ *
+ * Single-use on purpose. An approval that could be replayed would let a
+ * compromised renderer satisfy the gate once and then run commands forever,
+ * which is the same exposure as having no gate.
+ */
+const approvals = new Map<string, number>();
+
+/** Grants are short-lived so a forgotten approval cannot be revived later. */
+const APPROVAL_TTL_MS = 60_000;
+
+/**
+ * Record that the user approved one execution of `channel`.
+ *
+ * Called from the preload bridge only after the renderer has actually shown a
+ * confirmation. Returns false for an unknown channel so a typo cannot create a
+ * grant that some later channel happens to match.
+ */
+export function armChannelApproval(channel: string, getWindow?: () => { isDestroyed(): boolean } | null): boolean {
+  if (!SHELL_GATED_CHANNELS.has(channel)) return false;
+  const win = getWindow?.();
+  if (win && win.isDestroyed()) return false;
+  approvals.set(channel, Date.now() + APPROVAL_TTL_MS);
+  return true;
+}
+
+/**
+ * Spend an approval for `channel`, returning whether one was valid.
+ *
+ * Expired grants are deleted on the way out rather than left to accumulate.
+ */
+export function consumeChannelApproval(channel: string): boolean {
+  const expiry = approvals.get(channel);
+  if (expiry === undefined) return false;
+  approvals.delete(channel);
+  return Date.now() < expiry;
+}
+
+/** Drop every outstanding grant. Used on policy change and by tests. */
+export function revokeChannelApprovals(): void {
+  approvals.clear();
+}
+
+/**
+ * The refusal every gated channel returns when its approval is missing.
+ *
+ * Distinct from a validation failure on purpose: `validationError: true` means
+ * the payload was malformed and retrying will not help, whereas this means the
+ * call was well-formed and is waiting on a decision the user has not made. The
+ * renderer keys its confirm dialog off `confirmationRequired`.
+ */
+export interface ConfirmationRequired {
+  ok: false;
+  confirmationRequired: true;
+  channel: string;
+  error: string;
+}
+
+export function confirmationRequired(channel: string): ConfirmationRequired {
+  return {
+    ok: false,
+    confirmationRequired: true,
+    channel,
+    error: 'This action needs your confirmation before it can run.',
+  };
+}
+
+/**
+ * How the boundary consults the security policy.
+ *
+ * Injected rather than imported so this module stays testable without a
+ * database, and so `electron/ipc/securityPolicy.ts` is the only owner of the
+ * defaults. `main.ts` wires the real implementation at install time.
+ */
+export interface BoundaryHooks {
+ /** Whether `channel` may run right now, given the policy and any approval. */
+  isExecutionAllowed?: (channel: string) => boolean;
+}
+
+/**
+ * Install the boundary. Idempotent — a second call is a no-op rather than a
+ * double wrap, so a hot reload cannot stack two validators on one channel.
+ *
+ * Must be called before any `register*Handlers()` runs.
+ */
+export function installIpcBoundary(hooks: BoundaryHooks = {}): void {
+  // Outside Electron (a plain-Node vitest run) the `electron` package resolves
+  // to a binary path, so `ipcMain` is undefined. That is a legitimate
+  // "nothing to install" — every channel in that environment is a test double.
+  if (!ipcMain || typeof ipcMain.handle !== 'function') return;
+  if ((ipcMain as unknown as { __henryGuarded?: boolean }).__henryGuarded) return;
+
+  const rawHandle = ipcMain.handle;
+  const original = rawHandle.bind(ipcMain);
+  // The wrapper accepts the same `(channel, listener)` pair but types its
+  // listener loosely; Electron's own signature narrows `event` to
+  // IpcMainInvokeEvent, which the wrapper forwards untouched.
+  const registrar = ipcMain as unknown as {
+    handle: (channel: string, listener: (...args: unknown[]) => unknown) => void;
+  };
+
+  registrar.handle = (channel: string, listener: (...args: unknown[]) => unknown) =>
+    original(channel, async (ev: unknown, ...payloadArgs: unknown[]) => {
+      try {
+        const schema = channelSchemas[channel];
+        let cleaned: unknown[];
+
+        if (Array.isArray(schema)) {
+          // Positional: every declared position is validated in place. A short
+          // call is left short rather than padded, so the handler sees exactly
+          // the arguments the renderer sent.
+          cleaned = payloadArgs.map((value, i) => {
+            const s = schema[i] as z.ZodTypeAny | undefined;
+            return s ? s.parse(value) : sanitizePayload(value);
+          });
+        } else if (schema) {
+          // A single-schema channel describes the FIRST payload argument; the
+          // rest still take the baseline.
+          cleaned = payloadArgs.map((value, i) =>
+            i === 0 ? (schema as z.ZodTypeAny).parse(value) : sanitizePayload(value),
+          );
+        } else {
+          cleaned = payloadArgs.map((value) => sanitizePayload(value));
+        }
+
+        for (const value of cleaned) assertPayloadSize(channel, value);
+
+        if (hooks.isExecutionAllowed && !hooks.isExecutionAllowed(channel)) {
+          return confirmationRequired(channel);
+        }
+
+        return listener(ev, ...cleaned);
+      } catch (e) {
+        if (e instanceof ValidationError || e instanceof z.ZodError) {
+          console.warn(`[ipc:${channel}] rejected payload:`, describeIssues(e));
+          return e instanceof ValidationError ? validationFailure(e) : zodFailure(channel, e);
+        }
+        throw e;
+      }
+    });
+
+  (ipcMain as unknown as { __henryGuarded?: boolean }).__henryGuarded = true;
+  (ipcMain as unknown as { __henryOriginalHandle?: unknown }).__henryOriginalHandle = rawHandle;
+}
+
+/**
+ * Uninstall the boundary and restore the original `ipcMain.handle`.
+ *
+ * A test seam: the install flag makes re-installation a deliberate no-op, which
+ * is correct in production (a hot reload must not stack validators) but means a
+ * test cannot swap hooks without it.
+ */
+export function __resetIpcBoundaryForTest(): void {
+  const marked = ipcMain as unknown as {
+    __henryGuarded?: boolean;
+    __henryOriginalHandle?: typeof ipcMain.handle;
+  };
+  if (marked.__henryOriginalHandle) ipcMain.handle = marked.__henryOriginalHandle;
+  delete marked.__henryOriginalHandle;
+  delete marked.__henryGuarded;
+}
+
+/** Shape a zod error into the same structured failure as a ValidationError. */
+function zodFailure(channel: string, e: z.ZodError): ValidationFailure {
+  return {
+    ok: false,
+    validationError: true,
+    error: `Rejected: ${e.issues
+      .slice(0, 12)
+      .map((i) => `${i.path.join('.') || 'payload'} ${i.message}`)
+      .join('; ')
+      .slice(0, 300)}`,
+    channel,
+    issues: e.issues.slice(0, 12).map((i) => ({
+      path: i.path.join('.') || '(root)',
+      message: i.message,
+    })),
+  };
+}
+
+/** One-line issue summary used by both failure shapes. */
+function describeIssues(e: ValidationError | z.ZodError): string {
+  if (e instanceof ValidationError) {
+    return e.issues.map((i) => `${i.path} ${i.message}`).join('; ');
+  }
+  return e.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ');
 }

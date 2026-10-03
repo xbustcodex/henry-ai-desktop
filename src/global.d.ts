@@ -497,6 +497,37 @@ declare global {
     modelPresent: boolean;
     modelPath: string;
     ready: boolean;
+    /** What is still missing, in plain words. Empty when ready. */
+    blockers: string[];
+    /** Per-platform command that resolves the binary gap; '' if unknown. */
+    installHint: string;
+  }
+
+  interface HenryLocalVoice {
+    id: string;
+    language: string;
+    installed: boolean;
+    sizeBytes: number;
+  }
+
+  interface HenryLocalTtsStatus {
+    engine: 'piper';
+    binaryPresent: boolean;
+    binaryPath: string | null;
+    modelPresent: boolean;
+    modelPath: string;
+    /** True only when binary AND model are both really on disk. */
+    ready: boolean;
+    blockers: string[];
+    installHint: string;
+  }
+
+  interface HenryElevenLabsStatus {
+    available: boolean;
+    keyPresent: boolean;
+    reason: 'no-credential' | 'key-rejected' | 'network' | 'not-allowed' | null;
+    detail: string;
+    voiceCount: number;
   }
 
   interface HenryVoiceSetupProgress {
@@ -891,6 +922,44 @@ declare global {
     onUpdateAvailable: (cb: () => void) => () => void;
     onUpdateDownloaded: (cb: () => void) => () => void;
 
+    // ── Security / privacy / logs / quit ───────────────────────────────
+    // Each maps to a main-process switch that gates real behaviour. `policy`
+    // mirrors SecurityPolicy in electron/ipc/securityPolicy.ts — kept as a
+    // structural type so the renderer cannot drift from the main process.
+    securityGet: () => Promise<HenrySecurityStatus>;
+    securitySet: (key: string, value: boolean) => Promise<{ ok: boolean; error?: string; policy?: HenrySecurityPolicy }>;
+    /** The PIN is hashed with scrypt in the main process; it is never stored. */
+    securitySetPin: (pin: string) => Promise<{ ok: boolean; hasPin: boolean }>;
+    securityClearPin: () => Promise<{ ok: boolean; hasPin: boolean }>;
+    securityUnlock: (pin: string) => Promise<HenryUnlockResult>;
+
+    privacyGet: () => Promise<HenryPrivacyStatus>;
+    privacyClear: (what: HenryClearScope[]) => Promise<{ ok: boolean; removed: Partial<Record<HenryClearScope, number>> }>;
+
+    logsQuery: (q?: Record<string, unknown>) => Promise<HenryLogEntry[]>;
+    logsStats: () => Promise<HenryLogStats>;
+    logsClear: (before?: string) => Promise<{ removed: number }>;
+    logsSetRetention: (days: number) => Promise<{ days: number }>;
+    logsGetRetention: () => Promise<{ days: number }>;
+    /** Redacted plain text. Writes no file — the caller chooses the destination. */
+    logsExport: (q?: Record<string, unknown>) => Promise<{ text: string }>;
+
+    /**
+     * Quit Henry. When work is in flight this returns
+     * `{ ok: false, needsConfirmation: true, activeWork: [...] }` instead of
+     * quitting; pass `confirm: true` once the user has acknowledged the loss.
+     */
+    quitApp: (opts?: { force?: boolean; confirm?: boolean }) => Promise<HenryQuitResult>;
+    appActiveWork: () => Promise<{ activeWork: string[] }>;
+    onAppQuitting: (cb: (info: { forced: boolean; abandonedWork: string[] }) => void) => () => void;
+
+    /**
+     * Grant ONE execution of a gated channel (shell/terminal/printer).
+     * Call only after the user has actually confirmed — the main process
+     * treats the call as that decision having been made.
+     */
+    securityApproveChannel: (channel: string) => Promise<{ ok: boolean; channel: string }>;
+
     whisperTranscribe?: (audioBlob: Blob, apiKey: string) => Promise<string>;
 
     // ── Coder Engine (Electron-only — Claude Code CLI default, local fallback) ──
@@ -1004,6 +1073,14 @@ declare global {
     voiceSpeak?: (params: { text: string; engine?: 'auto' | 'local' | 'elevenlabs' }) => Promise<HenryVoiceResult<HenryVoiceSpeakResult>>;
     voiceStopSpeaking?: () => Promise<HenryVoiceResult<{ stopped: boolean }>>;
     voiceTtsStatus?: () => Promise<HenryVoiceResult<HenryVoiceTtsStatus>>;
+    voiceSttDownloadModel?: () => Promise<HenryVoiceResult<HenryVoiceSttStatus>>;
+    voiceTtsLocalStatus?: (opts?: { voice?: string; refresh?: boolean }) => Promise<HenryVoiceResult<HenryLocalTtsStatus>>;
+    voiceTtsLocalVoices?: () => Promise<HenryVoiceResult<HenryLocalVoice[]>>;
+    voiceTtsLocalSetup?: (opts?: { voice?: string }) => Promise<HenryVoiceResult<HenryLocalTtsStatus>>;
+    voiceTtsLocalStop?: () => Promise<HenryVoiceResult<{ stopped: boolean }>>;
+    voiceTtsLocalSetupProgress?: (cb: (p: unknown) => void) => () => void;
+    voiceElevenLabsStatus?: () => Promise<HenryVoiceResult<HenryElevenLabsStatus>>;
+    voiceElevenLabsVoices?: () => Promise<HenryVoiceResult<{ voiceId: string; name: string; category: string }[]>>;
   voiceGreeting?: (opts?: { speak?: boolean }) => Promise<HenryVoiceResult<{
     text: string;
     period: 'morning' | 'afternoon' | 'evening' | 'lateNight';
@@ -1100,4 +1177,96 @@ export interface RuntimeStatus {
   lastError: string | null;
   databaseOk: boolean;
   databaseError: string | null;
+}
+
+// ── Security / privacy / logs / quit ───────────────────────────────────────
+
+/**
+ * Mirrors `SecurityPolicy` in electron/ipc/securityPolicy.ts.
+ *
+ * Written out structurally rather than imported because the renderer bundle
+ * must not pull in a module that imports `better-sqlite3` and `electron`.
+ */
+export interface HenrySecurityPolicy {
+  confirmShell: boolean;
+  confirmSilentTools: boolean;
+  redactLogs: boolean;
+  allowLanSync: boolean;
+  confirmDeleteOutsideHome: boolean;
+  appLock: boolean;
+  persistConversations: boolean;
+  persistMemory: boolean;
+  persistAnalytics: boolean;
+  diagnosticsMetadata: boolean;
+  allowNetworkShare: boolean;
+}
+
+export interface HenrySecurityStatus {
+  policy: HenrySecurityPolicy;
+  /** The safe defaults, so the panel can show what "reset" would restore. */
+  defaults: HenrySecurityPolicy;
+  keys: string[];
+  hasPin: boolean;
+  locked: boolean;
+  /** Whether the OS keychain is available for provider-key encryption. */
+  encryptionAvailable: boolean;
+}
+
+export interface HenryUnlockResult {
+  ok: boolean;
+  lockedOut?: boolean;
+  retryInMs?: number;
+  attemptsRemaining?: number;
+}
+
+export type HenryClearScope =
+  | 'conversations'
+  | 'messages'
+  | 'memory'
+  | 'analytics'
+  | 'attachments'
+  | 'media'
+  | 'logs';
+
+export interface HenryPrivacyStatus {
+  policy: HenrySecurityPolicy;
+  telemetry: {
+    /** Always false — Henry has no outbound analytics path. Stated explicitly. */
+    transmitsAnything: boolean;
+    localOnly: boolean;
+    includesModelMetadata: boolean;
+  };
+  storage: {
+    conversations: boolean;
+    memory: boolean;
+    analytics: boolean;
+  };
+}
+
+export type HenryLogLevel = 'debug' | 'info' | 'warn' | 'error';
+
+export interface HenryLogEntry {
+  id: number;
+  ts: string;
+  level: HenryLogLevel;
+  scope: string;
+  /** Already redacted at capture time — a secret never reaches this field. */
+  message: string;
+}
+
+export interface HenryLogStats {
+  total: number;
+  byLevel: Partial<Record<HenryLogLevel, number>>;
+  oldest: string | null;
+  newest: string | null;
+  retentionDays: number;
+}
+
+export interface HenryQuitResult {
+  ok: boolean;
+  /** True when quitting was withheld because work is still in flight. */
+  needsConfirmation?: boolean;
+  activeWork?: string[];
+  abandonedWork?: string[];
+  error?: string;
 }

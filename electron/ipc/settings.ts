@@ -10,10 +10,36 @@
 
 import { ipcMain } from 'electron';
 import type Database from 'better-sqlite3';
-import { encryptKey, decryptKey, migrateProviderKeys } from './_keyStorage';
-import { guardedEvent } from './validation';
+import { encryptKey, decryptKey, migrateProviderKeys, canEncrypt } from './_keyStorage';
+import { guardedEvent, revokeChannelApprovals } from './validation';
 import { setOpencodeZenCredential } from '../coder/opencode';
 import { log } from '../lib/log';
+import {
+  DEFAULT_POLICY,
+  POLICY_KEYS,
+  clearPin,
+  getSecurityPolicy,
+  initSecurityPolicy,
+  isLocked,
+  policyFlag,
+  reload as reloadSecurityPolicy,
+  setPin,
+  setSecurityPolicy,
+  unlock,
+  hasPin,
+  type PolicyKey,
+} from './securityPolicy';
+import {
+  clearLogs,
+  exportLogs,
+  getRetentionDays,
+  initAppLog,
+  logStats,
+  queryLogs,
+  registerSecret,
+  setRetentionDays,
+  type LogQuery,
+} from './appLog';
 
 export function registerSettingsHandlers(db: Database.Database, getMainWindow?: () => import('electron').BrowserWindow | null) {
   // Encrypt any plaintext keys left over from before this feature shipped.
@@ -241,4 +267,166 @@ export function registerSettingsHandlers(db: Database.Database, getMainWindow?: 
     query += ' ORDER BY created_at DESC';
     return db.prepare(query).all();
   });
+
+  registerSecurityAndPrivacyHandlers(db);
 }
+
+// ── Security / privacy / logs ───────────────────────────────────────────────
+
+/**
+ * Tables each "clear my data" scope touches.
+ *
+ * Every table is listed inside a try/catch at the call site because the schema
+ * is created incrementally across releases and an older database may not have
+ * every one. A missing table means there is nothing stored to clear, which is
+ * the correct outcome for a deletion request — never an error.
+ */
+const CLEAR_TABLES: Record<string, string[]> = {
+  conversations: ['messages', 'message_attachments', 'conversations'],
+  messages: ['messages', 'message_attachments'],
+  memory: [
+    'memory_facts',
+    'memory_summaries',
+    'personal_memory',
+    'project_memory',
+    'session_memory',
+    'narrative_memory',
+    'relationship_memory',
+    'memory_graph_edges',
+    'conversation_summaries',
+  ],
+  analytics: ['cost_log', 'health_logs', 'habit_logs', 'automation_runs', 'tool_calls'],
+  attachments: ['message_attachments', 'attachments'],
+  media: ['media_library', 'media'],
+  logs: ['app_logs'],
+};
+
+function registerSecurityAndPrivacyHandlers(db: Database.Database): void {
+  // Attach the log store and hand it every provider key currently on disk, so
+  // a key that does not match any known prefix is still redacted.
+  initAppLog(db);
+  try {
+    const rows = db.prepare('SELECT api_key FROM providers').all() as Array<{ api_key: string }>;
+    for (const r of rows) registerSecret(decryptKey(r.api_key || ''));
+  } catch {
+    /* no providers table yet — nothing to protect */
+  }
+
+  // ── Security policy ─────────────────────────────────────────
+
+  /** Everything the Security and Privacy panels need to render, in one call. */
+  ipcMain.handle('security:get', () => ({
+    policy: getSecurityPolicy(),
+    defaults: DEFAULT_POLICY,
+    keys: POLICY_KEYS,
+    hasPin: hasPin(),
+    locked: isLocked(),
+    encryptionAvailable: canEncrypt(),
+  }));
+
+  /**
+   * Flip one switch.
+   *
+   * `appLock` is refused without a PIN: enabling it with no credential would
+   * lock the user out of their own data with no way back in. That check lives
+   * here rather than in the panel so it cannot be bypassed by calling IPC
+   * directly.
+   */
+  ipcMain.handle('security:set', async (_e, data: { key: string; value: boolean }) => {
+    if (!POLICY_KEYS.includes(data.key as PolicyKey)) {
+      return { ok: false, error: 'unknown_policy_key' };
+    }
+    const key = data.key as PolicyKey;
+    if (key === 'appLock' && data.value && !hasPin()) {
+      return { ok: false, error: 'pin_required' };
+    }
+    const ok = setSecurityPolicy(key, data.value);
+    // Revoking approvals on EVERY policy change — not just when a protection
+    // is switched off — means a grant can never outlive the policy state it
+    // was issued under. The cost is one extra confirmation after an unrelated
+    // switch flips; the benefit is that no stale approval survives a re-read.
+    if (ok) revokeChannelApprovals();
+    return { ok, policy: getSecurityPolicy() };
+  });
+
+  /** Set or replace the lock PIN. Stores a scrypt hash, never the PIN. */
+  ipcMain.handle('security:setPin', async (_e, data: { pin: string }) => {
+    const ok = await setPin(data.pin);
+    return { ok, hasPin: hasPin() };
+  });
+
+  ipcMain.handle('security:clearPin', () => ({ ok: clearPin(), hasPin: hasPin() }));
+
+  ipcMain.handle('security:unlock', async (_e, data: { pin: string }) => unlock(data.pin));
+
+  // ── Privacy ────────────────────────────────────────────────
+
+  /** What is stored and what would be sent. Telemetry is local-only by design. */
+  ipcMain.handle('privacy:get', () => {
+    const policy = getSecurityPolicy();
+    return {
+      policy,
+      // Stated explicitly rather than left for the user to infer: Henry has no
+      // outbound analytics path at all. Saying so is the feature.
+      telemetry: {
+        transmitsAnything: false,
+        localOnly: true,
+        includesModelMetadata: policy.diagnosticsMetadata,
+      },
+      storage: {
+        conversations: policy.persistConversations,
+        memory: policy.persistMemory,
+        analytics: policy.persistAnalytics,
+      },
+    };
+  });
+
+  /**
+   * Delete stored data.
+ *
+ * Returns a per-scope count rather than a bare boolean, so the UI can report
+   * what was actually removed — and so a scope whose tables were absent is
+   * visibly a no-op rather than looking like a silent failure.
+   */
+  ipcMain.handle('privacy:clear', (_e, data: { what: string[] }) => {
+    const result: Record<string, number> = {};
+    const run = db.transaction((scope: string) => {
+      let removed = 0;
+      for (const table of CLEAR_TABLES[scope] ?? []) {
+        try {
+removed += db.prepare(`DELETE FROM "${table}"`).run().changes;
+        } catch {
+          // Table absent in this database — nothing stored to clear.
+        }
+      }
+      return removed;
+    });
+    for (const scope of data.what) {
+      if (!CLEAR_TABLES[scope]) continue;
+      result[scope] = run(scope);
+    }
+    log.info(`[privacy:clear] removed`, JSON.stringify(result));
+    return { ok: true, removed: result };
+  });
+
+  // ── Application log ────────────────────────────────────────
+
+  ipcMain.handle('logs:query', (_e, q: LogQuery = {}) => queryLogs(q));
+  ipcMain.handle('logs:stats', () => logStats());
+  ipcMain.handle('logs:clear', (_e, data: { before?: string }) => ({ removed: clearLogs(data.before) }));
+  ipcMain.handle('logs:retention', (_e, data: { days: number }) => ({ days: setRetentionDays(data.days) }));
+  ipcMain.handle('logs:retention:get', () => ({ days: getRetentionDays() }));
+  ipcMain.handle('logs:export', (_e, q: LogQuery = {}) => ({ text: exportLogs(q) }));
+}
+
+// ── Re-exports so main.ts has one settings/security import site ────────────
+
+export {
+  getSecurityPolicy,
+  initSecurityPolicy,
+  isLocked,
+  policyFlag,
+  reloadSecurityPolicy,
+  DEFAULT_POLICY,
+  POLICY_KEYS,
+};

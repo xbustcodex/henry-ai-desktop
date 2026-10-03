@@ -46,13 +46,72 @@ import { registerAgentHandlers } from './ipc/agent';
 import { registerCoderHandlers } from './coder';
 import { registerSchedulerHandlers } from './ipc/scheduler';
 import { HenryScheduler } from './agent/scheduler';
-import { registerSyncBridgeIpc, setSyncDb, startSyncServer } from './ipc/syncBridge';
+import { registerSyncBridgeIpc, setSyncDb, startSyncServer, stopSyncServer } from './ipc/syncBridge';
 import { runDiagnostic, saveReport } from './ipc/selfRepair';
 import { decryptKey } from './ipc/_keyStorage';
 import { registerVoiceSttHandlers } from './voice/stt';
 import { registerVoiceGreetingHandlers } from './voice/greeting';
 import { registerVoiceTtsHandlers } from './voice/tts';
 import { log } from './lib/log';
+import type Database from 'better-sqlite3';
+import {
+  installIpcBoundary,
+  armChannelApproval,
+  SHELL_GATED_CHANNELS,
+  consumeChannelApproval,
+} from './ipc/validation';
+import {
+  initSecurityPolicy,
+  isLocked,
+  policyFlag,
+  getSecurityPolicy,
+  relock as relockApp,
+} from './ipc/securityPolicy';
+
+// ── The IPC trust boundary ──────────────────────────────────────────────────
+//
+// Installed at module scope, before `app.whenReady()` runs and therefore before
+// ANY `register*Handlers()` call. This single wrap covers all 355 channels:
+// every payload is sanitised and size-checked, and every channel with a schema
+// in `channelSchemas` is validated against it. A handler registered later — by
+// any module, including ones written after this line — is covered by
+// construction rather than by remembering to opt in.
+//
+// `isExecutionAllowed` is the security hook: it is consulted per call, so the
+// app-lock and shell-confirmation switches take effect on the next invocation
+// without restarting anything.
+installIpcBoundary({
+  isExecutionAllowed: (channel: string) => {
+    // A locked app refuses everything except the channels the lock screen
+    // itself needs. This is the enforcement point for the app lock — the UI
+    // merely reflects it, so hiding the panel cannot bypass the lock.
+    if (isLocked() && !LOCK_EXEMPT_CHANNELS.has(channel)) return false;
+    if (SHELL_GATED_CHANNELS.has(channel)) {
+      if (policyFlag('confirmShell')) return consumeChannelApproval(channel);
+    }
+    return true;
+  },
+});
+
+/**
+ * Channels that stay reachable while the app is locked.
+ *
+ * Without these the lock screen could not read the policy, ask for the PIN, or
+ * quit — a locked app with no way to unlock is a brick, not a lock.
+ */
+const LOCK_EXEMPT_CHANNELS: ReadonlySet<string> = new Set([
+  'security:get',
+  'security:unlock',
+  'security:setPin',
+  'security:clearPin',
+  'runtime:get-status',
+  'runtime:get-error',
+  'startup:get-failure',
+  'startup:clear-failure',
+  'app:quit',
+  'settings:getAll',
+  'settings:save',
+]);
 
 
 // Global IPC error handler — prevents any single handler crash from killing the process
@@ -456,6 +515,12 @@ app.whenReady().then(() => {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
   });
+
+  // ── In-app quit (row 11.13) ───────────────────────────────────────────────
+  // Previously the only ways out were the OS menu / taskbar and closing the
+  // window, which on a tray-capable build leaves the process alive. `will-quit`
+  // below tears down correctly but nothing could reach it from the UI.
+  registerQuitHandlers(db, getMainWindow);
 
   registerSettingsHandlers(db, getMainWindow);
 
@@ -1004,6 +1069,127 @@ app.whenReady().then(() => {
   console.error('[Henry:main] app.whenReady() rejected:', e);
   app.exit(1);
 });
+
+// ── In-app quit ──────────────────────────────────────────────────────────────
+
+/**
+ * Whether any work is still in flight.
+ *
+ * Quitting mid-run is the one action in Henry that can lose something real: a
+ * Routine mid-LLM-call, a terminal command mid-write. So the quit IPC refuses
+ * while work is outstanding unless the user explicitly forces it. `force` is
+ * surfaced in the UI as a second, clearly-labelled confirmation rather than a
+ * silent override — the user must be able to see that a run was abandoned.
+ */
+function activeWork(): string[] {
+  const busy: string[] = [];
+  // A Routine with a run in flight.
+  try {
+    const rows = henryScheduler
+      ? (getDb().prepare("SELECT name FROM routines WHERE status = 'running'").all() as Array<{ name: string }>)
+      : [];
+    for (const r of rows) busy.push(`Routine: ${r.name}`);
+  } catch {
+    // The routines table may not exist on a fresh database — nothing to report.
+  }
+  // A queued task the worker has not finished.
+  try {
+    const rows = getDb()
+      .prepare("SELECT description FROM tasks WHERE status IN ('running', 'queued') LIMIT 5")
+      .all() as Array<{ description: string }>;
+    for (const r of rows) busy.push(`Task: ${r.description}`);
+  } catch {
+    /* same */
+  }
+  return busy;
+}
+
+/**
+ * Wire `app:quit` and the graceful shutdown it drives.
+ *
+ * The handler is NOT a thin `app.quit()` wrapper — it flushes state in a
+ * defined order first:
+ *   1. stop the scheduler, so no new Routine fires mid-teardown
+ *   2. shut down machine connections (open serial/network sockets)
+ *   3. checkpoint + close SQLite, so WAL is folded into the main file
+ *   4. only then quit
+ *
+ * Step 3 is what makes "quit does not lose data" true rather than aspirational:
+ * a bare `app.quit()` can kill the process with an un-checkpointed WAL, which
+ * is recoverable by SQLite but reads to the user as data loss.
+ */
+function registerQuitHandlers(db: Database.Database, getWin: () => BrowserWindow | null) {
+  ipcMain.handle('app:quit', async (_e, data: { force?: boolean; confirm?: boolean } = {}) => {
+    const busy = activeWork();
+
+    // Confirmation is required when there is active work AND the caller has not
+    // already confirmed. `confirm: true` is the second click in the UI.
+    if (busy.length > 0 && !data.force && !data.confirm) {
+      return { ok: false, needsConfirmation: true, activeWork: busy };
+    }
+
+    try {
+      // 1. Stop the scheduler first so it cannot fire a new Routine during the
+      //    rest of teardown.
+      henryScheduler?.shutdown();
+      // 2. Close machine connections (serial / network) — these hold OS handles.
+      await getMachineManager()?.shutdown();
+      // 3. Flush the database. `wal_checkpoint(TRUNCATE)` folds the WAL into
+      //    the main file so a hard kill afterwards still leaves a valid db.
+      try {
+        db.pragma('wal_checkpoint(TRUNCATE)');
+        db.close();
+      } catch (e) {
+        console.warn('[app:quit] DB checkpoint/close failed:', e instanceof Error ? e.message : String(e));
+      }
+      // 4. Tell the renderer we're going (it may want to clear transient state),
+      //    then quit. will-quit below stops the opencode bridge.
+      const win = getWin();
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('app:quitting', { forced: !!data.force, abandonedWork: busy });
+      }
+      // Stop the sync server + tunnel so no stray listener outlives the process.
+      try {
+        stopSyncServer();
+      } catch (e) {
+        console.warn('[app:quit] sync shutdown failed:', e instanceof Error ? e.message : String(e));
+      }
+      // Re-lock so a restart starts locked if the policy says so.
+      if (policyFlag('appLock')) relockApp();
+
+      // Give the renderer a beat to receive 'app:quitting' before the process
+      // goes away. Short enough not to feel like a hang.
+      setTimeout(() => app.quit(), 120);
+      return { ok: true, abandonedWork: data.force ? busy : [] };
+    } catch (e) {
+      console.error('[app:quit] graceful shutdown failed:', e);
+      // A failed graceful path must still not strand the user in the app —
+      // fall back to a hard exit so Quit always eventually works.
+      app.exit(1);
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+
+  /**
+   * Record a one-shot approval for a gated channel.
+   *
+   * The renderer may only request a grant; it cannot grant one. This handler
+   * exists so the request is auditable and schema-validated, and the actual
+   * decision belongs to the UI that asked the user first.
+   */
+  ipcMain.handle('security:approve-channel', (_e, data: { channel: string }) => ({
+    ok: armChannelApproval(data.channel, getWin),
+    channel: data.channel,
+  }));
+
+  /** Lets the UI disable its Quit button and show "work in progress". */
+  ipcMain.handle('app:activeWork', () => ({ activeWork: activeWork() }));
+
+  ipcMain.on('app:prepare-quit', () => {
+    const win = getWin();
+    if (win && !win.isDestroyed()) win.webContents.send('app:prepare-quit-ack');
+  });
+}
 
 app.on('will-quit', () => { stopOpencodeBridge(); });
 

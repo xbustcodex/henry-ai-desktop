@@ -83,7 +83,8 @@
     "three": "^0.184.0",
     "uuid": "^10.0.0",
     "ws": "^8.21.0",
-    "zustand": "^4.5.4"
+    "zustand": "^4.5.4",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.6.1",
