@@ -16,6 +16,8 @@ import CreateTaskFromMessageModal from './CreateTaskFromMessageModal';
 import WorkspaceContextStrip from './WorkspaceContextStrip';
 import ExportPackBuilder from './ExportPackBuilder';
 import MessageBubble from './MessageBubble';
+import ToolStreamBubble from './ToolStreamBubble';
+import { useToolStream } from './useToolStream';
 import { isMacOS, isLinux, isWindows } from '../../utils/platform';
 import {
   buildCompanionStreamSystemPrompt,
@@ -429,6 +431,10 @@ export default function ChatView() {
   const sessionAsyncResumeStartedRef = useRef(false);
   const wakeHandleSendRef = useRef<((content: string) => void) | null>(null);
 
+  // Agent tool-round streaming. Provisional display only — see
+  // `henry/toolStreamBuffer.ts` for why this cannot share the chunk buffer.
+  const toolStream = useToolStream(window.henryAPI);
+
   // ── Proactive initiative surfacing ────────────────────────────────────────
   const [proactiveSuggestion, setProactiveSuggestion] = useState<string | null>(null);
   const [smartSuggestions, setSmartSuggestions] = useState<SmartSuggestion[]>([]);
@@ -691,7 +697,7 @@ export default function ChatView() {
     } else {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [messages, streamingContent, isStreaming]);
+  }, [messages, streamingContent, toolStream.text, isStreaming]);
 
   useEffect(() => {
     const { setState } = useAmbientStore.getState();
@@ -2190,13 +2196,27 @@ What do you want to tackle first?`);
           : {}),
       });
 
+      // Open the tool-stream turn now, immediately before the request that can
+      // produce tool deltas. Opening it earlier would leave the turn open across
+      // the local-router and setup-guard early returns above, where no request
+      // is ever made and a late IPC event from the previous turn would be
+      // admitted. A non-agent turn never receives a delta, so this is inert there.
+      toolStream.beginTurn();
+
       streamRef.current = stream;
 
       stream.onChunk((chunk: string) => {
+        // Hand-off. In agent mode the whole tool conversation has finished and
+        // this chunk IS the authoritative answer, which the runner already
+        // published as the last round's `-final`. Ending the tool region here
+        // is what keeps the answer from being shown twice.
+        toolStream.noteAnswerChunk();
         appendStreamingContent(chunk);
       });
 
       stream.onDone(async (fullText: string, usage?: any) => {
+        // The turn is over: no provisional tool text may survive it.
+        toolStream.settleTurn();
         // Track cost for the iron gateway cost dashboard
         if (usage && (usage.total_tokens || usage.input_tokens)) {
           const totalTok = usage.total_tokens || (usage.input_tokens + (usage.output_tokens || 0));
@@ -2411,6 +2431,9 @@ What do you want to tackle first?`);
       });
 
       stream.onError(async (error: string) => {
+        // An error must not leave a half-streamed tool call on screen. Settle
+        // before the fallback branch, which re-opens the streaming bubble.
+        toolStream.settleTurn();
         // Try fallback model before showing error
         const curSettings = useStore.getState().settings;
         const fallbackM = curSettings.companion_model_2;
@@ -2673,6 +2696,10 @@ What do you want to tackle first?`);
       streamRef.current.cancel();
       streamRef.current = null;
     }
+    // Cancelling mid-round: the provisional tool text is dropped, never
+    // persisted. `streamingContent` above stays the only text that can be
+    // saved as a cancelled message.
+    toolStream.settleTurn();
     // Stamp the in-flight message as cancelled so user knows it wasn't a crash
     const currentContent = useStore.getState().streamingContent;
     if (currentContent && currentContent.trim()) {
@@ -2784,6 +2811,14 @@ What do you want to tackle first?`);
                 </div>
               );
             })}
+
+
+            {/* Agent tool-round progress. Provisional only: it disappears the
+                moment the authoritative answer starts arriving on the chunk
+                channel, so the answer is never displayed twice. */}
+            {isStreaming && toolStream.active && (
+              <ToolStreamBubble text={toolStream.text} round={toolStream.round} />
+            )}
 
             {/* Streaming indicator — show as soon as streaming starts (content may be empty until first chunk) */}
             {isStreaming && (
