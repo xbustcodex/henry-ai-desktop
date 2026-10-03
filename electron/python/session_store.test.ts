@@ -243,5 +243,8 @@ run('SessionStore v1 → v2 migration', () => {
     } finally {
       fs.rmSync(mdir, { recursive: true, force: true });
     }
-  });
+    // Spawns Python twice (build the legacy schema, then migrate it) and does a
+    // full-text search over the result. Measured at ~7s, so the 5s default
+    // times out on an otherwise-correct test.
+  }, 30_000);
 });

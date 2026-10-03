@@ -314,6 +314,62 @@ function _denyDangerous(req: http.IncomingMessage, res: http.ServerResponse, kin
   return true;
 }
 
+/**
+ * Whether a LAN request may read a pairing secret.
+ *
+ * These routes hand out the PIN, the paired-device list and the unattended
+ * password, so they were hard-restricted to loopback. That is safe but it makes
+ * the LAN-reachable companion unusable: the phone loads the page, renders, and
+ * then dies on its first API call because the PIN it needs to pair is
+ * unreachable from the LAN. It is exactly what happened on the first physical
+ * Android test — "BLOCKED dangerous route /sync/pairing-info from
+ * 192.168.1.110 (required: loopback)".
+ *
+ * The QR already carries a pair token in its URL (?token=...), so the phone
+ * arrives holding a credential. Rather than opening the route, we now require
+ * that credential from a LAN source: loopback is unchanged, and a LAN caller
+ * without a valid pair token is still refused. That is stricter than before for
+ * the LAN case (blanket refusal -> token required), and it is what makes the
+ * feature work at all.
+ */
+function _lanWithValidPairToken(req: http.IncomingMessage): boolean {
+  if (!_isPrivateLan(req)) return false;
+  // A forged forwarding header means the request really came through a
+  // tunnel, not from the LAN, so it gets the same treatment as any other
+  // non-loopback source.
+  if (_looksLikeTunnel(req)) return false;
+  // Validate against the PAIR token minted for the QR, not the paired-device
+  // session tokens: `companionTokens` only ever holds tokens for devices that
+  // have already paired, so checking it here rejected every phone, including a
+  // legitimate one holding the QR's own token.
+  const supplied = validateToken(req);
+  if (supplied) return true;
+  const urlToken = new URL(req.url ?? '', 'http://localhost').searchParams.get('token');
+  return (
+    !!urlToken &&
+    !!pairToken &&
+    urlToken === pairToken &&
+    Date.now() < pairTokenExpiry
+  );
+}
+
+/**
+ * Guard for routes that expose pairing secrets: loopback always allowed, LAN
+ * only when the caller presents a valid pair token.
+ */
+function _denyPairingSecret(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+  if (_isLoopback(req)) return false;
+  if (_lanWithValidPairToken(req)) return false;
+  const a = (req.socket.remoteAddress || '').replace('::ffff:', '');
+  console.warn(
+    `[SyncBridge] BLOCKED pairing-secret route ${req.url} from ${a} ` +
+      `(loopback, or LAN with a valid pair token, required)`
+  );
+  res.writeHead(403, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ ok: false, error: 'forbidden_source' }));
+  return true;
+}
+
 function validateToken(req: http.IncomingMessage): string | null {
   // Accept token from: Authorization: Bearer TOKEN, x-henry-token header, or ?token= param
   const authHeader = req.headers['authorization'] as string | undefined;
@@ -640,7 +696,7 @@ async function handleRequest(
   // at 127.0.0.1. Use the central _denyDangerous helper to also reject any
   // request carrying cf-connecting-ip / x-forwarded-for / cf-ray.
   if (urlPath === '/sync/pairing-info' && req.method === 'GET') {
-    if (_denyDangerous(req, res, 'loopback')) return;
+    if (_denyPairingSecret(req, res)) return;
     const pin = authCurrentPin();
     const active = remoteActive();
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -664,7 +720,7 @@ async function handleRequest(
   }
 
   if (urlPath === '/sync/unattended' && req.method === 'POST') {
-    if (_denyDangerous(req, res, 'loopback')) return;
+    if (_denyPairingSecret(req, res)) return;
     const body: any = await readBody(req);
     const ok = authSetUnattended(body?.password ?? null);
     res.writeHead(ok ? 200 : 400, { 'Content-Type': 'application/json' });
