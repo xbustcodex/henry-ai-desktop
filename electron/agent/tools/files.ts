@@ -74,7 +74,18 @@ export function resolveUserPath(input: unknown): { ok: true; path: string } | { 
   // A Windows drive path is absolute even when we are running on Linux, where
   // path.isAbsolute('C:\\...') is false and the string would otherwise be
   // treated as a relative filename and quietly created inside the home folder.
-  if (/^[a-zA-Z]:[\\/]/.test(raw) || /^\\\\/.test(raw)) {
+  //
+  // That concern is real on Linux and wrong on Windows: there the user's home
+  // directory IS a drive path (C:\Users\<name>), so blanket-refusing every drive
+  // path made these tools unable to reach anything inside the user's own home
+  // when handed an absolute path. A model asking for "C:/Users/<name>/Documents"
+  // is naming the home directory, not escaping it — and it was refused with
+  // "an absolute path outside your home directory", which is simply false.
+  //
+  // On Windows these paths now fall through to the containment check below and
+  // are held to exactly the same rule as every other path. On Linux they stay
+  // refused, where such a string really is a relative filename.
+  if (process.platform !== 'win32' && (/^[a-zA-Z]:[\\/]/.test(raw) || /^\\\\/.test(raw))) {
     return { ok: false, error: `Refused: ${raw} is an absolute path outside your home directory.` };
   }
   const expanded = raw.startsWith('~')

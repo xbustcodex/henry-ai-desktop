@@ -270,3 +270,39 @@ describe('file tools — containment', () => {
     }
   });
 });
+// ── Windows drive paths inside the user's own home ────────────────────────
+// Found by live acceptance on the installed Windows package: an agent turn asked
+// for "C:/Users/xkali/Documents" and file_list refused it as "an absolute path
+// outside your home directory". It was the home directory. The blanket
+// drive-path refusal was written for Linux, where a "C:\..." string is a
+// relative filename, but on Windows the home directory IS a drive path.
+//
+// These are asserted through the platform guard rather than by faking
+// process.platform, because the whole point is which branch Windows takes.
+describe('resolveUserPath drive-path handling on Windows', () => {
+  const isWindows = process.platform === 'win32';
+  const home = os.homedir();
+
+  it('does not blanket-refuse a drive path that is inside the home directory', () => {
+    if (!isWindows) {
+      // On Linux such a string is a relative filename and must stay refused.
+      expect(resolveUserPath('C:\\Users\\someone\\Documents').ok).toBe(false);
+      return;
+    }
+    const forwardSlash = home.replace(/\\/g, '/') + '/Documents';
+    expect(resolveUserPath(forwardSlash).ok).toBe(true);
+    expect(resolveUserPath(home + '\\Documents').ok).toBe(true);
+    expect(resolveUserPath(home).ok).toBe(true);
+  });
+
+  it('still refuses a drive path outside the home directory', () => {
+    if (!isWindows) return;
+    expect(resolveUserPath('C:\\Windows\\System32\\config\\SAM').ok).toBe(false);
+    expect(resolveUserPath('D:\\other\\place').ok).toBe(false);
+  });
+
+  it('still refuses traversal out of the home directory on Windows', () => {
+    if (!isWindows) return;
+    expect(resolveUserPath(home + '\\..\\..\\Windows\\System32').ok).toBe(false);
+  });
+});
