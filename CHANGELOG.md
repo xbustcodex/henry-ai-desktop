@@ -1,5 +1,100 @@
 # Changelog
 
+## Parity completion campaign — 130 rows, 88 closed
+
+The verification and burn-down phase is finished and every actionable row has been
+driven to its truthful state. `PARITY_LEDGER.md` is the authoritative row-by-row
+record; `docs/PARITY_COMPLETION.md` holds the architecture decisions, reproduction
+procedure and unresolved prerequisites.
+
+| | Rows | Closed | Hardened | Partial | Missing | Unverified | Unreachable | Excluded | Commercial |
+|---|---|---|---|---|---|---|---|---|---|
+| **Total** | **130** | **88** | **1** | **26** | **0** | **9** | **1** | **1** | **4** |
+
+MISSING is now zero. Automated suite: **1935 tests across 103 files**, typecheck clean.
+
+### What the campaign found
+
+Every significant defect shared one of two shapes, and both are now documented in
+`docs/PARITY_COMPLETION.md` because they are the reason several checks exist.
+
+**Code existing is not proof.** Three features were built, tested green, and did not
+work, because the tests exercised internal functions rather than the path a user
+reaches:
+
+- Ollama never streamed — there was no `streamOllama`, so it fell into the
+  non-streaming `default` branch. Live: **117 chunks over an 11.5s spread**, versus
+  the recorded defect of one chunk with `firstChunkMs == lastChunkMs`.
+- The agent tool-call blocker was **none of the three hypothesised causes**.
+  `callAIWithTools` switched on openai/groq/anthropic only, so Ollama never had
+  tools sent to the model at all — structural, not a parsing miss. Live: a real
+  agent turn where the model emitted `file_list`, the tool ran, the result returned
+  and the model answered correctly.
+- The assistant's spoken name was parameterised in all twelve greeting variants and
+  nothing supplied the value. `brand_name` is not read by the greeting and
+  `creator_orb` is an appearance blob. Live: `assistant_name=Zorblax` produces
+  *"Still going, JARVIS. Zorblax is awake and ready."*, survives restart, and
+  restores.
+
+**A correctly-timestamped artifact can be empty.** Running `electron-builder`
+without the Vite build packaged `dist-electron/` and produced an .exe and .asar
+containing none of the day's work — the installer ran and the app booted.
+`scripts/verify-package.mjs` now compares a built asar against the current source
+and is verified in both directions: passes on a good build, fails with eleven misses
+against a stale simulator, and flags forbidden symbols.
+
+### Live defects found by acceptance and fixed
+
+- **Windows home confinement refused the user's own home.** A blanket drive-path
+  guard — correct on Linux, wrong on Windows, where the home directory *is* a drive
+  path — meant `C:/Users/<name>/Documents` was rejected as "outside your home
+  directory". A correct tool produced an incorrect answer that the model then
+  reported to the user.
+- **The shell-confirmation gate was unsatisfiable.** `securityApproveChannel` had
+  zero callers, so five gated channels were permanently refused on every default
+  install; HQPanel's shell auto-execution and PrinterPanel's G-code were dead behind
+  a swallowed `.catch`.
+- **App lock could brick the application** — no unlock screen, while the boundary
+  refuses every non-exempt channel while locked.
+- **Two delete handlers swallowed refusals.** `media:delete` and `attachments:delete`
+  wrapped their path resolution inside an unlink `catch` intended for ENOENT, which
+  also swallowed the invalid-reference refusal — deleting the row, leaving the bytes
+  on disk, and returning `{ok:true}`.
+- **A transient Ollama error permanently changed the embedding space**, so recall
+  silently degraded to fallback-versus-fallback comparison.
+- Anthropic 400 on parallel tool calls, system-prompt overwrite and ignored stream
+  errors; a relay that could send its bearer token toward `api.openai.com`; OAuth
+  `error=` acted on before `state`; interval triggers that double-fired; a Logs panel
+  that would have rendered empty forever.
+
+### Regressions this campaign introduced, and found
+
+Recorded because they are the honest cost of the work:
+
+- The seven destructive `computer:*` file channels had **no schema at all**, and a
+  generic `invoke(channel, ...)` preload passthrough made every registered channel
+  reachable regardless of whether preload named it — so those schemas were the only
+  validation those channels received. The passthrough is removed.
+- Two claimed results had to be **retracted**: a false regression claim about
+  attachments (a probe called without its required argument), and a false diagnosis
+  that the streaming join was broken (the test was wrong, not the wiring).
+
+### Removals
+
+`confirmDeleteOutsideHome` was **removed rather than wired**. Investigation proved
+it could only ever add attribution and never permission, so shipping it would have
+meant weakening home confinement to make a toggle look live. The seven file-channel
+schemas it was investigated alongside were kept, being an independent mutation-proven
+fix.
+
+### Deliberately unverified
+
+No credential, microphone, Piper binary, updater binary or destructive test was
+fabricated. Rows requiring a real Google account, Discord bot, OpenAI/Anthropic key,
+ElevenLabs key, physical microphone, or the deferred physical-Android Companion bug
+(8.1) remain explicitly unproven, each with its prerequisite named in the ledger.
+
+
 ## Known bug — Companion QR / Android session failure (deferred)
 
 Fixed and verified:
