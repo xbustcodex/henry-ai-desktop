@@ -79,3 +79,10 @@ __pycache__/
 *.bak
 *.backup
 *.backup[0-9]*
+
+# Extracted AppImage mount point — build artifact, 173 MB, must never be committed.
+# It was committed in b9f6fad/fa9a9d9 and purged from history before the first push.
+squashfs-root/
+
+# Local build output
+release2/
