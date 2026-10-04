@@ -234,7 +234,7 @@ Note: `Alt+Space` is unavailable on Linux (typically used by window manager) —
 
 **Why health reports connected**: The `groq_key` health check in `selfRepair.ts` queries `SELECT api_key FROM providers WHERE id='groq' AND enabled=1` — a key was previously saved (likely from a prior onboarding session or manual configuration) and persists across runs. The key is **not** from environment variables, settings storage, or migrated configuration — it is explicitly stored in the providers table.
 
-**Key details**: `gsk_<REDACTED>` (44 chars, `gsk_` prefix confirmed)
+**Key details**: `gsk_<REDACTED>` (redacted — this key was committed in error and has been revoked; do not reuse it)
 
 ### Complete TypeScript Result
 
